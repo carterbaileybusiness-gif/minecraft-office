@@ -2,6 +2,7 @@ package local.carter.office.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -82,6 +83,39 @@ class JavaDesktopSourceTest {
 		assertEquals(HologramLook.OwnSource.WINDOW_CLOSED, s.status());
 		s.start(new Target(Mode.WINDOW, 1, "notepad.exe|10", Shape.WIDE_16_9), 30, new Recorder());
 		assertEquals(HologramLook.OwnSource.UNAVAILABLE, s.status());
+	}
+
+	@Test
+	@DisabledOnOs(OS.WINDOWS)
+	void mirrorOffWindowsEndsWithAReasonWithoutNatives() {
+		Recorder r = new Recorder();
+		JavaDesktopSource s = new JavaDesktopSource();
+		s.start(new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9), 30, r);
+		assertEquals(List.of(JavaDesktopSource.REASON_NOT_WINDOWS), r.ended);
+		assertFalse(s.isLive());
+	}
+
+	@Test
+	void mirrorPicksThePrimaryScreen() {
+		assertEquals(Long.valueOf(1), JavaDesktopSource.pickScreen(List.of(0L, 1L, 2L), 1), "the primary monitor");
+		assertEquals(Long.valueOf(0), JavaDesktopSource.pickScreen(List.of(0L, 2L), 1), "primary not listed: the first screen");
+		assertEquals(Long.valueOf(3), JavaDesktopSource.pickScreen(List.of(3L), -1), "none marked primary");
+		assertEquals(null, JavaDesktopSource.pickScreen(List.of(), 0), "no screens");
+	}
+
+	@Test
+	void mirrorCapturesAtTenFpsEvenWhileWorking() {
+		Target t = new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9);
+		assertEquals(10, JavaDesktopSource.fpsFor(t, 30, null));
+		assertEquals(10, JavaDesktopSource.fpsFor(t, 30, "notepad.exe|10"));
+	}
+
+	@Test
+	void excludeFromCaptureNeedsWindows10_2004() {
+		assertTrue(local.carter.office.client.platform.Win32.supportsExcludeFromCapture(19041));
+		assertTrue(local.carter.office.client.platform.Win32.supportsExcludeFromCapture(26100));
+		assertFalse(local.carter.office.client.platform.Win32.supportsExcludeFromCapture(18363), "1909 would black Minecraft out instead");
+		assertTrue(local.carter.office.client.platform.Win32.supportsExcludeFromCapture(0), "unknown build: try, then read it back");
 	}
 
 	@Test

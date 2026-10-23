@@ -6,7 +6,7 @@ Steps (run in order; incoming messages are printed as they arrive):
   create SLOT W H            CREATE_DISPLAY, then wait up to 5 s for DISPLAY (or ERROR)
   remove SLOT                REMOVE_DISPLAY
   list                       LIST_WINDOWS, wait for WINDOWS
-  capture SURFACE display SLOT MAXW FPS | capture SURFACE window KEY MAXW FPS
+  capture SURFACE display SLOT MAXW FPS | capture SURFACE window KEY MAXW FPS | capture SURFACE main MAXW FPS
   ready SURFACE              READY (one more frame)
   stop SURFACE               STOP
   zoomin SURFACE X Y W H     ZOOM_IN with mcWindowFrame
@@ -170,6 +170,10 @@ def main(argv):
         elif step == "list":
             c.send("LIST_WINDOWS"); i += 1
             c.wait_for("WINDOWS", 5)
+        elif step == "capture" and argv[i + 2] == "main":
+            # Mirror: the main display minus the mcPid app (devclient's HELLO mcPid is its own pid)
+            c.send("CAPTURE", {"surface": int(argv[i + 1]), "kind": "main", "maxW": int(argv[i + 3]), "fps": int(argv[i + 4])})
+            i += 5
         elif step == "capture":
             surface, kind = int(argv[i + 1]), argv[i + 2]
             payload = {"surface": surface, "kind": kind, "maxW": int(argv[i + 4]), "fps": int(argv[i + 5])}

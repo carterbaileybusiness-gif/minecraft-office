@@ -99,7 +99,7 @@ public class HologramGameTests {
 		h.assertTrue(s != null, "spec set on place");
 		h.assertValueEqual(s.owner(), a.getUUID(), "owner");
 		h.assertValueEqual(s.shape(), Shape.WIDE_16_9, "shape");
-		h.assertValueEqual(s.mode(), Mode.EXTEND, "mode");
+		h.assertValueEqual(s.mode(), Mode.MIRROR, "mode (first hologram mirrors the owner's screen)");
 		h.assertValueEqual(s.privacy(), Privacy.PUBLIC, "privacy");
 		h.assertValueEqual(s.width(), 2.0, "width");
 		h.assertValueEqual(s.displaySlot(), 1, "displaySlot");
@@ -109,6 +109,33 @@ public class HologramGameTests {
 		h.assertValueEqual(be.ownerName(), a.getName().getString(), "owner name recorded for panels");
 		h.assertTrue(!be.ownerName().isEmpty(), "owner name not empty");
 		h.assertValueEqual(HologramIndex.get(h.getLevel().getServer()).countOwnedBy(a.getUUID()), 1, "indexed");
+		h.succeed();
+	}
+
+	/**
+	 * Spec 5.8: Minecraft is on the real screen, holograms are the other monitors. The first hologram mirrors; each
+	 * additional one extends onto the next free virtual display. Another player's holograms don't count.
+	 */
+	@GameTest
+	public void firstHologramMirrorsThenEachNewOneExtends(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		ServerPlayer b = survivalPlayer(h, new BlockPos(5, 0, 5));
+		HologramSpec first = place(h, a, new BlockPos(1, 1, 1)).spec();
+		HologramSpec second = place(h, a, new BlockPos(3, 1, 1)).spec();
+		HologramSpec third = place(h, a, new BlockPos(5, 1, 1)).spec();
+		HologramSpec friends = place(h, b, new BlockPos(7, 1, 1)).spec();
+		h.assertValueEqual(first.mode(), Mode.MIRROR, "first: Mirror");
+		h.assertValueEqual(second.mode(), Mode.EXTEND, "second: Extend");
+		h.assertValueEqual(second.displaySlot(), 1, "second: display 1");
+		h.assertValueEqual(third.mode(), Mode.EXTEND, "third: Extend");
+		h.assertValueEqual(third.displaySlot(), 2, "third: display 2");
+		h.assertValueEqual(friends.mode(), Mode.MIRROR, "another player's first hologram mirrors too");
+		// Settings can still switch any of them; the index remembers it for the next placement.
+		BlockPos firstAbs = h.absolutePos(new BlockPos(1, 1, 1));
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(firstAbs, first.shape(), Mode.WINDOW, first.privacy(),
+				first.displaySlot(), null)), "switch the mirror to Window");
+		HologramSpec fourth = place(h, a, new BlockPos(1, 1, 3)).spec();
+		h.assertValueEqual(fourth.mode(), Mode.MIRROR, "no mirror left: the next one mirrors again");
 		h.succeed();
 	}
 

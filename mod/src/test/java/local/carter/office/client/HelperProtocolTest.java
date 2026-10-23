@@ -113,6 +113,11 @@ class HelperProtocolTest {
     }
 
     @Test
+    void captureMain() throws IOException {
+        checkModMessage("capture_main", new Capture(9, CaptureKind.MAIN, null, null, 1920, 5));
+    }
+
+    @Test
     void stopReadyZoom() throws IOException {
         checkModMessage("stop", new Stop(7));
         checkModMessage("ready", new Ready(7));
@@ -200,7 +205,7 @@ class HelperProtocolTest {
     @Test
     void everyFixtureDecodesAndReencodes() throws IOException {
         List<byte[]> all = allFixtures();
-        assertEquals(19, all.size());
+        assertEquals(20, all.size()); // one per message type, plus a second and third CAPTURE (window, main)
         for (byte[] bytes : all) {
             FrameReader reader = FrameReader.forHelperMessages();
             reader.push(bytes, 0, bytes.length);

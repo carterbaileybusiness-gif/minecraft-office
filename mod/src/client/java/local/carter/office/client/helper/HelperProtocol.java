@@ -100,7 +100,9 @@ public final class HelperProtocol {
 
     public enum CaptureKind {
         DISPLAY("display"),
-        WINDOW("window");
+        WINDOW("window"),
+        /** Mirror: the main display, with the Minecraft app (HELLO's mcPid) excluded from the capture. */
+        MAIN("main");
 
         public final String wire;
 
@@ -149,7 +151,7 @@ public final class HelperProtocol {
 
     public record RemoveDisplay(int slot) implements Message {}
 
-    /** {@code slot} is required for DISPLAY captures, {@code windowKey} for WINDOW captures; the other is null. */
+    /** {@code slot} is required for DISPLAY captures, {@code windowKey} for WINDOW captures; the other is null (both for MAIN). */
     public record Capture(int surface, CaptureKind kind, Integer slot, String windowKey, int maxW, int fps)
             implements Message {}
 
@@ -403,6 +405,9 @@ public final class HelperProtocol {
             }
             case WINDOW -> {
                 if (windowKey == null || WindowKey.parse(windowKey) == null) throw bad("window capture needs windowKey");
+            }
+            case MAIN -> {
+                // needs neither slot nor windowKey
             }
         }
         return new Capture(integer(o, "surface"), kind, slot, windowKey, integer(o, "maxW"), integer(o, "fps"));

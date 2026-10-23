@@ -97,6 +97,14 @@ public class HologramBlockEntity extends BlockEntity {
 		}
 		this.spec = newSpec;
 		changed();
+		if (level instanceof ServerLevel serverLevel) {
+			index(serverLevel); // remember the new mode / display for placement defaults
+		}
+	}
+
+	private void index(final ServerLevel serverLevel) {
+		HologramIndex.get(serverLevel.getServer()).put(hologramId, spec.owner(), serverLevel.dimension(), worldPosition, spec.mode(),
+				spec.displaySlot());
 	}
 
 	private void setOwnerOnlineFlag(final boolean online) {
@@ -120,7 +128,7 @@ public class HologramBlockEntity extends BlockEntity {
 		}
 		MinecraftServer server = serverLevel.getServer();
 		this.ownerOnline = server.getPlayerList().getPlayer(spec.owner()) != null;
-		HologramIndex.get(server).put(hologramId, spec.owner(), serverLevel.dimension(), worldPosition);
+		index(serverLevel);
 	}
 
 	/** Owner joined or left: update every loaded hologram they own. */

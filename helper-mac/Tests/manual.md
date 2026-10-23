@@ -93,6 +93,16 @@ then grant again.
 3. Repeat and press Esc twice during the sleep instead of waiting for `zoomout`: `EXIT_ZOOM`, window restored.
 4. Repeat and close the TextEdit window while zoomed: `ENDED {"reason":"window closed"}` then `EXIT_ZOOM`.
 
+## 6b. Mirror: the main display minus Minecraft, and Minecraft stepping aside
+
+Best done with the mod (step 7): devclient's own process has no windows, so nothing is excluded or hidden by it.
+1. `helper; dev capture 3 main 1920 5 sleep 2` → FRAME of the main display (≤ 1920 wide) with the cursor.
+2. In game: place your first hologram (it is Mirror). It shows your desktop **without** the Minecraft window (no
+   Minecraft-inside-Minecraft); every other window and the cursor are there.
+3. Click it → zoom animation → Minecraft hides; you are on your normal desktop. Double-tap Esc (or Ctrl+Option+Cmd+Esc)
+   → Minecraft comes back, focused, and zooms out. Again, but click Minecraft in the Dock / Cmd-Tab to it → same.
+4. Zoom in, then quit OfficeHelper (`pkill -x OfficeHelper`, never java) → Minecraft unhides itself and zooms out.
+
 ## 7. With the mod (after Task 9)
 
 Place an Extend hologram → "Office Display 1" appears in System Settings › Displays; quit Minecraft → it disappears

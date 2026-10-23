@@ -97,7 +97,11 @@ class ZoomStateTest {
 	}
 
 	private static Candidate hologram(final UUID owner, final boolean live) {
-		HologramSpec spec = new HologramSpec(owner, Shape.WIDE_16_9, Mode.EXTEND, Privacy.PUBLIC, 1, null, 2.0, 0, 1.2, 0, 0f);
+		return hologram(owner, live, Mode.EXTEND);
+	}
+
+	private static Candidate hologram(final UUID owner, final boolean live, final Mode mode) {
+		HologramSpec spec = new HologramSpec(owner, Shape.WIDE_16_9, mode, Privacy.PUBLIC, 1, null, 2.0, 0, 1.2, 0, 0f);
 		return new Candidate(UUID.randomUUID(), spec, live);
 	}
 
@@ -385,12 +389,67 @@ class ZoomStateTest {
 		zoomInFully(zoom, env, hologram(ME, true));
 		env.now = 1_000;
 		zoom.escape(false); // pressed; its release never arrives (focus moved to the app)
-		zoom.focusChanged();
+		zoom.focusChanged(false);
 		env.now = 5_000;
 		assertEquals(DoubleEsc.Result.PASS, zoom.escape(false), "a fresh first press, not a repeat");
 		zoom.escapeReleased();
 		env.now = 5_100;
 		assertEquals(DoubleEsc.Result.EXIT, zoom.escape(false));
+	}
+
+	@Test
+	void mirrorLeavesWhenThePlayerClicksBackIntoMinecraft() {
+		FakeEnv env = new FakeEnv();
+		ZoomController zoom = new ZoomController(env);
+		zoomInFully(zoom, env, hologram(ME, true, Mode.MIRROR));
+		zoom.focusChanged(false); // Minecraft hidden / minimized: the player is on the real desktop
+		assertEquals(State.WORKING, zoom.state());
+		env.calls.clear();
+		zoom.focusChanged(true); // Dock / Cmd-Tab / taskbar brought Minecraft back
+		assertEquals(State.ZOOMING_OUT, zoom.state());
+		assertEquals(List.of("stopWorking"), env.calls);
+	}
+
+	@Test
+	void mirrorIgnoresFocusChangesBeforeMinecraftStepsAside() {
+		FakeEnv env = new FakeEnv();
+		ZoomController zoom = new ZoomController(env);
+		Candidate c = hologram(ME, true, Mode.MIRROR);
+		assertEquals(Request.STARTED, zoom.request(c));
+		zoom.focusChanged(false);
+		zoom.focusChanged(true); // during the zoom-in animation
+		env.now += ZoomController.ANIMATION_MS;
+		zoom.update();
+		assertEquals(State.WORKING, zoom.state());
+		zoom.focusChanged(true); // still focused (not hidden yet): no exit
+		assertEquals(State.WORKING, zoom.state());
+	}
+
+	@Test
+	void extendAndWindowStayWhenMinecraftIsFocusedAgain() {
+		for (Mode m : new Mode[] {Mode.EXTEND, Mode.WINDOW}) {
+			FakeEnv env = new FakeEnv();
+			ZoomController zoom = new ZoomController(env);
+			zoomInFully(zoom, env, hologram(ME, true, m));
+			zoom.focusChanged(false);
+			zoom.focusChanged(true);
+			assertEquals(State.WORKING, zoom.state(), m + ": focus coming back is normal (the overlay / clicking around)");
+		}
+	}
+
+	@Test
+	void mirrorFocusMemoryResetsForTheNextZoom() {
+		FakeEnv env = new FakeEnv();
+		ZoomController zoom = new ZoomController(env);
+		zoomInFully(zoom, env, hologram(ME, true, Mode.MIRROR));
+		zoom.focusChanged(false);
+		zoom.exit(); // double-Esc
+		env.now += ZoomController.ANIMATION_MS;
+		zoom.update();
+		assertEquals(State.WORLD, zoom.state());
+		zoomInFully(zoom, env, hologram(ME, true, Mode.MIRROR));
+		zoom.focusChanged(true); // Minecraft activated by the helper on the way out of the last zoom
+		assertEquals(State.WORKING, zoom.state());
 	}
 
 	@Test

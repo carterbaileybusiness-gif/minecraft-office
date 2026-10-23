@@ -14,6 +14,7 @@ import local.carter.office.client.interact.WindowListProvider.WindowChoice;
 import local.carter.office.client.platform.NoPlatform;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.platform.WindowsPlatform;
+import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
@@ -28,7 +29,6 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
-import net.minecraft.client.gui.components.CycleButton;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.PlayerInfo;
@@ -38,8 +38,10 @@ import net.minecraft.network.chat.Component;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 /**
- * Vanilla-styled settings for one hologram, in two fixed columns (no scrolling): Shape, what it shows (whole display
- * 1-4 or one window), who can see it (Public / Private / Show to… with paged online-player checkboxes), Pick up, Done.
+ * Vanilla-styled settings for one hologram, in two fixed columns (no scrolling): Shape, what it shows (Mirror = your
+ * screen minus Minecraft, Extend = virtual display 1-4, Window = one window), who can see it (Public / Private /
+ * Show to… with paged online-player checkboxes), Pick up, Done. A Public Mirror carries a one-line warning that friends
+ * nearby see the whole screen.
  * Every change is sent at once ({@code UpdateHologram}); the server keeps the bottom edge when the shape changes.
  * Non-owners get the same screen read-only with "Owned by <name>".
  */
@@ -53,6 +55,7 @@ public class HologramSettingsScreen extends Screen {
 	private static final int LABEL_COLOR = 0xFFA0A0A0;
 	private static final int TEXT_COLOR = 0xFFFFFFFF;
 	private static final int SELECTED_FRAME = 0xFFFFFFFF;
+	private static final int WARNING_COLOR = 0xFFFFD060;
 
 	private final HologramBlockEntity be;
 	private final BlockPos pos;
@@ -80,6 +83,7 @@ public class HologramSettingsScreen extends Screen {
 	/** Section labels: x, y, text. */
 	private final List<Object[]> labels = new ArrayList<>();
 	private int titleY;
+	private int warningY;
 
 	public HologramSettingsScreen(final HologramBlockEntity be, final String ownerName) {
 		super(Component.literal("Hologram"));
@@ -89,7 +93,7 @@ public class HologramSettingsScreen extends Screen {
 		HologramSpec spec = be.spec();
 		this.editable = minecraft.player != null && be.isOwner(minecraft.player.getUUID());
 		this.shape = spec == null ? Shape.WIDE_16_9 : spec.shape();
-		this.mode = spec == null ? Mode.EXTEND : spec.mode();
+		this.mode = spec == null ? Mode.MIRROR : spec.mode();
 		this.privacyLevel = spec == null ? Privacy.Level.PUBLIC : spec.privacy().level();
 		this.allowed = new HashSet<>(spec == null ? Set.of() : spec.privacy().allowed());
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
@@ -98,9 +102,6 @@ public class HologramSettingsScreen extends Screen {
 		// Greyed only where own screens work but whole displays don't (Windows beta). Without own-screen support at all
 		// (NoPlatform: Linux, dev) nothing is greyed; the hologram itself says screens aren't set up.
 		this.extendUnavailable = editable && !platform.supportsExtend() && !(platform instanceof NoPlatform);
-		if (extendUnavailable && mode == Mode.EXTEND) {
-			mode = Mode.WINDOW; // shown as the only choice; nothing is sent until the owner changes something
-		}
 		if (editable) {
 			WindowListProvider.get().refresh(); // Mac: asks the helper (LIST_WINDOWS); its reply calls refreshWindows()
 			loadWindows();
@@ -138,28 +139,31 @@ public class HologramSettingsScreen extends Screen {
 		choice(left + 2 * (bw + 4), y, bw, "9:16", shape == Shape.TALL_9_16, () -> setShape(Shape.TALL_9_16));
 		y += ROW + 4;
 
+		label(left, y, "Shows");
+		y += LABEL;
+		choice(left, y, bw, "Mirror", mode == Mode.MIRROR, () -> setMode(Mode.MIRROR));
 		if (extendUnavailable) {
-			int hw = (COL_W - 4) / 2;
-			Button extend = Button.builder(Component.literal("Whole display"), b -> {}).bounds(left, y, hw, 20).build();
+			Button extend = Button.builder(Component.literal("Extend"), b -> {}).bounds(left + bw + 4, y, bw, 20).build();
 			extend.active = false;
 			extend.setTooltip(Tooltip.create(Component.literal(Platform.current() instanceof WindowsPlatform
 					? "Coming soon on Windows" : "Not available on this computer")));
 			addRenderableWidget(extend);
-			choice(left + hw + 4, y, hw, "One window", true, () -> {});
+			if (mode == Mode.EXTEND) {
+				selected.add(extend); // an older Extend hologram: shown as it is; pick Mirror or Window
+			}
 		} else {
-			CycleButton<Mode> modeButton = CycleButton.<Mode>builder(m -> Component.literal(m == Mode.EXTEND ? "Whole display" : "One window"), mode)
-					.withValues(List.of(Mode.EXTEND, Mode.WINDOW))
-					.create(left, y, COL_W, 20, Component.literal("Shows"), (b, m) -> {
-						mode = m;
-						send();
-						rebuildWidgets();
-					});
-			modeButton.active = editable;
-			addRenderableWidget(modeButton);
+			choice(left + bw + 4, y, bw, "Extend", mode == Mode.EXTEND, () -> setMode(Mode.EXTEND));
 		}
+		choice(left + 2 * (bw + 4), y, bw, "Window", mode == Mode.WINDOW, () -> setMode(Mode.WINDOW));
 		y += ROW + 4;
 
-		if (mode == Mode.EXTEND) {
+		if (mode == Mode.MIRROR) {
+			note(left, y, "Your screen, minus Minecraft");
+			note(left, y + LABEL, "Zoom in to use your real desktop");
+		} else if (mode == Mode.EXTEND && extendUnavailable) {
+			note(left, y, "Extend is coming soon here:");
+			note(left, y + LABEL, "pick Mirror or Window");
+		} else if (mode == Mode.EXTEND) {
 			label(left, y, "Display");
 			y += LABEL;
 			int sw = (COL_W - 12) / 4;
@@ -246,6 +250,7 @@ public class HologramSettingsScreen extends Screen {
 
 		// ---- footer ----
 		int footY = top + bodyHeight + 8;
+		warningY = HologramLook.mirrorWarning(mode, privacyLevel) != null ? footY - LABEL - 2 : -1;
 		int center = width / 2;
 		if (editable) {
 			addRenderableWidget(Button.builder(Component.literal("Pick up"), b -> {
@@ -279,6 +284,12 @@ public class HologramSettingsScreen extends Screen {
 				rebuildWidgets();
 			}
 		}));
+	}
+
+	private void setMode(final Mode m) {
+		mode = m;
+		send();
+		rebuildWidgets();
 	}
 
 	private void setShape(final Shape s) {
@@ -384,6 +395,10 @@ public class HologramSettingsScreen extends Screen {
 		graphics.centeredText(font, Component.literal(sub).withStyle(ChatFormatting.GRAY), width / 2, titleY + LABEL, TEXT_COLOR);
 		for (Object[] l : labels) {
 			graphics.text(font, (String) l[2], (int) l[0], (int) l[1], LABEL_COLOR);
+		}
+		String warning = HologramLook.mirrorWarning(mode, privacyLevel);
+		if (warning != null && warningY >= 0) {
+			graphics.centeredText(font, Component.literal(warning), width / 2, warningY, WARNING_COLOR);
 		}
 		for (AbstractWidget w : selected) {
 			frame(graphics, w.getX() - 1, w.getY() - 1, w.getX() + w.getWidth() + 1, w.getY() + w.getHeight() + 1);

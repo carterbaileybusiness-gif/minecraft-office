@@ -1,7 +1,10 @@
 package local.carter.office.client.capture;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -14,6 +17,7 @@ import dev.onvoid.webrtc.media.video.VideoFrame;
 import dev.onvoid.webrtc.media.video.VideoFrameBuffer;
 import dev.onvoid.webrtc.media.video.desktop.DesktopCapturer;
 import dev.onvoid.webrtc.media.video.desktop.DesktopSource;
+import dev.onvoid.webrtc.media.video.desktop.ScreenCapturer;
 import dev.onvoid.webrtc.media.video.desktop.WindowCapturer;
 
 import local.carter.office.client.platform.Win32;
@@ -23,8 +27,9 @@ import local.carter.office.client.render.HologramLook;
 import local.carter.office.core.Mode;
 
 /**
- * Windows capture of one app window with webrtc-java's {@link WindowCapturer} (no helper install). Window mode only:
- * an Extend target ends at once with {@link #REASON_EXTEND}. One dedicated thread per running source calls
+ * Windows capture (no helper install) with webrtc-java: one app window ({@link WindowCapturer}, Window mode) or the
+ * primary monitor ({@link ScreenCapturer}, Mirror mode; Minecraft's own window is kept out of it with
+ * {@code WDA_EXCLUDEFROMCAPTURE}, see {@link #setMirrorGuard}). An Extend target ends at once with {@link #REASON_EXTEND}. One dedicated thread per running source calls
  * {@code captureFrame()} at 10 fps (30 while the player is working on that window, see {@link #setWorkingKey}), converts
  * each I420 frame straight to RGBA natively (libyuv), and delivers it as a {@link FrameSink#full} frame (no dirty
  * rectangles in v1). When the window goes away ({@code IsWindow} false, or a capture error once it is gone) the sink
@@ -38,6 +43,10 @@ public final class JavaDesktopSource implements CaptureSource {
 	public static final String REASON_NO_LIBRARY = "Capture library didn't load";
 	public static final String REASON_CANT_CAPTURE = "Can't capture this window";
 	public static final String REASON_FAILED = "Window capture failed";
+	/** Mirror: Minecraft couldn't be left out of the capture (needs Windows 10 2004+), so it would show inside itself. */
+	public static final String REASON_MIRROR_EXCLUDE = "Needs Windows 10 2004+ to hide Minecraft";
+	public static final String REASON_NO_SCREEN = "Can't capture your screen";
+	public static final String REASON_SCREEN_FAILED = "Screen capture failed";
 	public static final int IDLE_FPS = 10;
 	public static final int WORKING_FPS = 30;
 	/** Consecutive failed captures of a window that still exists before giving up (~5 s at 10 fps). */
@@ -45,6 +54,8 @@ public final class JavaDesktopSource implements CaptureSource {
 	private static final Logger LOGGER = LogUtils.getLogger();
 
 	private static volatile @Nullable String workingKey;
+	/** Mirror pre-check (Windows platform: keep Minecraft out of the capture); returns why not, or null. Null = none. */
+	private static volatile @Nullable Supplier<@Nullable String> mirrorGuard;
 
 	private final Object lock = new Object();
 	private @Nullable Run current;
@@ -56,9 +67,31 @@ public final class JavaDesktopSource implements CaptureSource {
 		workingKey = windowKey;
 	}
 
-	/** Frames per second for {@code t}: 10, or 30 while working on that window; never above {@code maxFps}, at least 1. */
+	/**
+	 * Runs on every Mirror start (the caller's thread: OwnScreens, the client thread) before the screen is captured; a
+	 * non-null answer ends the source with that reason instead (shown on the hologram as "Screens unavailable").
+	 */
+	public static void setMirrorGuard(final @Nullable Supplier<@Nullable String> guard) {
+		mirrorGuard = guard;
+	}
+
+	/**
+	 * The webrtc screen source to mirror: the primary monitor ({@code primaryIndex}, EnumDisplayDevices order = webrtc's
+	 * screen ids on Windows), else the first screen; null when there is none. Pure.
+	 */
+	public static @Nullable Long pickScreen(final List<Long> screenIds, final int primaryIndex) {
+		if (screenIds.isEmpty()) {
+			return null;
+		}
+		return screenIds.contains((long) primaryIndex) ? Long.valueOf(primaryIndex) : screenIds.get(0);
+	}
+
+	/**
+	 * Frames per second for {@code t}: 10, or 30 while working on that window (Mirror: always 10, nobody looks at the
+	 * hologram while working on the real desktop); never above {@code maxFps}, at least 1.
+	 */
 	public static int fpsFor(final Target t, final int maxFps, final @Nullable String working) {
-		int want = working != null && working.equals(t.windowKey()) ? WORKING_FPS : IDLE_FPS;
+		int want = t.mode() == Mode.WINDOW && working != null && working.equals(t.windowKey()) ? WORKING_FPS : IDLE_FPS;
 		return Math.max(1, Math.min(maxFps, want));
 	}
 
@@ -66,6 +99,10 @@ public final class JavaDesktopSource implements CaptureSource {
 	public void start(final Target t, final int maxFps, final FrameSink sink) {
 		stop();
 		endedReason = null;
+		if (t.mode() == Mode.MIRROR) {
+			startMirror(t, maxFps, sink);
+			return;
+		}
 		if (t.mode() != Mode.WINDOW) {
 			endedReason = REASON_EXTEND;
 			sink.ended(REASON_EXTEND);
@@ -85,6 +122,34 @@ public final class JavaDesktopSource implements CaptureSource {
 			return;
 		}
 		Run run = new Run(t, key, maxFps, sink);
+		synchronized (lock) {
+			current = run;
+		}
+		run.thread.start();
+	}
+
+	private void startMirror(final Target t, final int maxFps, final FrameSink sink) {
+		if (!WebRtcNatives.supported()) {
+			String why = WebRtcNatives.isWindows() ? REASON_ARM : REASON_NOT_WINDOWS;
+			endedReason = why;
+			sink.ended(why);
+			return;
+		}
+		Supplier<@Nullable String> guard = mirrorGuard;
+		String problem = null;
+		try {
+			problem = guard == null ? null : guard.get();
+		} catch (RuntimeException e) {
+			LOGGER.warn("Mirror pre-check failed", e);
+			problem = REASON_MIRROR_EXCLUDE;
+		}
+		if (problem != null) {
+			LOGGER.info("Windows mirror unavailable: {}", problem);
+			endedReason = problem;
+			sink.ended(problem);
+			return;
+		}
+		Run run = new Run(t, null, maxFps, sink);
 		synchronized (lock) {
 			current = run;
 		}
@@ -131,10 +196,10 @@ public final class JavaDesktopSource implements CaptureSource {
 		VideoBufferConverter.convertFromI420(frame, out, FourCC.ABGR);
 	}
 
-	/** One capture session on its own thread. */
+	/** One capture session on its own thread: a window ({@code key}), or the primary monitor ({@code key} null, Mirror). */
 	private final class Run {
 		private final Target target;
-		private final WindowKey key;
+		private final @Nullable WindowKey key;
 		private final int maxFps;
 		private final FrameSink sink;
 		private final AtomicBoolean endedSent = new AtomicBoolean();
@@ -145,7 +210,7 @@ public final class JavaDesktopSource implements CaptureSource {
 		private DesktopCapturer.@Nullable Result lastResult;
 		private int failures;
 
-		Run(final Target target, final WindowKey key, final int maxFps, final FrameSink sink) {
+		Run(final Target target, final @Nullable WindowKey key, final int maxFps, final FrameSink sink) {
 			this.target = target;
 			this.key = key;
 			this.maxFps = maxFps;
@@ -174,6 +239,11 @@ public final class JavaDesktopSource implements CaptureSource {
 		}
 
 		void loop() {
+			if (key == null) {
+				loopScreen();
+				return;
+			}
+			WindowKey key = this.key;
 			WindowCapturer capturer = null;
 			Win32 w32 = null;
 			try {
@@ -238,6 +308,66 @@ public final class JavaDesktopSource implements CaptureSource {
 			}
 		}
 
+		/** Mirror: the primary monitor (Minecraft's window is excluded from capture by its display affinity). */
+		void loopScreen() {
+			ScreenCapturer capturer = null;
+			try {
+				try {
+					WebRtcNatives.load();
+				} catch (RuntimeException e) {
+					LOGGER.warn("Windows capture: {}", e.getMessage());
+					end(REASON_NO_LIBRARY);
+					return;
+				}
+				capturer = new ScreenCapturer();
+				List<DesktopSource> screens = capturer.getDesktopSources();
+				List<Long> ids = new ArrayList<>();
+				for (DesktopSource s : screens) {
+					ids.add(s.id);
+				}
+				int primary = Win32.get().primaryDisplayIndex();
+				Long pick = pickScreen(ids, primary);
+				if (pick == null) {
+					end(REASON_NO_SCREEN);
+					return;
+				}
+				DesktopSource chosen = screens.get(ids.indexOf(pick));
+				LOGGER.info("Windows mirror: screen {} of {} (primary index {})", pick, ids, primary);
+				capturer.selectSource(chosen);
+				int fps = fpsFor(target, maxFps, null);
+				capturer.setMaxFrameRate(fps);
+				capturer.start(this::onResult);
+				long next = System.nanoTime();
+				while (running) {
+					lastResult = null;
+					capturer.captureFrame(); // calls onResult on this thread
+					if (lastResult != null && lastResult != DesktopCapturer.Result.SUCCESS && ++failures >= MAX_FAILURES) {
+						end(REASON_NO_SCREEN);
+						return;
+					}
+					next += 1_000_000_000L / fps;
+					long now = System.nanoTime();
+					if (next < now - 1_000_000_000L) {
+						next = now;
+					}
+					sleepUntil(next);
+				}
+			} catch (Throwable e) {
+				if (running) {
+					LOGGER.warn("Windows screen capture failed", e);
+					end(REASON_SCREEN_FAILED);
+				}
+			} finally {
+				if (capturer != null) {
+					try {
+						capturer.dispose();
+					} catch (Throwable e) {
+						LOGGER.warn("Disposing the screen capturer failed", e);
+					}
+				}
+			}
+		}
+
 		private void onResult(final DesktopCapturer.Result result, final @Nullable VideoFrame frame) {
 			lastResult = result;
 			if (frame == null) {
@@ -276,7 +406,7 @@ public final class JavaDesktopSource implements CaptureSource {
 			live = false;
 			if (running && endedSent.compareAndSet(false, true)) {
 				endedReason = reason;
-				LOGGER.info("Windows capture of {} ended: {}", key.exe(), reason);
+				LOGGER.info("Windows capture of {} ended: {}", key == null ? "the screen" : key.exe(), reason);
 				sink.ended(reason);
 			}
 		}
