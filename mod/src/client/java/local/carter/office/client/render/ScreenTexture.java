@@ -4,16 +4,24 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+
+import com.mojang.logging.LogUtils;
 
 import local.carter.office.OfficeMod;
 import local.carter.office.client.capture.FrameSink;
 import local.carter.office.client.render.ScreenTextureMath.Rect;
 
 import net.minecraft.resources.Identifier;
+
+import net.fabricmc.loader.api.FabricLoader;
 
 /**
  * A live screen as a GPU texture: the {@link FrameSink} a {@link local.carter.office.client.capture.CaptureSource}
@@ -34,15 +42,26 @@ import net.minecraft.resources.Identifier;
  * box filter — only under the changed rectangles — and is sampled trilinearly, so a 1920x1080 screen seen from 6-15
  * blocks doesn't shimmer. The render thread never downsamples.
  *
- * <p>Ids are stable ({@code office:screen/<name>}, per hologram {@link #forHologram}) so the render-type cache, which
- * keeps one entry per texture id forever, doesn't grow per reconnect. Keep one live ScreenTexture per id; a new one
- * with the same id safely takes over the texture-manager slot.
+ * <p>Ids: use {@link #forHologram} for a hologram's screen. Its id ({@code office:screen/<hologramUuid>}) is stable, so
+ * the render-type cache, which keeps one entry per texture id forever, doesn't grow per reconnect. {@link #create} makes
+ * a unique id every call. Only one ScreenTexture per id may be live (holding a frame) at a time: a second one that
+ * receives a frame while the first is still live is a bug. In a development environment it fails loudly
+ * ({@link IllegalStateException} from {@link #full}); in production the newer one wins and the older one is
+ * <em>superseded</em>: it stops drawing and never touches the GPU again until it is {@link #clear()}ed.
  */
 public class ScreenTexture implements FrameSink {
 	/** Pending patch rectangles kept per texture before falling back to one whole-texture upload. */
 	public static final int MAX_PENDING_RECTS = 32;
 	/** Largest accepted frame side (pixels); bigger frames are ignored. */
 	public static final int MAX_SIDE = 8192;
+	/** After this many render frames in a row found a producer mid-frame, wait for it once (no upload starvation). */
+	public static final int MAX_MISSED_LOCKS = 8;
+
+	private static final Logger LOGGER = LogUtils.getLogger();
+	private static final AtomicInteger SERIAL = new AtomicInteger();
+	/** The live (frame-holding) texture of each id. */
+	private static final Map<Identifier, ScreenTexture> LIVE = new ConcurrentHashMap<>();
+	private static volatile @Nullable Boolean strictIds;
 
 	/** Where uploads go. The real one is {@link ScreenGpuTexture}; tests use a recording fake. */
 	public interface Gpu {
@@ -89,21 +108,75 @@ public class ScreenTexture implements FrameSink {
 	private boolean freePending;
 	private @Nullable ByteBuffer staging;
 	private volatile long uploads;
+	private int missedLocks;
+
+	// ---- id ownership ----
+	private boolean claimed; // guarded by lock
+	private volatile boolean superseded;
 
 	public ScreenTexture(final Identifier id, final Gpu gpu) {
 		this.id = id;
 		this.gpu = gpu;
 	}
 
-	/** A texture backed by the real GPU with the stable id {@code office:screen/<name>} ({@code name}: [a-z0-9/._-]). */
+	/**
+	 * A texture backed by the real GPU with a <em>unique</em> id {@code office:screen/<name>-<n>} ({@code name}:
+	 * [a-z0-9/._-]). For a hologram's screen use {@link #forHologram} instead (stable id, no render-type growth).
+	 */
 	public static ScreenTexture create(final String name) {
-		Identifier id = OfficeMod.id("screen/" + name);
+		Identifier id = OfficeMod.id("screen/" + name + "-" + SERIAL.incrementAndGet());
 		return new ScreenTexture(id, new ScreenGpuTexture(id));
 	}
 
-	/** The texture for one hologram: id {@link #idFor(UUID)}, the same every time. */
+	/**
+	 * The texture for one hologram, id {@link #idFor(UUID)} (the same every time). Keep at most one live per hologram:
+	 * reuse it across reconnects, or {@link #clear()} the old one before feeding a new one.
+	 */
 	public static ScreenTexture forHologram(final UUID hologramId) {
-		return create(hologramId.toString());
+		Identifier id = idFor(hologramId);
+		return new ScreenTexture(id, new ScreenGpuTexture(id));
+	}
+
+	/** Tests: whether a second live texture for an id throws (true) or supersedes the older one (false). */
+	public static void setStrictIdsForTest(final boolean strict) {
+		strictIds = strict;
+	}
+
+	private static boolean strictIds() {
+		Boolean s = strictIds;
+		if (s == null) {
+			try {
+				s = FabricLoader.getInstance().isDevelopmentEnvironment();
+			} catch (Throwable t) {
+				s = false;
+			}
+			strictIds = s;
+		}
+		return s;
+	}
+
+	/** Whether a newer texture with the same id took over (this one no longer draws; {@link #clear()} resets it). */
+	public boolean isSuperseded() {
+		return superseded;
+	}
+
+	/** Caller holds {@code lock}: makes this the live texture of its id (first frame since construction/clear). */
+	private void claimId() {
+		if (claimed) {
+			return;
+		}
+		ScreenTexture prev = LIVE.putIfAbsent(id, this);
+		if (prev != null && prev != this) {
+			if (strictIds()) {
+				throw new IllegalStateException("Two live ScreenTextures for " + id
+						+ ": clear the old one (or reuse it) before feeding a new one");
+			}
+			LOGGER.warn("Two live ScreenTextures for {}: the newer one wins", id);
+			prev.superseded = true;
+			LIVE.put(id, this);
+		}
+		claimed = true;
+		superseded = false;
 	}
 
 	/** {@code office:screen/<hologramUuid>}: the stable texture id of a hologram's screen. */
@@ -126,7 +199,7 @@ public class ScreenTexture implements FrameSink {
 
 	/** A frame has arrived (it is uploaded by the next {@link #prepareForRender()}). */
 	public boolean hasFrame() {
-		return frameW > 0;
+		return frameW > 0 && !superseded;
 	}
 
 	/** The source should send a full frame (nothing received yet, a patch could not apply, or after a clear). */
@@ -157,8 +230,12 @@ public class ScreenTexture implements FrameSink {
 			needsFull = true;
 			return;
 		}
+		if (superseded) {
+			return;
+		}
 		lock.lock();
 		try {
+			claimId();
 			if (levels == null || w != frameW || h != frameH) {
 				allocateCpu(w, h);
 			}
@@ -187,6 +264,9 @@ public class ScreenTexture implements FrameSink {
 		}
 		if (rgba.remaining() < (long) w * h * 4) {
 			needsFull = true;
+			return;
+		}
+		if (superseded) {
 			return;
 		}
 		lock.lock();
@@ -270,10 +350,20 @@ public class ScreenTexture implements FrameSink {
 	 * nothing is uploaded this time and the previous picture stays.
 	 */
 	public boolean prepareForRender() {
-		if (!lock.tryLock()) {
-			return gpuHasFrame;
+		if (superseded) {
+			return false; // a newer texture owns this id (and its texture-manager slot): never touch the GPU
 		}
+		if (!lock.tryLock()) {
+			if (++missedLocks < MAX_MISSED_LOCKS) {
+				return gpuHasFrame;
+			}
+			lock.lock(); // a producer kept hitting our frames: wait for it once so uploads can't starve
+		}
+		missedLocks = 0;
 		try {
+			if (superseded) {
+				return false;
+			}
 			if (freePending) {
 				freeGpu();
 			}
@@ -366,6 +456,11 @@ public class ScreenTexture implements FrameSink {
 			dirtyAll = false;
 			staging = null;
 			needsFull = true;
+			if (claimed) {
+				LIVE.remove(id, this); // never removes a newer owner's claim
+				claimed = false;
+			}
+			superseded = false;
 			if (gpuW != 0 || gpuHasFrame || freePending) {
 				if (gpu.canFreeNow()) {
 					freeGpu();
