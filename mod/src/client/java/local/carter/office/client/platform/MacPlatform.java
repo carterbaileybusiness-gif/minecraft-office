@@ -14,6 +14,8 @@ import org.slf4j.LoggerFactory;
 import local.carter.office.client.OfficeClient;
 import local.carter.office.client.capture.CaptureSource;
 import local.carter.office.client.capture.MacHelperSource;
+import local.carter.office.client.capture.OwnScreens;
+import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.capture.Target;
 import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperInstaller;
@@ -88,6 +90,7 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void register() {
 		helper.onStatusChange(this::statusChanged);
+		HologramLook.setOwnDetailProvider(OwnScreens::ownDetail); // why a capture ended, under "Screens unavailable"
 		helper.onError(this::helperError);
 		helper.onWindows(() -> {
 			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {

@@ -61,8 +61,8 @@ public final class StarterKit {
 		{"Sizing", "Hold an emitter and look at your screen: glowing corners appear.\n"
 				+ "Hold right-click on a corner and drag, or just scroll.\n\n"
 				+ "Shift + hold right-click to move it (scroll turns floor screens)."},
-		{"Settings", "Your first hologram mirrors your screen (minus Minecraft); extra ones are new screens.\n\n"
-				+ "Right-click the emitter:\n- Shape: 16:9, 21:9 or 9:16\n- Shows: Mirror, Extend or Window\n- Remove"},
+		{"Settings", "Each hologram is a new screen (Windows: your screen, minus Minecraft).\n\n"
+				+ "Right-click the emitter:\n- Shape: 16:9, 21:9 or 9:16\n- Shows: Extend, Window or Mirror\n- Remove"},
 		{"Privacy", "Also in the emitter menu:\n- Public: anyone nearby sees it\n- Private: only you; others see frosted glass\n"
 				+ "- Show to...: friends you pick\n\nPrivate screens never leave your computer."},
 		{"Working", "Click your hologram to zoom in. Your mouse and keyboard now drive your real computer.\n\n"

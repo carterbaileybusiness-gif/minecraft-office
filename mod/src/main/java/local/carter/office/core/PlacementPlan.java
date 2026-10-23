@@ -5,11 +5,10 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * What a newly placed hologram shows (spec 5.8, Carter: "Minecraft is on my real screen; holograms are my other
- * monitors"). The player's first hologram, or any new one while none of theirs mirrors, is MIRROR: their screen minus
- * Minecraft. Every additional one is EXTEND on the next free virtual display (1-4), like plugging in another monitor.
- * Mirror and Window holograms don't use a display; a Mirror hologram still gets the next free display slot so switching
- * it to Extend later lands on an unused display. Pure.
+ * What a newly placed hologram shows (Carter, 2026-10-23 late: every hologram is a monitor you plug in). It is EXTEND
+ * on the next free virtual display (1-4; 1 again when all are taken), like plugging in monitor #2, #3. Only Extend
+ * holograms use a display; Mirror and Window ones don't. Windows clients, which can't make virtual displays yet, switch
+ * a hologram they just placed to Mirror ({@code PlacementDefault}). Pure.
  */
 public final class PlacementPlan {
     public static final int MAX_SLOT = 4;
@@ -22,22 +21,17 @@ public final class PlacementPlan {
     private PlacementPlan() {}
 
     public static Choice next(final Collection<Existing> existing) {
-        boolean mirrored = false;
         Set<Integer> used = new HashSet<>();
         for (Existing e : existing) {
-            if (e.mode() == Mode.MIRROR) {
-                mirrored = true;
-            } else if (e.mode() == Mode.EXTEND) {
+            if (e.mode() == Mode.EXTEND) {
                 used.add(e.displaySlot());
             }
         }
-        int slot = 1;
         for (int s = 1; s <= MAX_SLOT; s++) {
             if (!used.contains(s)) {
-                slot = s;
-                break;
+                return new Choice(Mode.EXTEND, s);
             }
         }
-        return new Choice(mirrored ? Mode.EXTEND : Mode.MIRROR, slot);
+        return new Choice(Mode.EXTEND, 1);
     }
 }

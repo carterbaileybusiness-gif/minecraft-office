@@ -127,10 +127,17 @@ public final class MacHelperSource implements CaptureSource {
 		}
 	}
 
+	/**
+	 * After an ENDED: "window closed" shows Window closed; any other end (a capture failure, a Mirror that can't
+	 * exclude Minecraft, ...) shows "Screens unavailable" with {@link #statusDetail()}, never an endless "Connecting…".
+	 */
 	@Override
 	public HologramLook.OwnSource status() {
 		if (ended && "window closed".equals(endedReason)) {
 			return HologramLook.OwnSource.WINDOW_CLOSED;
+		}
+		if (ended) {
+			return HologramLook.OwnSource.UNAVAILABLE;
 		}
 		MacHelper.Status st = helper.status();
 		if (noPermission || st == MacHelper.Status.NOT_SET_UP || st == MacHelper.Status.NO_PERMISSION) {
@@ -154,6 +161,25 @@ public final class MacHelperSource implements CaptureSource {
 
 	public @Nullable String endedReason() {
 		return endedReason;
+	}
+
+	@Override
+	public @Nullable String statusDetail() {
+		String r = endedReason;
+		return ended && r != null && !"window closed".equals(r) ? detailFor(r) : null;
+	}
+
+	/** The helper's ENDED reason in words for the owner's panel ("capture failed: x" → "X"). Pure. */
+	public static String detailFor(final String reason) {
+		if (reason.contains("can't be excluded")) {
+			return "Can't hide Minecraft from the mirror";
+		}
+		String r = reason.startsWith("capture failed: ") ? reason.substring("capture failed: ".length()) : reason;
+		r = r.strip();
+		if (r.isEmpty()) {
+			return "Capture failed";
+		}
+		return Character.toUpperCase(r.charAt(0)) + r.substring(1);
 	}
 
 	/** (Re)issues CAPTURE when wanted: connected, rate above 0, and (EXTEND) the display online. */

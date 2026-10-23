@@ -12,6 +12,17 @@ enum HotkeyLogicTests {
             expect(window.placesWindow && !window.hidesMinecraft && !window.clampsCursor, "Window: placement only")
         }
 
+        run("Mirror never captures without Minecraft excluded") {
+            expectEqual(MirrorExclusion.decide(found: true, attempt: 0), .capture)
+            expectEqual(MirrorExclusion.decide(found: false, attempt: 0), .retry(after: MirrorExclusion.delays[0]))
+            let last = MirrorExclusion.delays.count
+            expectEqual(MirrorExclusion.decide(found: false, attempt: last), .fail, "gives up instead of showing Minecraft in itself")
+            expectEqual(MirrorExclusion.decide(found: true, attempt: last), .capture, "found on the last try")
+            let total = MirrorExclusion.delays.reduce(0, +)
+            expect(total >= 4 && total <= 6, "about 5 s in all, got \(total)")
+            expect(zip(MirrorExclusion.delays, MirrorExclusion.delays.dropFirst()).allSatisfy { $0 <= $1 }, "backs off")
+        }
+
         run("Minecraft is never left hidden") {
             var guardState = MinecraftHideGuard()
             expect(!guardState.shouldUnhide, "nothing hidden yet")

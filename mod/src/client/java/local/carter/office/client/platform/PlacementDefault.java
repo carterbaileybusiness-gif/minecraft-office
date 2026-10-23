@@ -9,7 +9,7 @@ import local.carter.office.core.Mode;
 
 /**
  * Decides when a hologram the local player just placed should be switched from Extend (the server's default for every
- * hologram after the first, spec 5.8) to Mirror, on clients that can't make virtual displays (Windows beta). "Just placed" = the player used an emitter item
+ * new hologram) to Mirror, on clients that can't make virtual displays (Windows beta). "Just placed" = the player used an emitter item
  * within {@link #REACH} blocks of the hologram's block less than {@link #WINDOW_MS} ms before it first appeared. Each
  * hologram is judged once, the first time it is seen, so existing holograms and later Extend choices are left alone.
  * Pure logic, client thread.
