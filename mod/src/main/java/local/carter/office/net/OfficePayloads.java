@@ -1,6 +1,8 @@
 package local.carter.office.net;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -82,6 +84,46 @@ public final class OfficePayloads {
 
 		@Override
 		public Type<MoveHologram> type() {
+			return TYPE;
+		}
+	}
+
+	/** Max players listed in one {@link WorkingPlayers}. */
+	public static final int MAX_WORKING = 1024;
+
+	/**
+	 * Server to every client: the players currently zoomed in and working (sent on every change and on join). Clients
+	 * show "⌨ working" after those names on name tags and in the tab list; nothing on the server (teams, scoreboard)
+	 * changes.
+	 */
+	public record WorkingPlayers(List<UUID> players) implements CustomPacketPayload {
+		public static final Type<WorkingPlayers> TYPE = new Type<>(OfficeMod.id("working_players"));
+		public static final StreamCodec<FriendlyByteBuf, WorkingPlayers> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					List<UUID> list = p.players.size() > MAX_WORKING ? p.players.subList(0, MAX_WORKING) : p.players;
+					buf.writeVarInt(list.size());
+					for (UUID id : list) {
+						buf.writeUUID(id);
+					}
+				},
+				buf -> {
+					int n = buf.readVarInt();
+					if (n < 0 || n > MAX_WORKING) {
+						throw new DecoderException("too many working players: " + n);
+					}
+					List<UUID> list = new ArrayList<>(n);
+					for (int i = 0; i < n; i++) {
+						list.add(buf.readUUID());
+					}
+					return new WorkingPlayers(List.copyOf(list));
+				});
+
+		public WorkingPlayers {
+			players = List.copyOf(players);
+		}
+
+		@Override
+		public Type<WorkingPlayers> type() {
 			return TYPE;
 		}
 	}
@@ -250,6 +292,7 @@ public final class OfficePayloads {
 		s2c.register(StreamStart.TYPE, StreamStart.CODEC);
 		s2c.register(StreamEnded.TYPE, StreamEnded.CODEC);
 		s2c.register(StreamFallbackTile.TYPE, StreamFallbackTile.CODEC);
+		s2c.register(WorkingPlayers.TYPE, WorkingPlayers.CODEC);
 
 		var c2s = PayloadTypeRegistry.serverboundPlay();
 		c2s.register(FallbackTile.TYPE, FallbackTile.CODEC);

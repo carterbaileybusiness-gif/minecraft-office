@@ -1,6 +1,8 @@
 package local.carter.office.net;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,10 +19,12 @@ import local.carter.office.net.OfficePayloads.RemoveHologram;
 import local.carter.office.net.OfficePayloads.ResizeHologram;
 import local.carter.office.net.OfficePayloads.SetWorking;
 import local.carter.office.net.OfficePayloads.UpdateHologram;
+import local.carter.office.net.OfficePayloads.WorkingPlayers;
 import local.carter.office.stream.StreamRouter;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -58,7 +62,7 @@ public final class HologramActions {
 			case ResizeHologram r -> edit(player, r.pos(), s -> s.withWidth(r.width()));
 			case UpdateHologram u -> edit(player, u.pos(), s -> update(s, u));
 			case MoveHologram m -> edit(player, m.pos(), s -> move(s, m));
-			case SetWorking w -> setWorking(player.getUUID(), w.working());
+			case SetWorking w -> setWorking(player, w.working());
 			case RemoveHologram r -> remove(player, r.pos());
 			default -> false;
 		};
@@ -72,13 +76,69 @@ public final class HologramActions {
 		return Collections.unmodifiableSet(WORKING);
 	}
 
-	/** Called on disconnect. */
-	public static void clearWorking(final UUID player) {
-		WORKING.remove(player);
+	/**
+	 * Where working-set changes go: by default a {@link WorkingPlayers} to every player that has the mod. GameTests
+	 * swap it to record the broadcasts (mock players have no connection).
+	 */
+	public interface WorkingBroadcast {
+		void send(MinecraftServer server, List<UUID> working);
 	}
 
-	private static boolean setWorking(final UUID player, final boolean working) {
-		return working ? WORKING.add(player) : WORKING.remove(player);
+	private static volatile WorkingBroadcast broadcast = HologramActions::broadcastToAll;
+
+	/** Test seam; {@code null} restores the real broadcast. */
+	public static void setWorkingBroadcast(final WorkingBroadcast b) {
+		broadcast = b == null ? HologramActions::broadcastToAll : b;
+	}
+
+	/** The working set as one payload (sorted, so every client gets the same list). */
+	public static WorkingPlayers workingPayload() {
+		List<UUID> list = new ArrayList<>(WORKING);
+		list.sort(null);
+		return new WorkingPlayers(list);
+	}
+
+	/** Called on join: the newcomer learns who is working right now. */
+	public static void sendWorkingTo(final ServerPlayer player) {
+		if (ServerPlayNetworking.canSend(player, WorkingPlayers.TYPE)) {
+			ServerPlayNetworking.send(player, workingPayload());
+		}
+	}
+
+	/** Called on disconnect: no longer working. */
+	public static void clearWorking(final ServerPlayer player) {
+		if (WORKING.remove(player.getUUID())) {
+			changed(player.level().getServer());
+		}
+	}
+
+	/** Called when the server starts: nobody is working. */
+	public static void resetWorking(final MinecraftServer server) {
+		WORKING.clear();
+	}
+
+	/** {@code SetWorking}: the player zoomed into (true) or out of (false) one of their screens. */
+	private static boolean setWorking(final ServerPlayer player, final boolean working) {
+		boolean changed = working ? WORKING.add(player.getUUID()) : WORKING.remove(player.getUUID());
+		if (changed) {
+			changed(player.level().getServer());
+		}
+		return changed;
+	}
+
+	private static void changed(final MinecraftServer server) {
+		if (server != null) {
+			broadcast.send(server, workingPayload().players());
+		}
+	}
+
+	private static void broadcastToAll(final MinecraftServer server, final List<UUID> working) {
+		WorkingPlayers payload = new WorkingPlayers(working);
+		for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+			if (ServerPlayNetworking.canSend(p, WorkingPlayers.TYPE)) {
+				ServerPlayNetworking.send(p, payload);
+			}
+		}
 	}
 
 	private static HologramSpec update(final HologramSpec s, final UpdateHologram u) {

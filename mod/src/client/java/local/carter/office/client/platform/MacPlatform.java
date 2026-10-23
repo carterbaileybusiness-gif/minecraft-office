@@ -16,6 +16,7 @@ import local.carter.office.client.capture.MacHelperSource;
 import local.carter.office.client.capture.Target;
 import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperInstaller;
+import local.carter.office.client.helper.HelperProtocol;
 import local.carter.office.client.helper.HelperProtocol.Welcome;
 import local.carter.office.client.helper.HelperProtocol.WindowRect;
 import local.carter.office.client.helper.MacHelper;
@@ -61,6 +62,9 @@ public final class MacPlatform implements Platform {
 	private HelperInstaller.@Nullable Asset pendingAsk;
 	private int pendingSession;
 	private boolean permissionNotified;
+	// zoom (client thread)
+	private boolean zoomed;
+	private @Nullable String zoomFailure;
 
 	MacPlatform() {
 		installer = HelperInstaller.create(OfficeClient.MOD_VERSION, OfficeClient.RELEASE_BASE);
@@ -80,6 +84,7 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void register() {
 		helper.onStatusChange(this::statusChanged);
+		helper.onError(this::helperError);
 		helper.onWindows(() -> {
 			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
 				s.refreshWindows();
@@ -134,19 +139,58 @@ public final class MacPlatform implements Platform {
 		helper.listWindows();
 	}
 
+	/**
+	 * Sends ZOOM_IN for the hologram's capture surface. If it can't be sent (no surface, helper gone) or the helper
+	 * answers ERROR not_found / no_accessibility, {@link #workProblem} reports why until {@link #zoomOut}, so the zoom
+	 * ends with that reason instead of leaving the player in a view they can't use.
+	 */
 	@Override
 	public void zoomIn(final HologramSpec spec, final Rect mcWindow) {
-		helper.zoomIn(helper.surfaceFor(Target.of(spec)), new WindowRect(mcWindow.x(), mcWindow.y(), mcWindow.w(), mcWindow.h()));
+		zoomed = true;
+		zoomFailure = null;
+		int surface = helper.surfaceFor(Target.of(spec));
+		boolean sent = helper.zoomIn(surface, new WindowRect(mcWindow.x(), mcWindow.y(), mcWindow.w(), mcWindow.h()));
+		zoomFailure = ZoomFailure.forZoomIn(helper.isConnected(), surface, sent);
+		if (zoomFailure != null) {
+			LOGGER.info("Office helper: zoom-in not possible ({}; surface {})", zoomFailure, surface);
+		}
 	}
 
 	@Override
 	public void zoomOut() {
+		zoomed = false;
+		zoomFailure = null;
 		helper.zoomOut();
+	}
+
+	/** An ERROR from the helper while zoomed that means the zoom didn't happen (client thread). */
+	private void helperError(final HelperProtocol.HelperError e) {
+		String why = ZoomFailure.forHelperError(e.code());
+		if (zoomed && why != null && zoomFailure == null) {
+			zoomFailure = why;
+		}
 	}
 
 	@Override
 	public void onExitRequested(final Runnable r) {
 		helper.onExitZoom(r);
+	}
+
+	/** Working needs the helper connected and Accessibility (cursor focus, window placement, the exit hotkey). */
+	@Override
+	public @Nullable String workProblem(final HologramSpec spec) {
+		String failure = zoomFailure;
+		if (zoomed && failure != null) {
+			return failure;
+		}
+		Welcome w = helper.welcome();
+		if (!helper.isConnected() || w == null) {
+			return ZoomFailure.NO_HELPER;
+		}
+		if (!w.accessibility()) {
+			return ZoomFailure.NO_ACCESSIBILITY;
+		}
+		return null;
 	}
 
 	@Override

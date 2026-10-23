@@ -6,11 +6,15 @@ import java.util.Optional;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.interact.HologramPicker.Picked;
+import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.render.HologramPlacement;
+import local.carter.office.client.zoom.ZoomClient;
+import local.carter.office.client.zoom.ZoomController;
 import local.carter.office.core.HologramGeometry.Corner;
 import local.carter.office.core.HologramGeometry.Frame;
 import local.carter.office.core.HologramGeometry.Hit;
 import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Mode;
 import local.carter.office.core.Mount;
 import local.carter.office.core.Vec3d;
 import local.carter.office.hologram.HologramBlockEntity;
@@ -41,9 +45,11 @@ import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
  *   <li>Shift + right-click and hold: move, the wheel turns it ({@link MoveDrag}); on a wall it slides along the wall;</li>
  *   <li>right-click the body: settings.</li>
  * </ul>
- * Right-clicking an emitter block (empty main hand or an emitter, not sneaking) opens settings, read-only for
- * non-owners. Anything else in the main hand (a Wizards staff, food, a shield) is never intercepted, and an emitter in
- * the off hand alone never is either. Called from {@code MinecraftUseItemMixin} at the head of
+ * Without an emitter in the main hand (empty, or any other item: a Wizards staff, food, a shield), right-clicking your
+ * OWN hologram is always taken: it zooms in to work on it ({@link ZoomClient}), or says in the action bar why it can't
+ * (not live yet, helper not ready). Someone else's hologram is never intercepted (no message; the item keeps its own
+ * use), and an emitter in the off hand alone never makes a click a hologram click. Right-clicking an emitter block
+ * (empty main hand or an emitter, not sneaking) opens settings, read-only for non-owners. Called from {@code MinecraftUseItemMixin} at the head of
  * {@code Minecraft.startUseItem} (after vanilla's destroying/hands-busy guards; a consumed click gets vanilla's 4-tick
  * repeat delay and its repeats are swallowed until release, see {@link ClickGate}); a consumed click never reaches
  * vanilla, so an emitter in hand is never placed by accident on the wall behind a hologram.
@@ -185,8 +191,12 @@ public final class HologramInteractions {
 		Optional<Picked> picked = HologramPicker.pick(partialTick);
 		boolean holdingEmitter = holdingEmitter(player);
 
-		if (holdingEmitter && picked.isPresent() && picked.get().hit().distance() <= vanillaDistance + 1e-3) {
+		boolean hologramFirst = picked.isPresent() && picked.get().hit().distance() <= vanillaDistance + 1e-3;
+		if (holdingEmitter && hologramFirst) {
 			return onHologram(mc, player, picked.get());
+		}
+		if (hologramFirst && picked.get().be().isOwner(player.getUUID())) {
+			return zoom(player, picked.get().be());
 		}
 		boolean mainHandFree = holdingEmitter || player.getItemInHand(InteractionHand.MAIN_HAND).isEmpty();
 		if (mainHandFree && mc.hitResult instanceof BlockHitResult block && block.getType() == HitResult.Type.BLOCK && !player.isShiftKeyDown()
@@ -195,6 +205,39 @@ public final class HologramInteractions {
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * Right-click on your own hologram without an emitter in the main hand: zoom in to work on it. Someone else's
+	 * hologram is never taken here (no message, vanilla gets the click).
+	 */
+	private static boolean zoom(final LocalPlayer player, final HologramBlockEntity be) {
+		ZoomController.Request r = ZoomClient.request(be);
+		switch (r) {
+			case STARTED, BUSY, NOT_OWNER -> {
+				// NOT_OWNER can't happen (checked by the caller); consumed either way so nothing is placed through it
+			}
+			case UNAVAILABLE -> {
+				String why = ZoomClient.problem(be);
+				player.sendOverlayMessage(Component.literal(why != null ? why : "Can't work on this screen right now"));
+			}
+			case NOT_LIVE -> player.sendOverlayMessage(Component.literal(notLiveMessage(be)));
+		}
+		return true;
+	}
+
+	private static String notLiveMessage(final HologramBlockEntity be) {
+		HologramSpec spec = be.spec();
+		HologramLook.OwnSource own = HologramLook.ownSource(be.hologramId());
+		if (own == HologramLook.OwnSource.NEEDS_HELPER) {
+			return "Set up your screens first: /officescreens setup";
+		}
+		if (spec != null && spec.mode() == Mode.WINDOW && (own == HologramLook.OwnSource.WINDOW_CLOSED
+				|| own == HologramLook.OwnSource.PICK_WINDOW || spec.windowKey() == null
+				|| spec.windowKey().isEmpty())) {
+			return "Pick a window first: right-click the emitter";
+		}
+		return "This screen is still connecting…";
 	}
 
 	private static boolean onHologram(final Minecraft mc, final LocalPlayer player, final Picked picked) {

@@ -12,6 +12,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import org.jspecify.annotations.Nullable;
@@ -71,6 +72,7 @@ public final class MacHelper implements HelperConnection.Listener {
 	private final List<Runnable> windowListeners = new CopyOnWriteArrayList<>();
 	private final List<Runnable> exitListeners = new CopyOnWriteArrayList<>();
 	private final List<Runnable> statusListeners = new CopyOnWriteArrayList<>();
+	private final List<Consumer<HelperError>> errorListeners = new CopyOnWriteArrayList<>();
 
 	// guarded by this
 	private @Nullable HelperChannel channel;
@@ -361,6 +363,11 @@ public final class MacHelper implements HelperConnection.Listener {
 		statusListeners.add(r);
 	}
 
+	/** Called on the client thread with every ERROR the helper sends (e.g. a refused ZOOM_IN). */
+	public void onError(final Consumer<HelperError> listener) {
+		errorListeners.add(listener);
+	}
+
 	public boolean zoomIn(final int surface, final WindowRect mcWindowFrame) {
 		return surface != 0 && send(new ZoomIn(surface, mcWindowFrame));
 	}
@@ -430,7 +437,12 @@ public final class MacHelper implements HelperConnection.Listener {
 					clientThread.execute(r);
 				}
 			}
-			case HelperError e -> LOGGER.warn("Office helper error {}: {}", e.code(), e.message());
+			case HelperError e -> {
+				LOGGER.warn("Office helper error {}: {}", e.code(), e.message());
+				for (Consumer<HelperError> l : errorListeners) {
+					clientThread.execute(() -> l.accept(e));
+				}
+			}
 			default -> LOGGER.debug("Office helper: ignoring {}", m.getClass().getSimpleName());
 		}
 	}

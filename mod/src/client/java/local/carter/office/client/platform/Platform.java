@@ -41,6 +41,15 @@ public interface Platform {
 	/** Runs (on the client thread) when the OS-level exit gesture fires while zoomed. */
 	void onExitRequested(Runnable r);
 
+	/**
+	 * Why the player can't work on {@code spec}'s screen right now (a short sentence for the action bar), or null when
+	 * {@link #zoomIn} will work. Checked before zooming in and every tick while zoomed: when it turns non-null (e.g. the
+	 * helper quit) the zoom ends.
+	 */
+	default @Nullable String workProblem(final HologramSpec spec) {
+		return null;
+	}
+
 	/** A capture source for one of the player's own holograms, or null when this computer can't capture. */
 	default @Nullable CaptureSource newOwnSource() {
 		return null;
