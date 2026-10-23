@@ -22,6 +22,9 @@ public final class TileCodec {
     /** One tile; {@code rgba} is an independent heap buffer of exactly {@code w*h*4} bytes at position 0. */
     public record Tile(int tx, int ty, int w, int h, ByteBuffer rgba) {}
 
+    /** Largest accepted frame side; keeps w*h*4 inside an int and rejects hostile sizes before allocating. */
+    public static final int MAX_DIMENSION = 8192;
+
     private final int tile;
     private int width;
     private int height;
@@ -47,7 +50,8 @@ public final class TileCodec {
     }
 
     public TileFrame frame(int w, int h, ByteBuffer rgba) {
-        if (w <= 0 || h <= 0) throw new IllegalArgumentException("size " + w + "x" + h);
+        if (w <= 0 || h <= 0 || w > MAX_DIMENSION || h > MAX_DIMENSION)
+            throw new IllegalArgumentException("size " + w + "x" + h + " (each side must be 1.." + MAX_DIMENSION + ")");
         long need = (long) w * h * 4;
         if (rgba.remaining() < need)
             throw new IllegalArgumentException("buffer has " + rgba.remaining() + " bytes, need " + need);

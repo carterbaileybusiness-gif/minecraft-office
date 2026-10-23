@@ -177,6 +177,20 @@ class TileCodecTest {
     }
 
     @Test
+    void oversizeFramesAreRejectedBeforeAllocating() {
+        TileCodec c = new TileCodec();
+        ByteBuffer small = ByteBuffer.allocate(16);
+        assertThrows(IllegalArgumentException.class, () -> c.diff(8193, 1, small));
+        assertThrows(IllegalArgumentException.class, () -> c.diff(1, 8193, small));
+        assertThrows(IllegalArgumentException.class, () -> c.diff(Integer.MAX_VALUE, Integer.MAX_VALUE, small));
+        assertThrows(IllegalArgumentException.class, () -> c.diff(65536, 65536, small));
+        assertThrows(IllegalArgumentException.class, () -> c.diff(-1, 10, small));
+        // codec is still usable and the max side is allowed
+        assertEquals(1, c.frame(1, 1, ByteBuffer.allocate(4)).tiles().size());
+        assertEquals(128, c.frame(TileCodec.MAX_DIMENSION, 1, ByteBuffer.allocate(TileCodec.MAX_DIMENSION * 4)).cols());
+    }
+
+    @Test
     void customTileSize() {
         TileCodec c = new TileCodec(32);
         assertEquals(4 * 2, c.diff(100, 50, frame(100, 50, 1)).size());

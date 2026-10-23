@@ -2,7 +2,6 @@ package local.carter.office.core;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -273,6 +272,103 @@ class PacketizerTest {
             }
         }
         assertArrayEquals(px, dst.array());
+    }
+
+    private static byte[] dg(int stream, int seq, int tx, int ty, int part, int parts, int payload) {
+        byte[] h = new StreamHeader(StreamHeader.TYPE_TILE, stream, seq, tx, ty, part, parts).encode();
+        return java.util.Arrays.copyOf(h, h.length + payload);
+    }
+
+    @Test
+    void manyDistinctKeysStayWithinCaps() {
+        Packetizer q = new Packetizer(clock::get, 100, 50, 1L << 20);
+        for (int i = 0; i < 1000; i++) {
+            q.accept(dg(1, 1, i % 60000, i / 60000, 0, 2, 500));
+            assertTrue(q.trackedKeys() <= 100);
+            assertTrue(q.pendingCount() <= 50);
+        }
+        assertEquals(100, q.trackedKeys());
+        assertEquals(50, q.pendingCount());
+    }
+
+    @Test
+    void defaultCapsHoldUnderKeyFlood() {
+        for (int i = 0; i < 20_000; i++) p.accept(dg(i, 1, 0, 0, 0, 2, 10));
+        assertEquals(Packetizer.DEFAULT_MAX_KEYS, p.trackedKeys());
+        assertEquals(Packetizer.DEFAULT_MAX_ENTRIES, p.pendingCount());
+        assertTrue(p.bufferedBytes() <= Packetizer.DEFAULT_MAX_BUFFERED_BYTES);
+    }
+
+    @Test
+    void oneOf255PartFloodStaysWithinByteCap() {
+        long cap = 1L << 20;
+        Packetizer q = new Packetizer(clock::get, 100_000, 100_000, cap);
+        for (int i = 0; i < 5000; i++) {
+            q.accept(dg(i, 1, 0, 0, 0, 255, 1100));
+            assertTrue(q.bufferedBytes() <= cap, "buffered " + q.bufferedBytes());
+        }
+        assertTrue(q.pendingCount() > 0 && q.pendingCount() < 5000);
+        for (int i = 0; i < 20_000; i++) p.accept(dg(i, 1, 0, 0, 0, 255, 1100));
+        assertTrue(p.bufferedBytes() <= Packetizer.DEFAULT_MAX_BUFFERED_BYTES);
+    }
+
+    @Test
+    void bufferedBytesReturnToZeroWhenTilesCompleteOrExpire() {
+        assertEquals(0, p.bufferedBytes());
+        List<byte[]> ds = p.split(tile(1, 1, 0, 0), bytes(3000, 8));
+        p.accept(ds.get(0));
+        assertTrue(p.bufferedBytes() > 1000);
+        feedAll(ds);
+        assertEquals(0, p.bufferedBytes());
+        p.accept(dg(9, 1, 0, 0, 0, 2, 100));
+        assertTrue(p.bufferedBytes() > 100);
+        clock.addAndGet(TimeUnit.SECONDS.toNanos(3));
+        assertEquals(0, p.pendingCount());
+        assertEquals(0, p.bufferedBytes());
+    }
+
+    @Test
+    void sequenceStateExpiresAfterTenSecondsIdle() {
+        assertTrue(feedAll(p.split(tile(1, 5, 0, 0), bytes(100, 1))).isPresent());
+        assertEquals(1, p.trackedKeys());
+        clock.addAndGet(TimeUnit.SECONDS.toNanos(9));
+        assertEquals(1, p.trackedKeys());
+        clock.addAndGet(TimeUnit.SECONDS.toNanos(2));
+        assertEquals(0, p.trackedKeys());
+        // after expiry the key starts fresh
+        assertTrue(feedAll(p.split(tile(1, 4, 0, 0), bytes(100, 2))).isPresent());
+    }
+
+    @Test
+    void forgetStreamDropsItsStateOnly() {
+        feedAll(p.split(tile(1, 5, 0, 0), bytes(100, 1)));
+        feedAll(p.split(tile(2, 5, 0, 0), bytes(100, 1)));
+        p.accept(dg(1, 1, 3, 3, 0, 2, 100));
+        p.accept(dg(2, 1, 3, 3, 0, 2, 100));
+        assertEquals(4, p.trackedKeys());
+        assertEquals(2, p.pendingCount());
+        p.forget(1);
+        assertEquals(2, p.trackedKeys());
+        assertEquals(1, p.pendingCount());
+        // stream 1 is fresh again (an older seq is accepted), stream 2 still remembers
+        assertTrue(feedAll(p.split(tile(1, 3, 0, 0), bytes(100, 3))).isPresent());
+        assertTrue(feedAll(p.split(tile(2, 3, 0, 0), bytes(100, 3))).isEmpty());
+        p.clear();
+        assertEquals(0, p.trackedKeys());
+        assertEquals(0, p.pendingCount());
+        assertEquals(0, p.bufferedBytes());
+    }
+
+    @Test
+    void forgedFarAheadSeqRecoversAfterExpiry() {
+        assertTrue(feedAll(p.split(tile(1, 1_000_000, 0, 0), bytes(100, 1))).isPresent());
+        // legitimate traffic keeps arriving every second but is rejected and must not keep the forgery alive
+        for (int sec = 1; sec <= 9; sec++) {
+            clock.addAndGet(TimeUnit.SECONDS.toNanos(1));
+            assertTrue(feedAll(p.split(tile(1, 6, 0, 0), bytes(100, 2))).isEmpty(), "second " + sec);
+        }
+        clock.addAndGet(TimeUnit.SECONDS.toNanos(2));
+        assertTrue(feedAll(p.split(tile(1, 6, 0, 0), bytes(100, 2))).isPresent());
     }
 
     /** Lossless fake: "JPEG" is just the raw RGBA tile. */
