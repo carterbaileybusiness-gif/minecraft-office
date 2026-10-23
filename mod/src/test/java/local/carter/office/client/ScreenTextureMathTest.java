@@ -5,11 +5,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +35,24 @@ class ScreenTextureMathTest {
 		final List<int[]> allocations = new ArrayList<>();
 		final List<Write> writes = new ArrayList<>();
 		int frees;
+		boolean onRenderThread = true;
+		final List<Runnable> queued = new ArrayList<>();
+
+		@Override
+		public boolean canFreeNow() {
+			return onRenderThread;
+		}
+
+		@Override
+		public void runOnRenderThread(final Runnable task) {
+			queued.add(task);
+		}
+
+		void runQueued() {
+			List<Runnable> tasks = new ArrayList<>(queued);
+			queued.clear();
+			tasks.forEach(Runnable::run);
+		}
 
 		record Write(int level, int x, int y, int w, int h, byte[] data) {}
 
@@ -290,6 +313,89 @@ class ScreenTextureMathTest {
 		t.full(8, 6, solid(8, 6, 1, 1, 1));
 		t.patch(0, 0, 4, 4, ByteBuffer.allocate(4));
 		assertTrue(t.needsFullFrame());
+	}
+
+	// ---- fix round 1: no render-thread stalls, stable ids, off-thread clear ----
+
+	@Test
+	void prepareForRenderNeverWaitsForAProducerMidFrame() throws Exception {
+		FakeGpu gpu = new FakeGpu();
+		ScreenTexture t = texture(gpu);
+		t.full(1920, 1080, solid(1920, 1080, 1, 1, 1));
+		assertTrue(t.prepareForRender());
+		gpu.writes.clear();
+
+		CountDownLatch inside = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		t.setMidFullFrameHookForTest(() -> {
+			inside.countDown();
+			try {
+				release.await(10, TimeUnit.SECONDS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		Thread producer = new Thread(() -> t.full(1920, 1080, solid(1920, 1080, 2, 2, 2)), "test-producer");
+		producer.start();
+		try {
+			assertTrue(inside.await(10, TimeUnit.SECONDS), "producer reached the middle of its frame");
+			long start = System.nanoTime();
+			boolean drawable = assertTimeoutPreemptively(Duration.ofMillis(500), t::prepareForRender);
+			long ms = (System.nanoTime() - start) / 1_000_000;
+			assertTrue(drawable, "keeps drawing the previous frame (no flicker to CONNECTING)");
+			assertTrue(ms < 100, "prepareForRender returned in " + ms + " ms while the producer held the frame");
+			assertTrue(gpu.writes.isEmpty(), "nothing half-written was uploaded");
+		} finally {
+			release.countDown();
+			producer.join(10_000);
+		}
+		t.setMidFullFrameHookForTest(null);
+		assertTrue(t.prepareForRender());
+		assertArrayEquals(new int[] {2, 2, 2, 255}, px(gpu.level0().get(0), 0, 0), "the finished frame is uploaded next time");
+	}
+
+	@Test
+	void hologramTextureIdsAreStable() {
+		UUID id = UUID.fromString("12345678-1234-1234-1234-123456789abc");
+		assertEquals(Identifier.fromNamespaceAndPath("office", "screen/12345678-1234-1234-1234-123456789abc"), ScreenTexture.idFor(id));
+		assertEquals(ScreenTexture.idFor(id), ScreenTexture.idFor(UUID.fromString(id.toString())));
+	}
+
+	@Test
+	void offThreadClearQueuesTheFreeOnTheRenderThread() {
+		FakeGpu gpu = new FakeGpu();
+		ScreenTexture t = texture(gpu);
+		t.full(8, 6, solid(8, 6, 1, 1, 1));
+		assertTrue(t.prepareForRender());
+
+		gpu.onRenderThread = false; // e.g. a network thread
+		t.clear();
+		assertEquals(0, gpu.frees, "not freed off the render thread");
+		assertEquals(1, gpu.queued.size(), "free queued onto the render thread");
+		gpu.onRenderThread = true;
+		gpu.runQueued();
+		assertEquals(1, gpu.frees, "freed without any further prepareForRender");
+		gpu.runQueued();
+		assertEquals(1, gpu.frees);
+	}
+
+	@Test
+	void queuedFreeNeverFreesANewerAllocation() {
+		FakeGpu gpu = new FakeGpu();
+		ScreenTexture t = texture(gpu);
+		t.full(8, 6, solid(8, 6, 1, 1, 1));
+		assertTrue(t.prepareForRender());
+
+		gpu.onRenderThread = false;
+		t.clear();
+		t.full(16, 12, solid(16, 12, 3, 3, 3)); // the source reconnects before the queued free ran
+		gpu.onRenderThread = true;
+		assertTrue(t.prepareForRender()); // frees the old texture first, then allocates the new one
+		assertEquals(1, gpu.frees);
+		assertEquals(2, gpu.allocations.size());
+		gpu.runQueued();
+		assertEquals(1, gpu.frees, "the late queued free is a no-op");
+		assertTrue(t.prepareForRender());
 	}
 
 	// ---- test pattern ----
