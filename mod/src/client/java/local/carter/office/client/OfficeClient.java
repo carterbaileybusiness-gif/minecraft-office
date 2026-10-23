@@ -7,6 +7,7 @@ import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.render.HologramRenderer;
+import local.carter.office.client.stream.StreamClient;
 import local.carter.office.hologram.OfficeBlocks;
 
 import net.fabricmc.api.ClientModInitializer;
@@ -31,6 +32,8 @@ public class OfficeClient implements ClientModInitializer {
 		Platform.current().register();
 		// Own holograms' live screens: platform capture (Mac helper), or the test pattern with -Doffice.testPattern=true.
 		OwnScreens.register();
+		// Shared screens: send own (non-private) screens to nearby friends, show theirs (Task 14).
+		StreamClient.register();
 		// Debug: /hologramtest (dev environment or -Doffice.testPattern=true only).
 		HologramTestCommand.register();
 	}
