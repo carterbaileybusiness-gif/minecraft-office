@@ -38,18 +38,24 @@ The pack is all the mods we use. It **updates itself every time you press Play**
 
 **Easiest way (recommended):**
 
-1. In Prism click **Add Instance**.
-2. Pick **Import** on the left.
-3. Paste this link and press **OK**: `TODO(controller): pack URL` (note: Prism can only import an instance `.zip` or a `.mrpack`, not a bare `pack.toml` link, so this must be a Prism instance zip that already contains the packwiz bootstrap and the pre-launch command below)
-4. Wait for it to finish. The instance appears in your list.
+1. Download **Minecraft-Office.zip** from the latest release:
+   <https://github.com/carterbaileybusiness-gif/minecraft-office/releases/latest/download/Minecraft-Office.zip>
+   (Do not unzip it. Your browser may call it "unsafe" because it is a zip from GitHub; it is fine.)
+2. In Prism click **Add Instance**.
+3. Pick **Import** on the left.
+4. Click **Browse** and choose the **Minecraft-Office.zip** you downloaded, then press **OK**.
+5. Wait for it to finish. The instance **Minecraft Office** appears in your list.
 
-<!-- screenshot: Add Instance, Import tab with the link pasted -->
+<!-- screenshot: Add Instance, Import tab with Minecraft-Office.zip chosen -->
 
-The first launch downloads all the mods, so it takes a few minutes. After that it is quick.
+The first launch downloads all the mods, so it takes a few minutes. A small window shows the progress. It may ask
+which optional mods you want: leave **Iris** and **Distant Horizons** off unless your computer has 16 GB of RAM.
+After the first launch, starting is quick, and every time you press **Play** it quietly fetches any new mods first.
 
-**Alternative: one-click `.mrpack` file.** Download `TODO(controller): .mrpack link`, then Add Instance, Import,
-and choose the downloaded file. This works, but it does **not** update itself. When Carter says there is a new
-version, download the new `.mrpack` and import it again.
+**Alternative: one-click `.mrpack` file.** Download
+<https://github.com/carterbaileybusiness-gif/minecraft-office/releases/latest/download/Minecraft-Office.mrpack>,
+then Add Instance, Import, and choose the downloaded file. This works, but it does **not** update itself. When Carter
+says there is a new version, download the new `.mrpack` and import it again.
 
 <details>
 <summary>How the auto-update works (you can skip this)</summary>
@@ -58,7 +64,7 @@ The instance runs a small tool, `packwiz-installer-bootstrap.jar`, just before M
 under **Edit Instance, Settings, Custom commands** (turn on **Custom commands**), in the **Pre-launch command** box:
 
 ```
-"$INST_JAVA" -jar packwiz-installer-bootstrap.jar TODO(controller): pack.toml URL
+"$INST_JAVA" -jar packwiz-installer-bootstrap.jar https://carterbaileybusiness-gif.github.io/minecraft-office/pack/pack.toml
 ```
 
 The jar lives in the instance's Minecraft folder (next to `options.txt`). To set it up by hand: make a Prism
@@ -69,8 +75,10 @@ instance for **Minecraft 26.3** with **Fabric** (loader 0.20.1), put the jar in 
 
 Minecraft needs memory (RAM) to run the mods.
 
+The imported instance is already set to **4096 MB** (4 GB). You only need to change it on a small computer:
+
 1. In Prism, right-click the instance, **Edit**, then **Settings**, then **Java**.
-2. Turn on **Memory** and set **Maximum memory allocation** to **4096 MB** (4 GB).
+2. Check **Memory** is on and **Maximum memory allocation** says **4096 MB**.
 3. If your computer has only **8 GB of RAM**, use **3072 MB** (3 GB) instead and keep other big apps closed.
 
 Not sure how much RAM you have? Mac: Apple menu, About This Mac. Windows: Settings, System, About.
@@ -105,10 +113,9 @@ for two permissions. You need both.
    - macOS 14: **System Settings, Privacy & Security, Screen Recording**.
 2. **Accessibility.** The next time you use a hologram, macOS asks again. Switch **OfficeHelper** on in
    **System Settings, Privacy & Security, Accessibility**. This lets your mouse and keyboard work inside a hologram.
-3. If macOS says OfficeHelper cannot be opened because it is from an unidentified developer, open
-   **System Settings, Privacy & Security**, scroll to the Security section, and click **Open Anyway** next to
-   OfficeHelper. (We do not pay Apple for signing, so this shows up once.)
-   `TODO(controller): confirm whether Open Anyway really appears for the auto-downloaded helper`
+3. Normally nothing else shows up. But if macOS ever says OfficeHelper cannot be opened because it is from an
+   unidentified developer, open **System Settings, Privacy & Security**, scroll to the Security section, and click
+   **Open Anyway** next to OfficeHelper. (We do not pay Apple for signing.)
 4. **Quit Minecraft completely and start it again.** macOS only applies new permissions to programs that start afterwards.
 
 <!-- screenshot: macOS prompt asking to let OfficeHelper record the screen -->
@@ -177,9 +184,12 @@ Good to know:
 
 ## 8. Voice chat, waystones and claims
 
-- **Voice chat:** press **V** to open the voice chat menu. Nearby friends hear you (about 48 blocks). Allow the
-  microphone if your computer asks. The push-to-talk key is under Options, Controls, Voice Chat.
-  `TODO(controller): default push-to-talk key and whether voice chat starts in push-to-talk or voice-activation mode are unconfirmed; check in game`
+- **Voice chat:** press **V** to open the voice chat menu. The first time you press it, a short setup asks you to
+  pick your microphone and test it. Allow the microphone if your computer asks. Nearby friends hear you (about 48
+  blocks). Voice chat starts in **push-to-talk** mode, but no key is set for it yet. In the setup either pick
+  **voice activation** (your mic opens when you speak), or choose a key for push-to-talk under Options, Controls,
+  Key Binds, Voice Chat, **Push To Talk**. Handy keys: **M** mutes your mic, **N** turns voice chat off, **H** hides
+  the little voice icons.
 - **Waystones:** a Warp Stone (4 amethyst shards, 4 ender pearls, 1 gold ingot) turns stone bricks into a waystone.
   Waystones you have visited let you teleport between them. Some sit in the wild too.
 - **Claims** (protect your office): press **'** (apostrophe) and claim the chunks around your office. Friends you add

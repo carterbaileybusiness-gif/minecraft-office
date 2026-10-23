@@ -1,0 +1,110 @@
+name: release
+# Runs when a version tag is pushed (scripts/release.sh does that). Builds everything CI can build and publishes the
+# GitHub Release: mod jar, Prism instance zip, manifest.json. It never commits and never sees the signing key:
+#   - the SIGNED helper zip is built and uploaded later from Carter's Mac by scripts/release-helper.sh;
+#   - pack/mods/office.pw.toml (URL + hash of the jar below) and the .mrpack are written by scripts/release.sh.
+# See RELEASING.md.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mod:
+    name: mod jar
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+      - name: tag must match gradle.properties
+        id: version
+        run: |
+          version="$(sed -n 's/^version=//p' gradle.properties)"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match gradle.properties version ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: validate gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+      - name: setup jdk
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - name: make gradle wrapper executable
+        run: chmod +x ./gradlew
+      - name: build and unit tests
+        run: ./gradlew build
+      - name: the release jar exists
+        run: test -f "build/libs/office-${{ steps.version.outputs.version }}.jar"
+      - name: keep the jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-jar
+          path: build/libs/office-${{ steps.version.outputs.version }}.jar
+          if-no-files-found: error
+
+  helper:
+    name: mac helper (unsigned, CI artifact only)
+    runs-on: macos-15
+    env:
+      OFFICE_HELPER_NO_SIGN: "1"   # signing only ever happens on Carter's Mac
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+      - name: test and build OfficeHelper.app
+        run: bash helper-mac/check.sh && bash helper-mac/build.sh
+      - name: zip the unsigned app
+        run: ditto -c -k --keepParent helper-mac/build/OfficeHelper.app OfficeHelper-unsigned.zip
+      - name: keep the unsigned helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfficeHelper-unsigned
+          path: OfficeHelper-unsigned.zip
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub Release
+    needs: [mod, helper]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.mod.outputs.version }}
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+      - name: download the mod jar
+        uses: actions/download-artifact@v4
+        with:
+          name: mod-jar
+          path: release
+      - name: build the friend instance zip
+        run: bash scripts/make-friend-instance.sh --no-mrpack
+      - name: gather assets and write manifest.json
+        run: |
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          cp build/dist/Minecraft-Office.zip release/
+          python3 scripts/release-manifest.py release/manifest.json set mod "release/office-${VERSION}.jar" "${base}/office-${VERSION}.jar" --version "${VERSION}"
+          python3 scripts/release-manifest.py release/manifest.json set instance release/Minecraft-Office.zip "${base}/Minecraft-Office.zip" --version "${VERSION}"
+          cat release/manifest.json
+          ls -l release
+      - name: create the release
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --title "Minecraft Office ${VERSION}" \
+            --notes "Friends: download Minecraft-Office.zip and import it in Prism (see docs/friends/SETUP.md). The helper zip and .mrpack are added by Carter's release scripts shortly after." \
+            "release/office-${VERSION}.jar" \
+            "release/Minecraft-Office.zip" \
+            "release/manifest.json"

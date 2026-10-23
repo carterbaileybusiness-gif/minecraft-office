@@ -1,0 +1,47 @@
+name: pages
+# Publishes pack/ so that
+#   https://carterbaileybusiness-gif.github.io/minecraft-office/pack/pack.toml
+# serves the packwiz pack friends' launchers update from. Needs the one-time repo setting
+# Settings -> Pages -> Source: GitHub Actions. See RELEASING.md.
+on:
+  push:
+    branches: [main, feat/v1]
+    paths:
+      - 'pack/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+      - name: the pack index is current
+        run: python3 scripts/check-pack.py pack
+      - name: stage the site
+        run: |
+          mkdir -p _site
+          cp -R pack _site/pack
+          printf '<!doctype html><meta charset="utf-8"><title>Minecraft Office</title><p>Minecraft Office pack. Friends: see the setup guide in the repository.</p>\n' > _site/index.html
+      - name: configure pages
+        uses: actions/configure-pages@v5
+      - name: upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

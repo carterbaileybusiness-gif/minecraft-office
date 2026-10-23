@@ -14,3 +14,8 @@ Needs a JDK to launch Gradle (any 17+; Gradle then provisions JDK 25 for the dae
 ```
 
 Layout: one Gradle build at the repo root; all mod sources live under `mod/src/{main,client,test,gametest}`.
+
+## Releases and friends
+
+Friends follow [docs/friends/SETUP.md](docs/friends/SETUP.md). Maintainers: [RELEASING.md](RELEASING.md)
+(`scripts/release.sh <version>`, then `scripts/release-helper.sh`).
