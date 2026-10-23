@@ -19,6 +19,28 @@ class CaptureRateTest {
 	}
 
 	@Test
+	void visibilityChangesOnlyAfterLastingOneSecond() {
+		CaptureRate.Visibility v = new CaptureRate.Visibility();
+		assertTrue(v.update(true, 0), "first look counts at once");
+		// A camera sweep: away for 900 ms, back: never stopped.
+		assertTrue(v.update(false, 100));
+		assertTrue(v.update(false, 999));
+		assertTrue(v.update(true, 1000));
+		// Away again: the clock restarts, and only a full second away hides it.
+		assertTrue(v.update(false, 1100));
+		assertTrue(v.update(false, 2099));
+		assertFalse(v.update(false, 2100));
+		// Coming back also needs a second (no CAPTURE for a glance).
+		assertFalse(v.update(true, 2200));
+		assertFalse(v.update(false, 2300));
+		assertFalse(v.update(true, 2400));
+		assertTrue(v.update(true, 3400));
+
+		CaptureRate.Visibility hidden = new CaptureRate.Visibility();
+		assertFalse(hidden.update(false, 0), "first look counts at once (not visible: no capture)");
+	}
+
+	@Test
 	void onlyTheFrontWithinViewDistanceCounts() {
 		// yaw 0: front faces +Z (normal = right x up).
 		Frame f = new Frame(new Vec3d(0, 64, 0), new Vec3d(1, 0, 0), new Vec3d(0, 1, 0), 2, 1.125);

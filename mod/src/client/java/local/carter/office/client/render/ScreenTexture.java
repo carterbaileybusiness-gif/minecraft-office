@@ -4,15 +4,24 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+
+import com.mojang.logging.LogUtils;
 
 import local.carter.office.OfficeMod;
 import local.carter.office.client.capture.FrameSink;
 import local.carter.office.client.render.ScreenTextureMath.Rect;
 
 import net.minecraft.resources.Identifier;
+
+import net.fabricmc.loader.api.FabricLoader;
 
 /**
  * A live screen as a GPU texture: the {@link FrameSink} a {@link local.carter.office.client.capture.CaptureSource}
@@ -21,7 +30,9 @@ import net.minecraft.resources.Identifier;
  * <p>Threads: {@link #full}, {@link #patch} and {@link #ended} may be called from any thread (a capture thread). They
  * only write into a CPU copy of the newest frame (plus its mip levels) and note what changed; nothing touches the GPU.
  * {@link #prepareForRender()} runs on the render thread and uploads whatever changed since the last call, so a burst of
- * frames between two rendered frames costs one upload ("newest wins") and overlapping patches merge.
+ * frames between two rendered frames costs one upload ("newest wins") and overlapping patches merge. The render thread
+ * never waits for a producer: if a capture thread is mid-frame, that render frame skips the upload and keeps drawing
+ * the previous picture (the change is uploaded next frame).
  *
  * <p>Memory is bounded: one CPU frame (the "pending full frame", reused across frames of the same size) + ~1/3 for mips,
  * at most {@link #MAX_PENDING_RECTS} pending patch rectangles (overflow, or patches covering more than half the frame,
@@ -30,14 +41,27 @@ import net.minecraft.resources.Identifier;
  * <p>Quality: the texture has a mip chain ({@link ScreenTextureMath#mipLevels}) built on the capture thread with a 2x2
  * box filter — only under the changed rectangles — and is sampled trilinearly, so a 1920x1080 screen seen from 6-15
  * blocks doesn't shimmer. The render thread never downsamples.
+ *
+ * <p>Ids: use {@link #forHologram} for a hologram's screen. Its id ({@code office:screen/<hologramUuid>}) is stable, so
+ * the render-type cache, which keeps one entry per texture id forever, doesn't grow per reconnect. {@link #create} makes
+ * a unique id every call. Only one ScreenTexture per id may be live (holding a frame) at a time: a second one that
+ * receives a frame while the first is still live is a bug. In a development environment it fails loudly
+ * ({@link IllegalStateException} from {@link #full}); in production the newer one wins and the older one is
+ * <em>superseded</em>: it stops drawing and never touches the GPU again until it is {@link #clear()}ed.
  */
 public class ScreenTexture implements FrameSink {
 	/** Pending patch rectangles kept per texture before falling back to one whole-texture upload. */
 	public static final int MAX_PENDING_RECTS = 32;
 	/** Largest accepted frame side (pixels); bigger frames are ignored. */
 	public static final int MAX_SIDE = 8192;
+	/** After this many render frames in a row found a producer mid-frame, wait for it once (no upload starvation). */
+	public static final int MAX_MISSED_LOCKS = 8;
 
+	private static final Logger LOGGER = LogUtils.getLogger();
 	private static final AtomicInteger SERIAL = new AtomicInteger();
+	/** The live (frame-holding) texture of each id. */
+	private static final Map<Identifier, ScreenTexture> LIVE = new ConcurrentHashMap<>();
+	private static volatile @Nullable Boolean strictIds;
 
 	/** Where uploads go. The real one is {@link ScreenGpuTexture}; tests use a recording fake. */
 	public interface Gpu {
@@ -50,15 +74,21 @@ public class ScreenTexture implements FrameSink {
 		/** Frees the texture (a later {@link #allocate} may create it again). Render thread. */
 		void free();
 
-		/** Whether {@link #free()} may be called from the current thread. */
+		/** Whether the current thread is the render thread ({@link #free()} may be called directly). */
 		default boolean canFreeNow() {
 			return true;
+		}
+
+		/** Runs {@code task} on the render thread soon (used to free the texture after an off-thread clear). */
+		default void runOnRenderThread(final Runnable task) {
+			task.run();
 		}
 	}
 
 	private final Identifier id;
 	private final Gpu gpu;
-	private final Object lock = new Object();
+	private final ReentrantLock lock = new ReentrantLock();
+	private volatile @Nullable Runnable midFullFrameHook;
 
 	// ---- CPU side (guarded by lock) ----
 	private ByteBuffer @Nullable [] levels;
@@ -74,20 +104,84 @@ public class ScreenTexture implements FrameSink {
 	// ---- GPU side (render thread, also guarded by lock) ----
 	private int gpuW;
 	private int gpuH;
-	private boolean gpuHasFrame;
+	private volatile boolean gpuHasFrame;
 	private boolean freePending;
 	private @Nullable ByteBuffer staging;
 	private volatile long uploads;
+	private int missedLocks;
+
+	// ---- id ownership ----
+	private boolean claimed; // guarded by lock
+	private volatile boolean superseded;
 
 	public ScreenTexture(final Identifier id, final Gpu gpu) {
 		this.id = id;
 		this.gpu = gpu;
 	}
 
-	/** A texture backed by the real GPU, id {@code office:screen/<name>-<n>} ({@code name}: [a-z0-9/._-]). */
+	/**
+	 * A texture backed by the real GPU with a <em>unique</em> id {@code office:screen/<name>-<n>} ({@code name}:
+	 * [a-z0-9/._-]). For a hologram's screen use {@link #forHologram} instead (stable id, no render-type growth).
+	 */
 	public static ScreenTexture create(final String name) {
 		Identifier id = OfficeMod.id("screen/" + name + "-" + SERIAL.incrementAndGet());
 		return new ScreenTexture(id, new ScreenGpuTexture(id));
+	}
+
+	/**
+	 * The texture for one hologram, id {@link #idFor(UUID)} (the same every time). Keep at most one live per hologram:
+	 * reuse it across reconnects, or {@link #clear()} the old one before feeding a new one.
+	 */
+	public static ScreenTexture forHologram(final UUID hologramId) {
+		Identifier id = idFor(hologramId);
+		return new ScreenTexture(id, new ScreenGpuTexture(id));
+	}
+
+	/** Tests: whether a second live texture for an id throws (true) or supersedes the older one (false). */
+	public static void setStrictIdsForTest(final boolean strict) {
+		strictIds = strict;
+	}
+
+	private static boolean strictIds() {
+		Boolean s = strictIds;
+		if (s == null) {
+			try {
+				s = FabricLoader.getInstance().isDevelopmentEnvironment();
+			} catch (Throwable t) {
+				s = false;
+			}
+			strictIds = s;
+		}
+		return s;
+	}
+
+	/** Whether a newer texture with the same id took over (this one no longer draws; {@link #clear()} resets it). */
+	public boolean isSuperseded() {
+		return superseded;
+	}
+
+	/** Caller holds {@code lock}: makes this the live texture of its id (first frame since construction/clear). */
+	private void claimId() {
+		if (claimed) {
+			return;
+		}
+		ScreenTexture prev = LIVE.putIfAbsent(id, this);
+		if (prev != null && prev != this) {
+			if (strictIds()) {
+				throw new IllegalStateException("Two live ScreenTextures for " + id
+						+ ": clear the old one (or reuse it) before feeding a new one");
+			}
+			LOGGER.warn("Two live ScreenTextures for {}: the newer one wins", id);
+			prev.superseded = true;
+			LIVE.put(id, this);
+		}
+		claimed = true;
+		superseded = false;
+	}
+
+	/** {@code office:screen/<hologramUuid>}: the stable texture id of a hologram's screen. */
+	public static Identifier idFor(final UUID hologramId) {
+		return OfficeMod.id("screen/" + hologramId);
 	}
 
 	public Identifier id() {
@@ -105,7 +199,7 @@ public class ScreenTexture implements FrameSink {
 
 	/** A frame has arrived (it is uploaded by the next {@link #prepareForRender()}). */
 	public boolean hasFrame() {
-		return frameW > 0;
+		return frameW > 0 && !superseded;
 	}
 
 	/** The source should send a full frame (nothing received yet, a patch could not apply, or after a clear). */
@@ -123,6 +217,11 @@ public class ScreenTexture implements FrameSink {
 		return uploads;
 	}
 
+	/** Tests only: runs inside {@link #full} after the copy, before the mips are built, while the lock is held. */
+	public void setMidFullFrameHookForTest(final @Nullable Runnable hook) {
+		midFullFrameHook = hook;
+	}
+
 	// ---- FrameSink (any thread) ----
 
 	@Override
@@ -131,12 +230,21 @@ public class ScreenTexture implements FrameSink {
 			needsFull = true;
 			return;
 		}
-		synchronized (lock) {
+		if (superseded) {
+			return;
+		}
+		lock.lock();
+		try {
+			claimId();
 			if (levels == null || w != frameW || h != frameH) {
 				allocateCpu(w, h);
 			}
 			ByteBuffer[] lv = levels;
 			lv[0].put(0, rgba, rgba.position(), w * h * 4);
+			Runnable hook = midFullFrameHook;
+			if (hook != null) {
+				hook.run();
+			}
 			for (int k = 1; k < lv.length; k++) {
 				ScreenTextureMath.downsample(lv[k - 1], levelW[k - 1], levelH[k - 1], lv[k], levelW[k], levelH[k], new Rect(0, 0, levelW[k], levelH[k]));
 			}
@@ -144,6 +252,8 @@ public class ScreenTexture implements FrameSink {
 			dirtyAll = true;
 			needsFull = false;
 			endedReason = null;
+		} finally {
+			lock.unlock();
 		}
 	}
 
@@ -156,7 +266,11 @@ public class ScreenTexture implements FrameSink {
 			needsFull = true;
 			return;
 		}
-		synchronized (lock) {
+		if (superseded) {
+			return;
+		}
+		lock.lock();
+		try {
 			ByteBuffer[] lv = levels;
 			if (lv == null) {
 				needsFull = true; // nothing to patch yet
@@ -180,6 +294,8 @@ public class ScreenTexture implements FrameSink {
 				ScreenTextureMath.downsample(lv[k - 1], levelW[k - 1], levelH[k - 1], lv[k], levelW[k], levelH[k], rk);
 			}
 			markDirty(r);
+		} finally {
+			lock.unlock();
 		}
 	}
 
@@ -230,10 +346,24 @@ public class ScreenTexture implements FrameSink {
 
 	/**
 	 * Render thread: uploads what changed since the last call (reallocating the GPU texture if the frame size changed).
-	 * Returns true if the texture holds a frame and may be drawn.
+	 * Returns true if the texture holds a frame and may be drawn. Never waits for a capture thread: if one is writing,
+	 * nothing is uploaded this time and the previous picture stays.
 	 */
 	public boolean prepareForRender() {
-		synchronized (lock) {
+		if (superseded) {
+			return false; // a newer texture owns this id (and its texture-manager slot): never touch the GPU
+		}
+		if (!lock.tryLock()) {
+			if (++missedLocks < MAX_MISSED_LOCKS) {
+				return gpuHasFrame;
+			}
+			lock.lock(); // a producer kept hitting our frames: wait for it once so uploads can't starve
+		}
+		missedLocks = 0;
+		try {
+			if (superseded) {
+				return false;
+			}
 			if (freePending) {
 				freeGpu();
 			}
@@ -268,6 +398,8 @@ public class ScreenTexture implements FrameSink {
 				dirty.clear();
 			}
 			return gpuHasFrame;
+		} finally {
+			lock.unlock();
 		}
 	}
 
@@ -293,7 +425,8 @@ public class ScreenTexture implements FrameSink {
 
 	/** Copy of the newest frame (level 0, tightly packed RGBA), or an empty buffer if none. For tests and debugging. */
 	public ByteBuffer snapshot() {
-		synchronized (lock) {
+		lock.lock();
+		try {
 			ByteBuffer[] lv = levels;
 			if (lv == null) {
 				return ByteBuffer.allocate(0);
@@ -301,15 +434,19 @@ public class ScreenTexture implements FrameSink {
 			ByteBuffer copy = ByteBuffer.allocate(frameW * frameH * 4);
 			copy.put(0, lv[0], 0, copy.capacity());
 			return copy;
+		} finally {
+			lock.unlock();
 		}
 	}
 
 	/**
-	 * Drops the frame, every pending patch and the CPU buffers, and frees the GPU texture (immediately on the render
-	 * thread, otherwise at the next {@link #prepareForRender()}). The texture can be fed again afterwards.
+	 * Drops the frame, every pending patch and the CPU buffers, and frees the GPU texture: immediately on the render
+	 * thread; from any other thread the free is queued onto the render thread (or happens at the next
+	 * {@link #prepareForRender()}, whichever comes first). The texture can be fed again afterwards.
 	 */
 	public void clear() {
-		synchronized (lock) {
+		lock.lock();
+		try {
 			levels = null;
 			levelW = new int[0];
 			levelH = new int[0];
@@ -319,13 +456,36 @@ public class ScreenTexture implements FrameSink {
 			dirtyAll = false;
 			staging = null;
 			needsFull = true;
-			if (gpuW != 0 || gpuHasFrame) {
+			if (claimed) {
+				LIVE.remove(id, this); // never removes a newer owner's claim
+				claimed = false;
+			}
+			superseded = false;
+			if (gpuW != 0 || gpuHasFrame || freePending) {
 				if (gpu.canFreeNow()) {
 					freeGpu();
-				} else {
+				} else if (!freePending) {
 					freePending = true;
+					gpu.runOnRenderThread(this::freeIfPending);
 				}
 			}
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	/**
+	 * Render thread: the queued half of an off-thread {@link #clear()}. A no-op if the free already happened. Takes the
+	 * lock blocking (a one-off wait of at most one producer section, only after a clear).
+	 */
+	private void freeIfPending() {
+		lock.lock();
+		try {
+			if (freePending) {
+				freeGpu();
+			}
+		} finally {
+			lock.unlock();
 		}
 	}
 

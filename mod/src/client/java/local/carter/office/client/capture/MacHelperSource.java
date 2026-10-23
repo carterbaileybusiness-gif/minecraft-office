@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperProtocol.Capture;
 import local.carter.office.client.helper.HelperProtocol.CaptureKind;
 import local.carter.office.client.helper.HelperProtocol.Frame;
@@ -31,6 +32,8 @@ import local.carter.office.core.Mode;
  * only called under {@link #lock}, so once {@link #stop} returns it is never called again.
  */
 public final class MacHelperSource implements CaptureSource {
+	/** A capture this long after the last display re-request counts as stable (the re-request backoff resets). */
+	private static final long STABLE_NANOS = 60_000_000_000L;
 	private final MacHelper helper;
 	private final Runnable onStart;
 	private final Object lock = new Object();
@@ -44,6 +47,10 @@ public final class MacHelperSource implements CaptureSource {
 	private long generation = -1;
 	private int frameW;
 	private int frameH;
+	/** Display re-request backoff (0.5 → 8 s); only reset by a capture that has run a while without needing one. */
+	private long retryDelayMs = HelperConnection.Backoff.MIN_MS;
+	private int retryToken;
+	private long lastRetryNanos;
 
 	private volatile boolean ended;
 	private volatile @Nullable String endedReason;
@@ -67,6 +74,8 @@ public final class MacHelperSource implements CaptureSource {
 			sink = s;
 			fps = Math.max(0, maxFps);
 			running = true;
+			retryToken++;
+			retryDelayMs = HelperConnection.Backoff.MIN_MS;
 			ended = false;
 			endedReason = null;
 			noPermission = false;
@@ -96,6 +105,7 @@ public final class MacHelperSource implements CaptureSource {
 				return;
 			}
 			running = false;
+			retryToken++;
 			old = surface;
 			surface = 0;
 			sink = null;
@@ -219,6 +229,9 @@ public final class MacHelperSource implements CaptureSource {
 				return;
 			}
 			generation = f.generation();
+			if (System.nanoTime() - lastRetryNanos > STABLE_NANOS) {
+				retryDelayMs = HelperConnection.Backoff.MIN_MS;
+			}
 			frameW = f.width();
 			frameH = f.height();
 			sink.full(f.width(), f.height(), f.rgba());
@@ -244,6 +257,31 @@ public final class MacHelperSource implements CaptureSource {
 		helper.send(new Ready(p.surface()));
 	}
 
+	/** Under {@link #lock}. */
+	private void scheduleRetry() {
+		long delay = retryDelayMs;
+		retryDelayMs = Math.min(HelperConnection.Backoff.MAX_MS, delay * 2);
+		lastRetryNanos = System.nanoTime();
+		int token = ++retryToken;
+		helper.schedule(() -> retryDisplay(token), delay);
+	}
+
+	/** Re-requests the display until a capture is running again (DISPLAY may never come if the helper failed). */
+	private void retryDisplay(final int token) {
+		synchronized (lock) {
+			if (token != retryToken || !running || ended || surface != 0 || target == null || target.mode() != Mode.EXTEND) {
+				return;
+			}
+			helper.displayOffline(target.displaySlot());
+		}
+		update(false);
+		synchronized (lock) {
+			if (token == retryToken && running && !ended && surface == 0) {
+				scheduleRetry();
+			}
+		}
+	}
+
 	public void onEnded(final int endedSurface, final String reason) {
 		FrameSink endSink = null;
 		synchronized (lock) {
@@ -258,11 +296,12 @@ public final class MacHelperSource implements CaptureSource {
 					helper.permissionDenied();
 				}
 				case "no display", "display removed" -> {
-					// Wait for the display to come back (DISPLAY); never re-create it here, so two holograms that
-					// disagree about a slot's shape can't keep replacing each other's display.
+					// The display went away under us (removed, or the helper lost it): ask for it again, with backoff,
+					// so two holograms that disagree about a slot's shape swap at most every 8 s instead of fighting.
 					if (target != null) {
 						helper.displayOffline(target.displaySlot());
 					}
+					scheduleRetry();
 				}
 				default -> {
 					ended = true;

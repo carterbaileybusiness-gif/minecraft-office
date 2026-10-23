@@ -9,18 +9,23 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -63,10 +68,10 @@ public final class HelperInstaller {
 		}
 	}
 
-	/** Downloads one HTTPS resource (at most {@code maxBytes}). */
+	/** Downloads one HTTPS resource; more than {@code maxBytes} is an error (never buffered). */
 	@FunctionalInterface
 	public interface Fetcher {
-		byte[] fetch(URI uri) throws IOException;
+		byte[] fetch(URI uri, long maxBytes) throws IOException;
 	}
 
 	@FunctionalInterface
@@ -74,21 +79,51 @@ public final class HelperInstaller {
 		void launch(Path app) throws IOException;
 	}
 
+	/** Checks an unpacked app before it is installed (the real one: {@code codesign --verify --deep --strict}). */
+	@FunctionalInterface
+	public interface Verifier {
+		void verify(Path app) throws IOException;
+	}
+
+	/** Install work runs here: one daemon thread, never the common pool or the client thread. */
+	private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> {
+		Thread t = new Thread(r, "office-helper-install");
+		t.setDaemon(true);
+		return t;
+	});
+
 	private final Path supportDir;
 	private final String version;
 	private final URI releaseBase;
 	private final @Nullable String helperPathOverride;
 	private final Fetcher fetcher;
 	private final Launcher launcher;
+	private final Verifier verifier;
 
 	public HelperInstaller(final Path supportDir, final String version, final URI releaseBase, final @Nullable String helperPathOverride,
 			final Fetcher fetcher, final Launcher launcher) {
+		this(supportDir, version, releaseBase, helperPathOverride, fetcher, launcher, HelperInstaller::codesignVerify);
+	}
+
+	public HelperInstaller(final Path supportDir, final String version, final URI releaseBase, final @Nullable String helperPathOverride,
+			final Fetcher fetcher, final Launcher launcher, final Verifier verifier) {
 		this.supportDir = supportDir;
 		this.version = version;
-		this.releaseBase = releaseBase;
+		this.releaseBase = withTrailingSlash(releaseBase);
 		this.helperPathOverride = helperPathOverride == null || helperPathOverride.isBlank() ? null : helperPathOverride;
 		this.fetcher = fetcher;
 		this.launcher = launcher;
+		this.verifier = verifier;
+	}
+
+	/** {@code .../v0.1.0} and {@code .../v0.1.0/} both mean the release folder. */
+	static URI withTrailingSlash(final URI base) {
+		String s = base.toString();
+		return s.endsWith("/") ? base : URI.create(s + "/");
+	}
+
+	public URI releaseBase() {
+		return releaseBase;
 	}
 
 	/** The real installer: Application Support folder, HTTPS fetcher, {@code open -g} launcher. */
@@ -136,7 +171,7 @@ public final class HelperInstaller {
 			} catch (IOException e) {
 				throw new CompletionException(e);
 			}
-		});
+		}, WORKER);
 	}
 
 	/**
@@ -158,12 +193,12 @@ public final class HelperInstaller {
 			} catch (IOException e) {
 				throw new CompletionException(e);
 			}
-		});
+		}, WORKER);
 	}
 
 	private Asset readManifest() throws IOException {
 		URI manifestUri = requireHttps(releaseBase.resolve("manifest.json"));
-		byte[] bytes = fetcher.fetch(manifestUri);
+		byte[] bytes = fetcher.fetch(manifestUri, MAX_MANIFEST_BYTES);
 		if (bytes.length > MAX_MANIFEST_BYTES) {
 			throw new InstallException("release manifest is too large");
 		}
@@ -205,7 +240,7 @@ public final class HelperInstaller {
 		}
 		ensureSupportDir();
 		LOGGER.info("Office helper: downloading {} ({} bytes)", asset.url(), asset.size());
-		byte[] zip = fetcher.fetch(asset.url());
+		byte[] zip = fetcher.fetch(asset.url(), asset.size() + 1);
 		if (zip.length != asset.size()) {
 			throw new InstallException("download size mismatch (" + zip.length + " bytes, expected " + asset.size() + ")");
 		}
@@ -217,12 +252,15 @@ public final class HelperInstaller {
 		Path zipFile = staging.resolve(asset.name());
 		try {
 			Files.write(zipFile, zip);
+			checkZipEntries(zip); // before ditto touches anything: names stay inside the app, links point inside it
 			Path out = Files.createDirectory(staging.resolve("out"));
 			run(new ProcessBuilder("/usr/bin/ditto", "-x", "-k", zipFile.toString(), out.toString()), "unpack");
 			Path unpacked = out.resolve(APP_NAME);
-			if (!Files.isDirectory(unpacked) || Files.isSymbolicLink(unpacked)) {
+			if (!Files.isDirectory(unpacked, LinkOption.NOFOLLOW_LINKS)) {
 				throw new InstallException("the helper zip has no " + APP_NAME);
 			}
+			checkLinksStayInside(unpacked);
+			verifier.verify(unpacked);
 			Path app = supportDir.resolve(APP_NAME);
 			deleteTree(app);
 			try {
@@ -241,6 +279,164 @@ public final class HelperInstaller {
 	private void ensureSupportDir() throws IOException {
 		Files.createDirectories(supportDir);
 		Files.setPosixFilePermissions(supportDir, PosixFilePermissions.fromString("rwx------"));
+	}
+
+	// ---------------------------------------------------------------- zip and bundle checks
+
+	/**
+	 * Every entry of the helper zip must live under {@code OfficeHelper.app/} (no absolute paths, no {@code ..}), and
+	 * symbolic links (unix mode in the central directory) must point inside the app; nothing may sit under a link.
+	 */
+	static void checkZipEntries(final byte[] zip) throws InstallException {
+		List<ZipEntryInfo> entries = readCentralDirectory(zip);
+		if (entries.isEmpty()) {
+			throw new InstallException("the helper zip is empty");
+		}
+		Path root = Path.of(APP_NAME);
+		List<String> links = new ArrayList<>();
+		for (ZipEntryInfo e : entries) {
+			Path entry = safeEntryPath(e.name());
+			if (!entry.startsWith(root)) {
+				throw new InstallException("unexpected file in the helper zip: " + e.name());
+			}
+			if (e.isSymlink()) {
+				String target = new String(e.data(zip), StandardCharsets.UTF_8);
+				if (target.startsWith("/") || !entry.getParent().resolve(target).normalize().startsWith(root)) {
+					throw new InstallException("the helper zip links outside the app: " + e.name());
+				}
+				links.add(stripSlash(e.name()) + "/");
+			}
+		}
+		for (ZipEntryInfo e : entries) {
+			for (String link : links) {
+				if (e.name().startsWith(link)) {
+					throw new InstallException("the helper zip has files under a link: " + e.name());
+				}
+			}
+		}
+	}
+
+	private static Path safeEntryPath(final String name) throws InstallException {
+		if (name.isEmpty() || name.startsWith("/") || name.contains("\\") || name.indexOf('\0') >= 0) {
+			throw new InstallException("bad file name in the helper zip: " + name);
+		}
+		for (String part : name.split("/")) {
+			if (part.equals("..") || part.equals(".")) {
+				throw new InstallException("bad file name in the helper zip: " + name);
+			}
+		}
+		return Path.of(stripSlash(name));
+	}
+
+	private static String stripSlash(final String name) {
+		return name.endsWith("/") ? name.substring(0, name.length() - 1) : name;
+	}
+
+	/** After unpacking: no symbolic link in the bundle may point outside it. */
+	static void checkLinksStayInside(final Path app) throws IOException {
+		Path root = app.toAbsolutePath().normalize();
+		try (Stream<Path> s = Files.walk(root)) {
+			for (Path p : s.toList()) {
+				if (Files.isSymbolicLink(p)) {
+					Path target = Files.readSymbolicLink(p);
+					if (target.isAbsolute() || !p.getParent().resolve(target).normalize().startsWith(root)) {
+						throw new InstallException("the helper app links outside itself: " + root.relativize(p));
+					}
+				}
+			}
+		}
+	}
+
+	/** {@code /usr/bin/codesign --verify --deep --strict}: the bundle is intact and consistently signed. */
+	static void codesignVerify(final Path app) throws IOException {
+		try {
+			run(new ProcessBuilder("/usr/bin/codesign", "--verify", "--deep", "--strict", app.toString()), "signature check");
+		} catch (InstallException e) {
+			throw new InstallException("the downloaded helper's signature does not verify; not installing it");
+		}
+	}
+
+	record ZipEntryInfo(String name, int unixMode, int method, long compressedSize, long localHeaderOffset) {
+		boolean isSymlink() {
+			return (unixMode & 0xF000) == 0xA000;
+		}
+
+		/** The (stored or deflated) contents; used for symlink targets only, so they are small. */
+		byte[] data(final byte[] zip) throws InstallException {
+			int off = (int) localHeaderOffset;
+			if (off < 0 || off + 30 > zip.length || le32(zip, off) != 0x04034b50) {
+				throw new InstallException("corrupt helper zip");
+			}
+			int start = off + 30 + le16(zip, off + 26) + le16(zip, off + 28);
+			if (compressedSize > 4096 || start + compressedSize > zip.length) {
+				throw new InstallException("corrupt helper zip");
+			}
+			byte[] raw = java.util.Arrays.copyOfRange(zip, start, start + (int) compressedSize);
+			if (method == 0) {
+				return raw;
+			}
+			if (method != 8) {
+				throw new InstallException("unsupported compression in the helper zip");
+			}
+			java.util.zip.Inflater inf = new java.util.zip.Inflater(true);
+			try {
+				inf.setInput(raw);
+				byte[] out = new byte[4096];
+				int n = inf.inflate(out);
+				return java.util.Arrays.copyOf(out, n);
+			} catch (java.util.zip.DataFormatException e) {
+				throw new InstallException("corrupt helper zip");
+			} finally {
+				inf.end();
+			}
+		}
+	}
+
+	/** The zip's central directory (names, unix modes, where each entry's data is). */
+	static List<ZipEntryInfo> readCentralDirectory(final byte[] zip) throws InstallException {
+		int eocd = -1;
+		for (int i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 65_535); i--) {
+			if (le32(zip, i) == 0x06054b50) {
+				eocd = i;
+				break;
+			}
+		}
+		if (eocd < 0) {
+			throw new InstallException("corrupt helper zip");
+		}
+		int count = le16(zip, eocd + 10);
+		long cdOffset = le32(zip, eocd + 16) & 0xFFFFFFFFL;
+		List<ZipEntryInfo> out = new ArrayList<>();
+		int p = (int) cdOffset;
+		for (int i = 0; i < count; i++) {
+			if (p < 0 || p + 46 > zip.length || le32(zip, p) != 0x02014b50) {
+				throw new InstallException("corrupt helper zip");
+			}
+			int madeBy = le16(zip, p + 4) >>> 8;
+			int method = le16(zip, p + 10);
+			long compressed = le32(zip, p + 20) & 0xFFFFFFFFL;
+			int nameLen = le16(zip, p + 28);
+			int extraLen = le16(zip, p + 30);
+			int commentLen = le16(zip, p + 32);
+			long external = le32(zip, p + 38) & 0xFFFFFFFFL;
+			long local = le32(zip, p + 42) & 0xFFFFFFFFL;
+			if (p + 46 + nameLen > zip.length) {
+				throw new InstallException("corrupt helper zip");
+			}
+			String name = new String(zip, p + 46, nameLen, StandardCharsets.UTF_8);
+			int mode = madeBy == 3 ? (int) (external >>> 16) : 0; // 3 = unix
+			out.add(new ZipEntryInfo(name, mode, method, compressed, local));
+			p += 46 + nameLen + extraLen + commentLen;
+		}
+		return out;
+	}
+
+	private static int le16(final byte[] b, final int i) {
+		return (b[i] & 0xFF) | (b[i + 1] & 0xFF) << 8;
+	}
+
+	private static int le32(final byte[] b, final int i) {
+		return (b[i] & 0xFF) | (b[i + 1] & 0xFF) << 8 | (b[i + 2] & 0xFF) << 16 | (b[i + 3] & 0xFF) << 24;
 	}
 
 	/** Starts the helper in the background without stealing focus: {@code /usr/bin/open -g <app>}. */
@@ -272,8 +468,8 @@ public final class HelperInstaller {
 		return uri;
 	}
 
-	/** HTTPS GET with redirects (never to plain HTTP), capped at {@link #MAX_ZIP_BYTES}. */
-	static byte[] httpsFetch(final URI uri) throws IOException {
+	/** HTTPS GET with redirects (never to plain HTTP); more than {@code maxBytes} is refused while reading. */
+	static byte[] httpsFetch(final URI uri, final long maxBytes) throws IOException {
 		requireHttps(uri);
 		HttpClient client = HttpClient.newBuilder()
 				.followRedirects(HttpClient.Redirect.NORMAL) // NORMAL never follows HTTPS -> HTTP
@@ -287,8 +483,9 @@ public final class HelperInstaller {
 				if (response.statusCode() != 200) {
 					throw new IOException("HTTP " + response.statusCode() + " for " + uri);
 				}
-				byte[] bytes = in.readNBytes((int) MAX_ZIP_BYTES + 1);
-				if (bytes.length > MAX_ZIP_BYTES) {
+				int cap = (int) Math.min(MAX_ZIP_BYTES + 1, maxBytes);
+				byte[] bytes = in.readNBytes(cap);
+				if (bytes.length >= cap && in.read() >= 0) {
 					throw new InstallException("download too large: " + uri);
 				}
 				return bytes;
