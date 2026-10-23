@@ -7,6 +7,7 @@ import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.render.HologramRenderer;
+import local.carter.office.client.zoom.ZoomClient;
 import local.carter.office.hologram.OfficeBlocks;
 
 import net.fabricmc.api.ClientModInitializer;
@@ -31,6 +32,8 @@ public class OfficeClient implements ClientModInitializer {
 		Platform.current().register();
 		// Own holograms' live screens: platform capture (Mac helper), or the test pattern with -Doffice.testPattern=true.
 		OwnScreens.register();
+		// Click your own hologram to zoom in and work on your real computer; double-Esc back out.
+		ZoomClient.register();
 		// Debug: /hologramtest (dev environment or -Doffice.testPattern=true only).
 		HologramTestCommand.register();
 	}

@@ -10,11 +10,13 @@ import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.hologram.StarterKit;
 import local.carter.office.net.HologramActions;
 import local.carter.office.net.OfficePayloads;
+import local.carter.office.net.WorkingTag;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.server.ServerScoreboard;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityTypes;
@@ -27,6 +29,7 @@ import net.minecraft.world.item.component.WrittenBookContent;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.scores.PlayerTeam;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 
@@ -309,6 +312,37 @@ public class HologramGameTests {
 		h.assertBlockNotPresent(OfficeBlocks.HOLOGRAM_EMITTER, rel);
 		h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), before + 1, "emitter returned to owner");
 		h.assertItemEntityNotPresent(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, rel, 3.0);
+		h.succeed();
+	}
+
+	@GameTest
+	public void workingSuffixFollowsSetWorking(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		ServerScoreboard board = h.getLevel().getServer().getScoreboard();
+		String name = a.getScoreboardName();
+		PlayerTeam blue = board.getPlayerTeam("office_test_blue");
+		if (blue == null) {
+			blue = board.addPlayerTeam("office_test_blue");
+		}
+		board.addPlayerToTeam(name, blue);
+
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "working");
+		h.assertTrue(HologramActions.isWorking(a.getUUID()), "server knows");
+		h.assertTrue(WorkingTag.isTagged(a), "tagged");
+		h.assertTrue(a.getDisplayName().getString().endsWith(WorkingTag.SUFFIX),
+				"name tag / tab list shows the suffix: " + a.getDisplayName().getString());
+		h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "repeat is a no-op");
+
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(false)), "stopped working");
+		h.assertFalse(WorkingTag.isTagged(a), "untagged");
+		h.assertFalse(a.getDisplayName().getString().contains("working"), "suffix gone: " + a.getDisplayName().getString());
+		h.assertValueEqual(board.getPlayersTeam(name), blue, "back on the team they were on");
+
+		HologramActions.apply(a, new OfficePayloads.SetWorking(true));
+		HologramActions.clearWorking(a); // disconnect
+		h.assertFalse(HologramActions.isWorking(a.getUUID()), "cleared on disconnect");
+		h.assertFalse(WorkingTag.isTagged(a), "tag cleared on disconnect");
+		board.removePlayerFromTeam(name, blue);
 		h.succeed();
 	}
 

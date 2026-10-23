@@ -3,6 +3,8 @@
 	"package": "local.carter.office.mixin.client",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"CameraZoomMixin",
+		"MinecraftFrameMixin",
 		"MinecraftUseItemMixin"
 	],
 	"injectors": {

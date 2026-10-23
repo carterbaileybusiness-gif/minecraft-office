@@ -149,6 +149,19 @@ public final class MacPlatform implements Platform {
 		helper.onExitZoom(r);
 	}
 
+	/** Working needs the helper connected and Accessibility (cursor focus, window placement, the exit hotkey). */
+	@Override
+	public @Nullable String workProblem(final HologramSpec spec) {
+		Welcome w = helper.welcome();
+		if (!helper.isConnected() || w == null) {
+			return "The screen helper isn't running";
+		}
+		if (!w.accessibility()) {
+			return "OfficeHelper needs macOS Accessibility to let you work on a screen: /officescreens setup";
+		}
+		return null;
+	}
+
 	@Override
 	public CaptureSource newOwnSource() {
 		return new MacHelperSource(helper, this::ensureStarted);

@@ -20,6 +20,7 @@ import local.carter.office.stream.StreamRouter;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -57,7 +58,7 @@ public final class HologramActions {
 			case ResizeHologram r -> edit(player, r.pos(), s -> s.withWidth(r.width()));
 			case UpdateHologram u -> edit(player, u.pos(), s -> update(s, u));
 			case MoveHologram m -> edit(player, m.pos(), s -> move(s, m));
-			case SetWorking w -> setWorking(player.getUUID(), w.working());
+			case SetWorking w -> setWorking(player, w.working());
 			case RemoveHologram r -> remove(player, r.pos());
 			default -> false;
 		};
@@ -71,13 +72,23 @@ public final class HologramActions {
 		return Collections.unmodifiableSet(WORKING);
 	}
 
-	/** Called on disconnect. */
-	public static void clearWorking(final UUID player) {
-		WORKING.remove(player);
+	/** Called on disconnect: no longer working, "⌨ working" tag removed. */
+	public static void clearWorking(final ServerPlayer player) {
+		WORKING.remove(player.getUUID());
+		WorkingTag.set(player, false);
 	}
 
-	private static boolean setWorking(final UUID player, final boolean working) {
-		return working ? WORKING.add(player) : WORKING.remove(player);
+	/** Called when the server starts: nobody is working. */
+	public static void resetWorking(final MinecraftServer server) {
+		WORKING.clear();
+		WorkingTag.reset(server);
+	}
+
+	/** {@code SetWorking}: the player zoomed into (true) or out of (false) one of their screens. */
+	private static boolean setWorking(final ServerPlayer player, final boolean working) {
+		boolean changed = working ? WORKING.add(player.getUUID()) : WORKING.remove(player.getUUID());
+		WorkingTag.set(player, working);
+		return changed;
 	}
 
 	private static HologramSpec update(final HologramSpec s, final UpdateHologram u) {

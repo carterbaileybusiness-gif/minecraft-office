@@ -20,6 +20,11 @@ import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.OfficeBlocks;
 
+import com.mojang.blaze3d.platform.InputConstants;
+
+import local.carter.office.client.zoom.ZoomClient;
+import local.carter.office.client.zoom.ZoomController;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -41,7 +46,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContex
  */
 @SuppressWarnings("UnstableApiUsage")
 public class HologramClientGameTests implements FabricClientGameTest {
-	private static final int MOUSE_RIGHT = 1; // GLFW_MOUSE_BUTTON_RIGHT
+	private static final int MOUSE_RIGHT = InputConstants.MOUSE_BUTTON_RIGHT; // SDL numbering in 26.3 (1 is the left button)
 
 	/** Where the test stands (feet), set up on the server. */
 	private BlockPos stand;
@@ -55,6 +60,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			placedHologramVisible(context, sp);
 			cornerDragResizes(context, sp);
 			liveTextureUpdates(context, sp);
+			zoomInToWorkAndBack(context, sp);
 			offlineLook(context, sp);
 		}
 	}
@@ -233,6 +239,93 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		boolean cleared = context.computeOnClient(mc -> ScreenTextureRegistry.get(clientHologram(mc).hologramId()).isEmpty());
 		if (!cleared) {
 			throw new AssertionError("disabling own screens did not remove the texture");
+		}
+	}
+
+	/**
+	 * Zoom in to work: right-click the own LIVE hologram with an empty hand -> 350 ms zoom -> WORKING with the work
+	 * screen open, HUD hidden and pauseOnLostFocus off; a single Esc stays; a double Esc zooms back out and restores
+	 * everything. Screenshots: zoom-working (the test pattern fills the window), zoom-back.
+	 */
+	private void zoomInToWorkAndBack(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		context.runOnClient(mc -> {
+			OwnScreens.setSourceFactory(TestPatternSource::new);
+			OwnScreens.setEnabled(true);
+		});
+		sp.getServer().runOnServer(server -> player(server).setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY));
+		context.waitFor(mc -> clientHologram(mc) != null
+				&& ScreenTextureRegistry.get(clientHologram(mc).hologramId()).map(ScreenTexture::hasFrame).orElse(false), 1200);
+		HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
+		look(context, hologramCenter(spec));
+		context.waitTicks(5);
+		boolean pauseBefore = context.computeOnClient(mc -> mc.options.pauseOnLostFocus);
+		boolean hudBefore = context.computeOnClient(mc -> mc.gui.hud.isHidden());
+
+		context.getInput().pressMouse(MOUSE_RIGHT);
+		context.waitFor(mc -> ZoomClient.controller().state() == ZoomController.State.WORKING, 100);
+		context.waitTicks(5);
+		context.takeScreenshot("zoom-working");
+		String during = context.computeOnClient(mc -> {
+			if (!(mc.gui.screen() instanceof net.minecraft.client.gui.screens.Screen s) || s.isPauseScreen()) {
+				return "work screen not open: " + mc.gui.screen();
+			}
+			if (!mc.gui.hud.isHidden()) {
+				return "HUD/hand still shown";
+			}
+			if (mc.options.pauseOnLostFocus) {
+				return "pauseOnLostFocus still on";
+			}
+			return ZoomClient.controller().isZoomedInto(clientHologram(mc).hologramId()) ? null : "not zoomed into the clicked hologram";
+		});
+		if (during != null) {
+			throw new AssertionError("while working: " + during);
+		}
+		boolean taggedOnServer = sp.getServer().computeOnServer(server -> local.carter.office.net.WorkingTag.isTagged(player(server)));
+		if (!taggedOnServer) {
+			throw new AssertionError("server did not get SetWorking(true)");
+		}
+
+		context.getInput().pressKey(InputConstants.KEY_ESCAPE);
+		sleep(450); // longer than the double-tap window
+		context.waitTicks(2);
+		if (context.computeOnClient(mc -> ZoomClient.controller().state()) != ZoomController.State.WORKING) {
+			throw new AssertionError("a single Esc left the screen");
+		}
+		context.getInput().pressKey(InputConstants.KEY_ESCAPE);
+		context.getInput().pressKey(InputConstants.KEY_ESCAPE);
+		context.waitFor(mc -> ZoomClient.controller().state() == ZoomController.State.WORLD, 100);
+		context.waitTicks(5);
+		context.takeScreenshot("zoom-back");
+		String after = context.computeOnClient(mc -> {
+			if (mc.gui.screen() != null) {
+				return "a screen is still open: " + mc.gui.screen();
+			}
+			if (mc.gui.hud.isHidden() != hudBefore) {
+				return "HUD visibility not restored";
+			}
+			if (mc.options.pauseOnLostFocus != pauseBefore) {
+				return "pauseOnLostFocus not restored";
+			}
+			return null;
+		});
+		if (after != null) {
+			throw new AssertionError("after zooming out: " + after);
+		}
+		sp.getConnection().waitForServerboundPackets();
+		boolean stillTagged = sp.getServer().computeOnServer(server -> local.carter.office.net.WorkingTag.isTagged(player(server)));
+		if (stillTagged) {
+			throw new AssertionError("server did not get SetWorking(false)");
+		}
+		context.runOnClient(mc -> OwnScreens.setEnabled(false));
+		context.waitTicks(2);
+	}
+
+	private static void sleep(final long ms) {
+		try {
+			Thread.sleep(ms);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new AssertionError(e);
 		}
 	}
 
