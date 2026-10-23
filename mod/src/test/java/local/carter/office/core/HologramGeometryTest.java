@@ -218,4 +218,54 @@ class HologramGeometryTest {
         assertTrue(HologramGeometry.hit(new Vec3d(0, 0, 5), forward, frame).get().frontFacing());
         assertFalse(HologramGeometry.hit(new Vec3d(0, 0, -5), new Vec3d(0, 0, 1), frame).get().frontFacing());
     }
+
+    @Test
+    void grabRadiusIsAFifthOfTheShorterSideClamped() {
+        assertEquals(0.225, HologramGeometry.grabRadius(2.0, 1.125), 1e-9);
+        assertEquals(0.45, HologramGeometry.grabRadius(4.0, 2.25), 1e-9);
+        assertEquals(0.2, HologramGeometry.grabRadius(0.5, 0.28125), 1e-9, "small screens still get 0.2");
+        assertEquals(0.5, HologramGeometry.grabRadius(12.0, 6.75), 1e-9, "huge screens cap at 0.5");
+        assertEquals(0.2, HologramGeometry.grabRadius(0.5625, 1.0), 1e-9, "uses the shorter side (tall 9:16)");
+    }
+
+    @Test
+    void cornerCanBeGrabbedFromJustOutsideTheQuad() {
+        // bottom-right corner is at (1, -0.5625); aim 0.1 right of and ~0.09 below it
+        Vec3d origin = new Vec3d(1.1, -0.65, 5);
+        assertTrue(HologramGeometry.hit(origin, forward, frame).isEmpty(), "hit() is inside-only");
+        Optional<HologramGeometry.Hit> reach = HologramGeometry.reach(origin, forward, frame);
+        assertTrue(reach.isPresent());
+        assertEquals(HologramGeometry.Corner.BOTTOM_RIGHT, reach.get().corner());
+        assertTrue(reach.get().u() > 1 && reach.get().v() > 1, "u/v past the edge");
+        assertEquals(5.0, reach.get().distance(), 1e-9);
+    }
+
+    @Test
+    void reachIgnoresPointsFarOutsideAndMatchesHitInside() {
+        assertTrue(HologramGeometry.reach(new Vec3d(1.4, -0.9, 5), forward, frame).isEmpty());
+        assertTrue(HologramGeometry.reach(new Vec3d(0, 1.0, 5), forward, frame).isEmpty(), "outside an edge, far from corners");
+        var in = HologramGeometry.reach(new Vec3d(-0.93, 0.49, 5), forward, frame).orElseThrow();
+        var hit = HologramGeometry.hit(new Vec3d(-0.93, 0.49, 5), forward, frame).orElseThrow();
+        assertEquals(hit, in);
+    }
+
+    @Test
+    void largerHologramsHaveLargerGrabZones() {
+        HologramGeometry.Frame big = new HologramGeometry.Frame(new Vec3d(0, 0, 0), new Vec3d(1, 0, 0), new Vec3d(0, 1, 0), 4.0, 2.25);
+        // 0.4 from the top-right corner (2, 1.125), inside: within 0.45
+        assertEquals(HologramGeometry.Corner.TOP_RIGHT,
+                HologramGeometry.hit(new Vec3d(1.72, 0.84, 5), forward, big).orElseThrow().corner());
+        // the same offset on the 2-wide frame is outside its 0.225 radius
+        assertNull(HologramGeometry.hit(new Vec3d(0.72, 0.28, 5), forward, frame).orElseThrow().corner());
+    }
+
+    @Test
+    void cornerPointsAreTheFrameCorners() {
+        Vec3d tr = HologramGeometry.cornerPoint(frame, HologramGeometry.Corner.TOP_RIGHT);
+        assertEquals(1.0, tr.x(), 1e-9);
+        assertEquals(0.5625, tr.y(), 1e-9);
+        Vec3d bl = HologramGeometry.cornerPoint(frame, HologramGeometry.Corner.BOTTOM_LEFT);
+        assertEquals(-1.0, bl.x(), 1e-9);
+        assertEquals(-0.5625, bl.y(), 1e-9);
+    }
 }

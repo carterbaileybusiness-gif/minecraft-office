@@ -70,10 +70,30 @@ dependencies {
 	// Let unit tests see client classes (later tasks test client code from mod/src/test).
 	testImplementation sourceSets.client.output
 	testRuntimeOnly sourceSets.client.output
+
+	// Windows capture (Task 11): webrtc-java's window capturer + its 64-bit Windows natives, nested in the mod jar
+	// (jar-in-jar). The natives are only ever loaded on Windows (client/capture/WebRtcNatives). transitive = false: the
+	// POM's own native dependency uses a Maven per-OS profile property that Gradle can't resolve.
+	clientImplementation("dev.onvoid.webrtc:webrtc-java:${project.webrtc_version}") { transitive = false }
+	clientRuntimeOnly("dev.onvoid.webrtc:webrtc-java:${project.webrtc_version}:windows-x86_64") { transitive = false }
+	include("dev.onvoid.webrtc:webrtc-java:${project.webrtc_version}") { transitive = false }
+	include("dev.onvoid.webrtc:webrtc-java:${project.webrtc_version}:windows-x86_64") { transitive = false }
+	testImplementation("dev.onvoid.webrtc:webrtc-java:${project.webrtc_version}") { transitive = false }
+	testRuntimeOnly("dev.onvoid.webrtc:webrtc-java:${project.webrtc_version}:windows-x86_64") { transitive = false }
 }
 
 test {
 	useJUnitPlatform()
+	testLogging {
+		events "skipped", "failed"
+		exceptionFormat "full"
+	}
+	// The Windows capture tests print what they saw (window, frame size, skip reasons): show those lines in CI logs.
+	onOutput { descriptor, event ->
+		if (event.message.startsWith("[win-test]")) {
+			logger.lifecycle(event.message.trim())
+		}
+	}
 	// Opt-in live check against the real Mac helper: ./gradlew test -Doffice.liveHelperTest=true [-Doffice.helperPath=...]
 	['office.liveHelperTest', 'office.helperPath'].each { name ->
 		def value = System.getProperty(name)

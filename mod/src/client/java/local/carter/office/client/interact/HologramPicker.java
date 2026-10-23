@@ -18,7 +18,11 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
-/** Finds the hologram under the crosshair: nearest hit along the view ray, not hidden behind blocks. */
+/**
+ * Finds the hologram under the crosshair: nearest hit along the view ray, not hidden behind blocks. Uses the spec that
+ * is drawn ({@link HologramPreview#effective}), so a just-resized hologram is picked where you see it. For holograms
+ * the local player owns, a corner can also be grabbed from just outside the edge ({@link HologramGeometry#reach}).
+ */
 public final class HologramPicker {
 	public static final double MAX_DISTANCE = 32.0;
 
@@ -39,14 +43,17 @@ public final class HologramPicker {
 	public static Optional<Picked> pick(final Vec3 eye, final Vec3 look, final double maxDistance) {
 		Vec3d origin = vec(eye);
 		Vec3d dir = vec(look);
+		LocalPlayer player = Minecraft.getInstance().player;
 		Picked best = null;
 		for (HologramBlockEntity be : HologramTracker.loaded()) {
-			HologramSpec spec = be.spec();
+			HologramSpec spec = HologramPreview.effective(be);
 			if (spec == null) {
 				continue;
 			}
 			BlockPos p = be.getBlockPos();
-			Optional<Hit> hit = HologramGeometry.hit(origin, dir, HologramPlacement.frame(p.getX(), p.getY(), p.getZ(), spec));
+			HologramGeometry.Frame frame = HologramPlacement.frame(p.getX(), p.getY(), p.getZ(), spec);
+			boolean own = player != null && be.isOwner(player.getUUID());
+			Optional<Hit> hit = own ? HologramGeometry.reach(origin, dir, frame) : HologramGeometry.hit(origin, dir, frame);
 			if (hit.isPresent() && hit.get().distance() <= maxDistance && (best == null || hit.get().distance() < best.hit().distance())) {
 				best = new Picked(be, hit.get());
 			}

@@ -4,7 +4,7 @@ import java.util.List;
 
 import local.carter.office.core.HologramSpec;
 
-/** No own-screen support here (Linux / dev; Windows until Task 11): friends' screens still show. */
+/** No own-screen support here (Linux / dev): friends' screens still show. */
 public final class NoPlatform implements Platform {
 	@Override
 	public boolean supportsExtend() {

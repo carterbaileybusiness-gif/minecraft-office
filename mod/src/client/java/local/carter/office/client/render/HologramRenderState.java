@@ -21,8 +21,12 @@ public class HologramRenderState extends BlockEntityRenderState {
 	public long timeMs;
 	/** Glow strength boost while hovered with an emitter or being dragged. */
 	public boolean highlighted;
-	/** Corner under the crosshair (owner holding an emitter): draws a grab bracket. */
+	/** Owner holding an emitter looks at it: draw the four resize handles and a thin outline. */
+	public boolean handles;
+	/** Corner under the crosshair (owner holding an emitter): its handle is drawn bigger and brighter. */
 	public @Nullable Corner hoverCorner;
+	/** Corner being dragged (its handle on the outline is the bright one). */
+	public @Nullable Corner dragCorner;
 	/** New size while a corner drag is in progress: drawn as a cyan outline. */
 	public @Nullable HologramSpec outline;
 }

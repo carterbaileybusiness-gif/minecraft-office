@@ -1,5 +1,6 @@
 package local.carter.office.client.interact;
 
+import java.util.Locale;
 import java.util.Optional;
 
 import org.jspecify.annotations.Nullable;
@@ -14,14 +15,17 @@ import local.carter.office.core.HologramGeometry.Frame;
 import local.carter.office.core.HologramGeometry.Hit;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
+import local.carter.office.core.Mount;
 import local.carter.office.core.Vec3d;
 import local.carter.office.hologram.HologramBlockEntity;
+import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.OfficeBlocks;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Util;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -32,10 +36,13 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
 
 /**
- * Right-click handling for holograms (client thread). With a Hologram Emitter in the MAIN hand, on a hologram you own:
+ * Right-click and wheel handling for holograms (client thread). With a Hologram Emitter in the MAIN hand, on a hologram
+ * you own:
  * <ul>
- *   <li>right-click a corner and hold: resize ({@link CornerDrag});</li>
- *   <li>Shift + right-click the body and hold: move, mouse-wheel turns it ({@link MoveDrag});</li>
+ *   <li>looking at it: glowing corner handles and an action-bar hint ({@link #HINT});</li>
+ *   <li>right-click a corner (or just outside it) and hold: resize ({@link CornerDrag}); a quick tap is a click;</li>
+ *   <li>mouse-wheel: resize ×1.1 per notch ({@link ScrollResize}); the hotbar slot doesn't change;</li>
+ *   <li>Shift + right-click and hold: move, the wheel turns it ({@link MoveDrag}); on a wall it slides along the wall;</li>
  *   <li>right-click the body: settings.</li>
  * </ul>
  * With anything else (or nothing) in the main hand, right-clicking your own hologram zooms in to work on it
@@ -48,29 +55,50 @@ import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
  * vanilla, so an emitter in hand is never placed by accident on the wall behind a hologram.
  */
 public final class HologramInteractions {
+	/** Shown in the action bar while you look at your own hologram with an emitter in the main hand. */
+	public static final String HINT = "Hold right-click on a corner and drag to resize · Scroll to resize · Shift + hold right-click to move";
+	/** Re-send the hint this often (ticks) while hovering, so it doesn't fade. */
+	private static final int HINT_EVERY_TICKS = 40;
+
 	private static @Nullable CornerDrag cornerDrag;
 	private static @Nullable MoveDrag moveDrag;
 	private static final ClickGate GATE = new ClickGate();
+	private static @Nullable HologramBlockEntity hinted;
+	private static int hintCooldown;
+	private static int dragHintCooldown;
 
 	private HologramInteractions() {}
 
 	public static void register() {
 		ClientTickEvents.END_CLIENT_TICK.register(HologramInteractions::tick);
-		ClientHotbarScrollEvents.ALLOW.register((inventory, current, next, dx, dy) -> {
-			MoveDrag move = moveDrag;
-			if (move == null) {
-				return true;
-			}
-			double amount = dy != 0 ? dy : dx;
-			if (amount != 0) {
-				move.rotate(amount > 0 ? 1 : -1);
-			}
-			return false;
-		});
+		ClientHotbarScrollEvents.ALLOW.register((inventory, current, next, dx, dy) -> onScroll(dy != 0 ? dy : dx));
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			cancel();
 			HologramPreview.clear();
+			ScrollResize.clear();
 		});
+	}
+
+	/**
+	 * Mouse wheel: turns a hologram being moved, or resizes the owned hologram under the crosshair (emitter in the main
+	 * hand). Returns false (hotbar slot unchanged) when the wheel was ours.
+	 */
+	static boolean onScroll(final double amount) {
+		int notches = amount > 0 ? 1 : amount < 0 ? -1 : 0;
+		MoveDrag move = moveDrag;
+		if (move != null) {
+			move.rotate(notches);
+			return false;
+		}
+		if (cornerDrag != null) {
+			return false;
+		}
+		Hover h = hover(Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(true));
+		if (h == null) {
+			return true;
+		}
+		ScrollResize.scroll(h.be(), notches);
+		return false;
 	}
 
 	/** The owned hologram under the crosshair while holding an emitter (and the corner, if one is in grab range). */
@@ -130,11 +158,12 @@ public final class HologramInteractions {
 		}
 		Vec3d eye = HologramPicker.vec(player.getEyePosition(partialTick));
 		Vec3d look = HologramPicker.vec(player.getViewVector(partialTick));
+		long now = Util.getMillis();
 		if (cornerDrag != null) {
-			cornerDrag.update(eye, look);
+			cornerDrag.update(eye, look, now);
 		}
 		if (moveDrag != null) {
-			moveDrag.update(eye, look);
+			moveDrag.update(eye, look, now);
 		}
 	}
 
@@ -203,7 +232,8 @@ public final class HologramInteractions {
 		if (own == HologramLook.OwnSource.NEEDS_HELPER) {
 			return "Set up your screens first: /officescreens setup";
 		}
-		if (spec != null && spec.mode() == Mode.WINDOW && (own == HologramLook.OwnSource.WINDOW_CLOSED || spec.windowKey() == null
+		if (spec != null && spec.mode() == Mode.WINDOW && (own == HologramLook.OwnSource.WINDOW_CLOSED
+				|| own == HologramLook.OwnSource.PICK_WINDOW || spec.windowKey() == null
 				|| spec.windowKey().isEmpty())) {
 			return "Pick a window first: right-click the emitter";
 		}
@@ -212,25 +242,31 @@ public final class HologramInteractions {
 
 	private static boolean onHologram(final Minecraft mc, final LocalPlayer player, final Picked picked) {
 		HologramBlockEntity be = picked.be();
-		HologramSpec spec = be.spec();
-		if (spec == null) {
+		if (be.spec() == null) {
 			return false;
 		}
 		if (!be.isOwner(player.getUUID())) {
 			player.sendOverlayMessage(Component.literal("Owned by " + ownerName(mc, be)));
 			return true;
 		}
+		HologramSpec spec = HologramPreview.effective(be); // what is drawn (a just-scrolled size may not be synced yet)
+		if (spec == null) {
+			return false;
+		}
 		Hit hit = picked.hit();
+		// grab point on the hologram's plane from the hit's (u, v); outside [0, 1] when grabbed just past a corner
+		Frame f = HologramPlacement.frame(be.getBlockPos().getX(), be.getBlockPos().getY(), be.getBlockPos().getZ(), spec);
+		Vec3d point = f.center().add(f.right().scale((hit.u() - 0.5) * f.w())).add(f.up().scale((0.5 - hit.v()) * f.h()));
+		Mount mount = HologramEmitterBlock.mount(be.getBlockState());
+		long now = Util.getMillis();
 		if (player.isShiftKeyDown()) {
-			// grab point on the panel from the hit's (u, v)
-			Frame f = HologramPlacement.frame(be.getBlockPos().getX(), be.getBlockPos().getY(), be.getBlockPos().getZ(), spec);
-			Vec3d point = f.center().add(f.right().scale((hit.u() - 0.5) * f.w())).add(f.up().scale((0.5 - hit.v()) * f.h()));
-			moveDrag = new MoveDrag(be, spec, point, hit.distance());
-			player.sendOverlayMessage(Component.literal("Moving — scroll to turn, release to place"));
+			moveDrag = new MoveDrag(be, spec, mount, point, hit.distance(), now);
+			player.sendOverlayMessage(Component.literal(mount == Mount.WALL ? "Moving — it slides along the wall, release to place"
+					: "Moving — scroll to turn, release to place"));
 			return true;
 		}
 		if (hit.corner() != null) {
-			cornerDrag = new CornerDrag(be, spec, hit.corner());
+			cornerDrag = new CornerDrag(be, spec, hit.corner(), mount, point, now);
 			return true;
 		}
 		openSettings(mc, be);
@@ -239,7 +275,9 @@ public final class HologramInteractions {
 
 	private static void tick(final Minecraft mc) {
 		GATE.tick(mc.options.keyUse.isDown());
+		ScrollResize.tick();
 		if (!dragging()) {
+			showHint(mc);
 			return;
 		}
 		LocalPlayer player = mc.player;
@@ -253,19 +291,46 @@ public final class HologramInteractions {
 			return;
 		}
 		if (!mc.options.keyUse.isDown()) {
-			finish();
+			finish(mc);
+			return;
+		}
+		CornerDrag drag = cornerDrag;
+		if (drag != null && drag.armed() && --dragHintCooldown <= 0) {
+			dragHintCooldown = 5;
+			HologramSpec p = drag.preview();
+			player.sendOverlayMessage(Component.literal(String.format(Locale.ROOT, "%.1f × %.1f blocks — release to set", p.width(), p.height())));
 		}
 	}
 
-	private static void finish() {
+	private static void finish(final Minecraft mc) {
 		updateDrag(1.0f);
 		HologramBlockEntity be = cornerDrag != null ? cornerDrag.blockEntity() : moveDrag.blockEntity();
+		boolean tap = cornerDrag != null && !cornerDrag.armed();
 		HologramSpec predicted = cornerDrag != null ? cornerDrag.finish() : moveDrag.finish();
 		if (predicted != null) {
 			HologramPreview.expect(be.getBlockPos(), predicted);
 		}
 		cornerDrag = null;
 		moveDrag = null;
+		dragHintCooldown = 0;
+		if (tap) {
+			openSettings(mc, be); // a quick tap on a corner is a click, like on the body
+		}
+	}
+
+	/** Action-bar hint while you look at your own hologram holding an emitter (re-sent so it doesn't fade). */
+	private static void showHint(final Minecraft mc) {
+		LocalPlayer player = mc.player;
+		Hover h = player == null || mc.level == null ? null : hover(1.0f);
+		if (h == null) {
+			hinted = null;
+			return;
+		}
+		if (h.be() != hinted || --hintCooldown <= 0) {
+			hinted = h.be();
+			hintCooldown = HINT_EVERY_TICKS;
+			player.sendOverlayMessage(Component.literal(HINT));
+		}
 	}
 
 	public static void cancel() {
