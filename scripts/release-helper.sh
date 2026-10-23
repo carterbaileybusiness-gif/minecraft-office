@@ -21,6 +21,20 @@ version="${1:-$(sed -n 's/^version=//p' gradle.properties)}"
 tag="v$version"
 gh release view "$tag" --repo "$SLUG" >/dev/null 2>&1 || die "release $tag does not exist yet (run scripts/release.sh $version first)"
 
+# Do not race scripts/release.sh: it re-uploads manifest.json, which would drop a helper entry written meanwhile.
+# release.sh is finished when the manifest has the mrpack entry AND the pack commit pointing at this version is on origin.
+git fetch --quiet origin
+pack_pushed=0
+for b in main feat/v1; do
+  if git show "origin/$b:pack/mods/office.pw.toml" 2>/dev/null | grep -q "download/$tag/office-$version.jar"; then pack_pushed=1; fi
+done
+[ "$pack_pushed" = 1 ] || die "scripts/release.sh $version has not finished (pack/mods/office.pw.toml for $tag is not on origin yet); re-run it first"
+work="$REPO/build/release-helper-$version"
+rm -rf "$work"; mkdir -p "$work"
+gh release download "$tag" --repo "$SLUG" --dir "$work" --pattern manifest.json
+python3 -c 'import json,sys; sys.exit(0 if "mrpack" in json.load(open(sys.argv[1])) else 1)' "$work/manifest.json" \
+  || die "manifest.json of $tag has no mrpack entry yet; scripts/release.sh $version has not finished"
+
 if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
   if ! git diff --quiet "$tag" -- helper-mac; then
     echo "WARNING: helper-mac/ differs from tag $tag; you are releasing the helper from your working tree." >&2
@@ -45,9 +59,7 @@ ditto -c -k --keepParent "$app" "$zip_path"
 echo "$zip_path ($(shasum -a 256 "$zip_path" | cut -d' ' -f1))"
 
 say "Updating manifest.json and uploading"
-work="$REPO/build/release-helper-$version"
-rm -rf "$work"; mkdir -p "$work"
-gh release download "$tag" --repo "$SLUG" --dir "$work" --pattern manifest.json
+gh release download "$tag" --repo "$SLUG" --dir "$work" --pattern manifest.json --clobber   # fresh copy, build took a while
 python3 scripts/release-manifest.py "$work/manifest.json" set helper "$zip_path" \
   "https://github.com/$SLUG/releases/download/$tag/OfficeHelper-$version.zip" --version "$version"
 gh release upload "$tag" --repo "$SLUG" --clobber "$zip_path" "$work/manifest.json"

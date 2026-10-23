@@ -45,7 +45,9 @@ jobs:
       - name: build and unit tests
         run: ./gradlew build
       - name: the release jar exists
-        run: test -f "build/libs/office-${{ steps.version.outputs.version }}.jar"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: test -f "build/libs/office-${VERSION}.jar"
       - name: keep the jar
         uses: actions/upload-artifact@v4
         with:

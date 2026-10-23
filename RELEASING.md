@@ -47,15 +47,26 @@ scripts/release-helper.sh 0.1.1      # after release.sh finishes; signs on this 
 **Why no commits from CI:** the workflow only publishes assets. The pack hash can only be written once the jar is
 public, and doing it locally keeps CI read-only on the repo (no write token, no bot commits racing yours).
 
-### If something fails
+### If something fails: just re-run it
 
-- The `release` workflow fails: fix the problem, then `git push --delete origin v0.1.1 && git tag -d v0.1.1`, delete
-  the half-made GitHub Release if one exists (`gh release delete v0.1.1`), and re-run `scripts/release.sh 0.1.1`
-  (it skips the version bump if already done).
-- `release.sh` stops after the release exists (for example packwiz failed): the release is fine; finish by hand with
-  the same steps 3 and 4 (the script has no resume).
-- Pack looks broken after Pages deploys: `python3 scripts/check-pack.py pack` (also run in `pages.yml`) says what is stale;
-  fix with `cd pack && packwiz refresh` and push.
+`scripts/release.sh 0.1.1` is safe to run again with the same version. If a run dies midway (network, a rejected
+push, packwiz or upload error, Ctrl-C), run the exact same command. It detects what is already done and skips it:
+version bump already committed, tag already created locally or pushed, release already published (it does not wait
+for the workflow again), pack already committed (no empty commit). Half-written files in `pack/` from the interrupted
+run are simply regenerated. It refuses, with a message, if the branch is behind origin, if an unrelated unpushed
+commit would be published, or if the tag on origin belongs to a different commit.
+
+`scripts/release-helper.sh` refuses until `release.sh` has fully finished (the pack commit for that version is on
+origin and `manifest.json` has the `mrpack` entry), so the two can never overwrite each other's manifest. It is also
+safe to re-run (it uploads with `--clobber`).
+
+The one case that is not a plain re-run: the `release` **workflow itself fails** (build or test error). Fix the
+problem on the branch, then remove the tag and any half-made release before re-running:
+`git push --delete origin v0.1.1 && git tag -d v0.1.1 && gh release delete v0.1.1` (skip the last if no release
+exists), then `scripts/release.sh 0.1.1`.
+
+Pack looks broken after Pages deploys: `python3 scripts/check-pack.py pack` (also run in `pages.yml`) says what is
+stale; fix with `cd pack && packwiz refresh` and push.
 
 ## One-time setup (controller / Carter)
 

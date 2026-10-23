@@ -98,10 +98,18 @@ if [ "$mrpack" = 1 ]; then
     rm -f "$DIST/Minecraft-Office.mrpack"
     ( cd "$REPO/pack" && "$PACKWIZ" modrinth export -o "$DIST/Minecraft-Office.mrpack" )
     # packwiz silently leaves out a mod it cannot download (e.g. a release asset that is not uploaded yet).
-    if [ -f "$REPO/pack/mods/office.pw.toml" ] && ! unzip -p "$DIST/Minecraft-Office.mrpack" modrinth.index.json | grep -q '"mods/office-'; then
-      echo "ERROR: the .mrpack has no mods/office-*.jar (is the release asset reachable?)" >&2
-      rm -f "$DIST/Minecraft-Office.mrpack"
-      exit 1
+    # Capture first: a pipe into `grep -q` can SIGPIPE unzip, which pipefail would turn into a false failure.
+    if [ -f "$REPO/pack/mods/office.pw.toml" ]; then
+      mrpack_index="$(unzip -p "$DIST/Minecraft-Office.mrpack" modrinth.index.json)"
+      mrpack_entries="$(unzip -Z1 "$DIST/Minecraft-Office.mrpack")"
+      case "$mrpack_index
+$mrpack_entries" in
+        *'"mods/office-'*|*'overrides/mods/office-'*) ;;
+        *)
+          echo "ERROR: the .mrpack has no mods/office-*.jar (is the release asset reachable?)" >&2
+          rm -f "$DIST/Minecraft-Office.mrpack"
+          exit 1 ;;
+      esac
     fi
     echo "==> $DIST/Minecraft-Office.mrpack"
   else
