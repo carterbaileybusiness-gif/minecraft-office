@@ -29,6 +29,35 @@ struct ExitChordDetector {
     }
 }
 
+/// What zooming into a surface does, by what it shows. Mirror: Minecraft steps aside (hidden) so the player uses the
+/// real desktop natively, no cursor clamp, and Minecraft becoming active again (Dock, Cmd-Tab, a click) ends the zoom.
+/// Extend: the cursor moves onto the virtual display and is clamped there. Window: the window is placed over Minecraft.
+enum ZoomStyle: Equatable {
+    case mirror, display, window
+
+    init(kind: CaptureKind) {
+        switch kind {
+        case .main: self = .mirror
+        case .display: self = .display
+        case .window: self = .window
+        }
+    }
+
+    var hidesMinecraft: Bool { self == .mirror }
+    var clampsCursor: Bool { self == .display }
+    var placesWindow: Bool { self == .window }
+    var exitsWhenMinecraftActivates: Bool { self == .mirror }
+}
+
+/// Remembers whether the helper hid Minecraft, so every way out of a Mirror zoom (exit gesture, ZOOM_OUT, the surface
+/// ending, the mod disconnecting, the helper quitting) unhides it exactly once and Minecraft is never left hidden.
+struct MinecraftHideGuard {
+    private(set) var isHidden = false
+    mutating func hid() { isHidden = true }
+    mutating func unhid() { isHidden = false }
+    var shouldUnhide: Bool { isHidden }
+}
+
 enum CursorClamp {
     /// The point moved inside `bounds` (max edges exclusive), or nil when it is already inside.
     static func clamp(_ point: CGPoint, to bounds: CGRect) -> CGPoint? {

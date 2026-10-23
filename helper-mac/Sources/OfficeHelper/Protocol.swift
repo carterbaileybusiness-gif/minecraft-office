@@ -102,12 +102,13 @@ struct CreateDisplayPayload: Codable, Equatable { var slot: Int; var w: Int; var
 struct SlotPayload: Codable, Equatable { var slot: Int }
 struct SurfacePayload: Codable, Equatable { var surface: Int }
 
-enum CaptureKind: String, Codable, Equatable { case display, window }
+/// display = a virtual display (Extend), window = one app window, main = the main display minus Minecraft (Mirror).
+enum CaptureKind: String, Codable, Equatable { case display, window, main }
 
 struct CapturePayload: Codable, Equatable {
     var surface: Int
     var kind: CaptureKind
-    /// Required when kind == display.
+    /// Required when kind == display (absent for window and main).
     var slot: Int?
     /// Required when kind == window: "<bundleId>|<CGWindowID>".
     var windowKey: String?
@@ -287,6 +288,7 @@ enum Message: Equatable {
             switch p.kind {
             case .display: guard p.slot != nil else { throw ProtocolError.badPayload("display capture needs slot") }
             case .window: guard p.windowKey.flatMap(WindowKey.parse) != nil else { throw ProtocolError.badPayload("window capture needs windowKey") }
+            case .main: break // the main display; Minecraft (HELLO's mcPid) is excluded
             }
             return .capture(p)
         case .stop: return .stop(try decodeJSON(SurfacePayload.self, payload))

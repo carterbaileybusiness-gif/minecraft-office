@@ -50,10 +50,12 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 
 /**
- * Windows, beta: Window mode only, with no helper install. Windows are listed and captured with webrtc-java
- * ({@link JavaDesktopSource}); zooming in moves the chosen window over Minecraft's client area and focuses it, a
- * low-level keyboard hook watches for double-Esc / Ctrl+Alt+Shift+Esc, and zooming out puts the window back where it
- * was and focuses Minecraft again. Extend mode ("Whole display") is not available yet.
+ * Windows, beta: Mirror and Window modes, with no helper install. Mirror captures the primary monitor with Minecraft's
+ * own window kept out of the capture ({@code SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)}, Windows 10 2004+);
+ * windows are listed and captured with webrtc-java ({@link JavaDesktopSource}). Zooming into a Mirror minimizes
+ * Minecraft, so the player is on their real desktop; zooming into a Window moves the chosen window over Minecraft's
+ * client area and focuses it. Either way a low-level keyboard hook watches for double-Esc / Ctrl+Alt+Shift+Esc, and
+ * zooming out puts things back and focuses (restores) Minecraft again. Extend mode is not available yet.
  */
 public final class WindowsPlatform implements Platform {
 	private static final Logger LOGGER = LogUtils.getLogger();
@@ -78,6 +80,9 @@ public final class WindowsPlatform implements Platform {
 	private final AtomicBoolean exitSent = new AtomicBoolean();
 	/** Bumped by every zoomIn/zoomOut, so a late watchdog tick or hook event from an old zoom is ignored. */
 	private final AtomicLong generation = new AtomicLong();
+	/** Minecraft's window is excluded from screen capture (Mirror); retried on each Mirror start until it works. */
+	private volatile boolean excluded;
+	private volatile boolean exclusionWarned;
 
 	/**
 	 * Client start-up on Windows (from {@code OfficeClient} through {@link Platform#register}): the settings screen lists
@@ -90,6 +95,9 @@ public final class WindowsPlatform implements Platform {
 		WebRtcNatives.preload();
 		WindowListProvider.set(this::windowChoices);
 		HologramLook.setOwnDetailProvider(WindowsPlatform::ownDetail);
+		// Minecraft is kept out of screen captures from the first Mirror capture on (normally right after joining, since a
+		// player's first hologram mirrors) rather than at launch: players without a Mirror can still stream Minecraft.
+		JavaDesktopSource.setMirrorGuard(this::mirrorProblem);
 		installPlacementDefault();
 		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> zoomOut());
 		Runtime.getRuntime().addShutdownHook(new Thread(this::zoomOut, "office-win-restore"));
@@ -106,6 +114,34 @@ public final class WindowsPlatform implements Platform {
 	@Override
 	public boolean ownSourcePacesItself() {
 		return true;
+	}
+
+	/**
+	 * Mirror pre-check (client thread): makes sure Minecraft's own window is left out of screen captures, so the mirrored
+	 * desktop never shows Minecraft inside Minecraft. Null when it is; else the reason (logged once) the hologram shows.
+	 */
+	@Nullable String mirrorProblem() {
+		if (excluded) {
+			return null;
+		}
+		long mc = minecraftHwnd();
+		boolean ok = false;
+		try {
+			ok = mc != 0 && Win32.get().excludeFromCapture(mc);
+		} catch (Throwable e) {
+			LOGGER.warn("Excluding Minecraft from screen capture failed", e);
+		}
+		if (ok) {
+			excluded = true;
+			LOGGER.info("Minecraft's window is excluded from screen capture (Mirror)");
+			return null;
+		}
+		if (!exclusionWarned) {
+			exclusionWarned = true;
+			LOGGER.warn("Can't exclude Minecraft's window (hwnd {}) from screen capture (needs Windows 10 2004+); Mirror is unavailable",
+					Long.toHexString(mc));
+		}
+		return JavaDesktopSource.REASON_MIRROR_EXCLUDE;
 	}
 
 	/** The reason under "Screens unavailable", or null. */
@@ -134,8 +170,9 @@ public final class WindowsPlatform implements Platform {
 	}
 
 	/**
-	 * New holograms are Extend by default, which Windows can't show: right after the local player places one, switch it
-	 * to Window mode (the owner then picks a window in settings).
+	 * Every hologram after the first is placed as Extend (a new virtual display), which Windows can't make yet: right
+	 * after the local player places one, switch it to Mirror (the first one already mirrors; the owner can pick a window
+	 * in settings instead).
 	 */
 	private static void installPlacementDefault() {
 		PlacementDefault placed = new PlacementDefault();
@@ -159,8 +196,8 @@ public final class WindowsPlatform implements Platform {
 				}
 				BlockPos pos = be.getBlockPos();
 				if (placed.shouldSwitch(be.hologramId(), spec, me.equals(spec.owner()), pos.getX(), pos.getY(), pos.getZ(), now)) {
-					LOGGER.info("New hologram at {}: Window mode (Windows can't show a whole display yet)", pos);
-					ClientPlayNetworking.send(new OfficePayloads.UpdateHologram(pos, spec.shape(), Mode.WINDOW, spec.privacy(), spec.displaySlot(), null));
+					LOGGER.info("New hologram at {}: Mirror (Windows can't add a virtual display yet)", pos);
+					ClientPlayNetworking.send(new OfficePayloads.UpdateHologram(pos, spec.shape(), Mode.MIRROR, spec.privacy(), spec.displaySlot(), null));
 				}
 			}
 		});
@@ -247,6 +284,10 @@ public final class WindowsPlatform implements Platform {
 	 */
 	@Override
 	public synchronized void zoomIn(final HologramSpec spec, final Rect mcWindow) {
+		if (spec.mode() == Mode.MIRROR) {
+			zoomInMirror();
+			return;
+		}
 		if (spec.mode() != Mode.WINDOW) {
 			return;
 		}
@@ -292,7 +333,49 @@ public final class WindowsPlatform implements Platform {
 		}
 	}
 
-	/** Unhooks the keyboard, puts the window back as it was and focuses Minecraft. Safe to call any time, repeatedly. */
+	/**
+	 * Mirror: Minecraft steps aside (minimized) so the player is on their real desktop; the keyboard hook brings it back.
+	 * If Minecraft's window can't be found or minimized, nothing is changed and the zoom exits.
+	 */
+	private void zoomInMirror() {
+		if (zoom != null && zoom.hwnd() == 0) {
+			return; // already mirroring (a re-zoom after Minecraft's window "moved" while minimized)
+		}
+		if (zoom != null) {
+			zoomOut();
+		}
+		long gen = generation.incrementAndGet();
+		exitSent.set(false);
+		chord.reset();
+		try {
+			Win32 w32 = Win32.get();
+			long mc = minecraftHwnd();
+			if (mc == 0 || !w32.isWindow(mc)) {
+				LOGGER.info("Zoom: Minecraft's window handle is unknown; can't step aside for Mirror");
+				requestExit(gen);
+				return;
+			}
+			zoom = new Zoom(0, "", null, mc);
+			keyHook = w32.hookKeys(chord, () -> requestExit(gen));
+			if (!w32.minimize(mc)) {
+				LOGGER.warn("Zoom: Windows refused to minimize Minecraft");
+			}
+		} catch (Throwable e) {
+			LOGGER.warn("Mirror zoom failed", e);
+			zoomOut();
+			requestExitAlways();
+		}
+	}
+
+	/** True while a Mirror zoom has Minecraft stepped aside (tests). */
+	public synchronized boolean mirroring() {
+		return zoom != null && zoom.hwnd() == 0;
+	}
+
+	/**
+	 * Unhooks the keyboard, puts the window back as it was (Mirror: restores Minecraft from minimized) and focuses
+	 * Minecraft. Safe to call any time, repeatedly.
+	 */
 	@Override
 	public synchronized void zoomOut() {
 		generation.incrementAndGet();
@@ -312,11 +395,11 @@ public final class WindowsPlatform implements Platform {
 		JavaDesktopSource.setWorkingKey(null);
 		try {
 			Win32 w32 = Win32.get();
-			if (z.saved() != null && w32.isWindow(z.hwnd())) {
+			if (z.hwnd() != 0 && z.saved() != null && w32.isWindow(z.hwnd())) {
 				w32.restorePlacement(z.hwnd(), z.saved());
 			}
 			if (z.minecraft() != 0 && w32.isWindow(z.minecraft())) {
-				w32.focus(z.minecraft());
+				w32.focus(z.minecraft()); // restores it first if minimized (Mirror)
 			}
 		} catch (Throwable e) {
 			LOGGER.warn("Restoring the window after zoom failed", e);
@@ -365,7 +448,7 @@ public final class WindowsPlatform implements Platform {
 	}
 
 	/** Minecraft's own HWND (26.3 uses SDL3), or 0 outside the game. */
-	private static long minecraftHwnd() {
+	static long minecraftHwnd() {
 		try {
 			Minecraft mc = Minecraft.getInstance();
 			if (mc == null || mc.getWindow() == null) {

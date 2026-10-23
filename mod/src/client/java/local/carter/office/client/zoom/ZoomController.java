@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Mode;
 import local.carter.office.hologram.HologramBlockEntity;
 
 /**
@@ -31,6 +32,10 @@ import local.carter.office.hologram.HologramBlockEntity;
  * <p>While not in the world, {@link #update} also keeps Minecraft from throttling its frame rate as "AFK"
  * ({@link Env#keepAwake}: the player's input goes to the computer, not to Minecraft) and leaves, with a
  * {@link Env#notice}, as soon as {@link Env#workProblem} reports one (e.g. the helper failed to zoom or quit).
+ *
+ * <p>MIRROR: once WORKING, Minecraft steps aside (hidden / minimized) and the player uses their real desktop. Minecraft's
+ * window losing focus and then getting it back while WORKING means the player went back to Minecraft (Dock, Cmd-Tab,
+ * taskbar, a click): that exits too ({@link #focusChanged}).
  */
 public final class ZoomController {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
@@ -92,6 +97,8 @@ public final class ZoomController {
 	/** Linear progress (0 = world view, 1 = working view) when the current animation started. */
 	private double fromProgress;
 	private long since;
+	/** MIRROR, WORKING: Minecraft's window has lost focus since WORKING began (it stepped aside). */
+	private boolean mirrorAway;
 
 	public ZoomController(final Env env) {
 		this.env = env;
@@ -183,6 +190,7 @@ public final class ZoomController {
 		double progress = linear(env.nowMs());
 		if (state == State.ZOOMING_IN && progress >= 1) {
 			state = State.WORKING;
+			mirrorAway = false;
 			if (!run("startWorking", () -> env.startWorking(t))) {
 				exit();
 				run("notice", () -> env.notice("Couldn't start working on this screen"));
@@ -204,6 +212,7 @@ public final class ZoomController {
 		double p = linear(now);
 		boolean wasWorking = state == State.WORKING;
 		state = State.ZOOMING_OUT;
+		mirrorAway = false;
 		fromProgress = p;
 		since = now;
 		if (wasWorking) {
@@ -237,9 +246,22 @@ public final class ZoomController {
 		doubleEsc.otherKey();
 	}
 
-	/** Minecraft's window gained or lost focus: a key release may have been missed, start the double-tap afresh. */
-	public void focusChanged() {
+	/**
+	 * Minecraft's window gained or lost focus: a key release may have been missed, start the double-tap afresh. In a
+	 * MIRROR zoom, getting focus back after losing it while WORKING (the player clicked back into Minecraft) exits.
+	 */
+	public void focusChanged(final boolean focused) {
 		doubleEsc.reset();
+		Candidate t = target;
+		if (state != State.WORKING || t == null || t.spec().mode() != Mode.MIRROR) {
+			return;
+		}
+		if (!focused) {
+			mirrorAway = true;
+		} else if (mirrorAway) {
+			LOGGER.info("Zoom: leaving (Minecraft focused again)");
+			exit();
+		}
 	}
 
 	/** World unload / disconnect: back to WORLD immediately, cleaning up whatever was started. */

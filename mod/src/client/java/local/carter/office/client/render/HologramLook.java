@@ -127,6 +127,14 @@ public final class HologramLook {
 		};
 	}
 
+	/** Under a Public Mirror's settings: it shares the whole desktop (Carter kept Public as the default, with this warning). */
+	public static final String MIRROR_PUBLIC_WARNING = "Friends nearby can see your whole screen.";
+
+	/** The settings screen's warning for this mode and privacy, or null: only a Public Mirror gets one. */
+	public static @Nullable String mirrorWarning(final Mode mode, final Privacy.Level privacy) {
+		return mode == Mode.MIRROR && privacy == Privacy.Level.PUBLIC ? MIRROR_PUBLIC_WARNING : null;
+	}
+
 	/** Longest reason shown on a panel. */
 	public static final int MAX_DETAIL = 48;
 

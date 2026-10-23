@@ -232,6 +232,10 @@ public final class HologramInteractions {
 		if (own == HologramLook.OwnSource.NEEDS_HELPER) {
 			return "Set up your screens first: /officescreens setup";
 		}
+		if (own == HologramLook.OwnSource.UNAVAILABLE) {
+			String detail = HologramLook.ownDetail(be.hologramId()); // e.g. Windows Mirror that can't hide Minecraft
+			return detail != null ? detail : "Screens unavailable on this computer";
+		}
 		if (spec != null && spec.mode() == Mode.WINDOW && (own == HologramLook.OwnSource.WINDOW_CLOSED
 				|| own == HologramLook.OwnSource.PICK_WINDOW || spec.windowKey() == null
 				|| spec.windowKey().isEmpty())) {

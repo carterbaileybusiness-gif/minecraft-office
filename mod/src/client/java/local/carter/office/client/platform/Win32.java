@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import com.mojang.logging.LogUtils;
 import com.sun.jna.Native;
 import com.sun.jna.Pointer;
+import com.sun.jna.Structure;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinDef.LPARAM;
@@ -34,6 +35,14 @@ public final class Win32 {
 	private static final Logger LOGGER = LogUtils.getLogger();
 
 	static final int SW_SHOW = 5;
+	static final int SW_MINIMIZE = 6;
+	/** SetWindowDisplayAffinity: the window is left out of every screen capture (Windows 10 2004, build 19041+). */
+	public static final int WDA_EXCLUDEFROMCAPTURE = 0x11;
+	public static final int WDA_NONE = 0;
+	/** First Windows build with {@link #WDA_EXCLUDEFROMCAPTURE} (10 2004). */
+	public static final int EXCLUDE_FROM_CAPTURE_BUILD = 19041;
+	static final int DISPLAY_DEVICE_ACTIVE = 0x1;
+	static final int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4;
 	static final int SW_RESTORE = 9;
 	static final int SWP_NOZORDER = 0x0004;
 	static final int SWP_NOACTIVATE = 0x0010;
@@ -52,9 +61,31 @@ public final class Win32 {
 	static final int DESKTOP_READOBJECTS = 0x0001;
 	static final int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
 
+	/** EnumDisplayDevicesW's DISPLAY_DEVICEW (char = WCHAR with the unicode options). */
+	@Structure.FieldOrder({"cb", "DeviceName", "DeviceString", "StateFlags", "DeviceID", "DeviceKey"})
+	public static class DisplayDevice extends Structure {
+		public int cb;
+		public char[] DeviceName = new char[32];
+		public char[] DeviceString = new char[128];
+		public int StateFlags;
+		public char[] DeviceID = new char[128];
+		public char[] DeviceKey = new char[128];
+
+		public DisplayDevice() {
+			cb = size();
+		}
+	}
+
 	/** user32 functions (W variants picked by the unicode options). */
 	public interface User32 extends StdCallLibrary {
 		boolean IsWindow(HWND hwnd);
+
+		/** Windows 7+; WDA_EXCLUDEFROMCAPTURE needs 10 2004. Only for windows of the calling process. */
+		boolean SetWindowDisplayAffinity(HWND hwnd, int affinity);
+
+		boolean GetWindowDisplayAffinity(HWND hwnd, IntByReference affinity);
+
+		boolean EnumDisplayDevices(String device, int index, DisplayDevice info, int flags);
 
 		boolean IsWindowVisible(HWND hwnd);
 
@@ -194,6 +225,71 @@ public final class Win32 {
 	/** Top-level window of a window class (tests), or 0. */
 	public long findWindow(final String className) {
 		return value(user32.FindWindow(className, null));
+	}
+
+	/**
+	 * Leaves {@code hwnd} (a window of this process: Minecraft's) out of every screen capture, so a Mirror hologram never
+	 * shows Minecraft inside Minecraft. Only on Windows 10 2004+ (older builds would black the window out instead);
+	 * true once the affinity reads back as {@link #WDA_EXCLUDEFROMCAPTURE}.
+	 */
+	public boolean excludeFromCapture(final long hwnd) {
+		if (hwnd == 0 || !supportsExcludeFromCapture(windowsBuild())) {
+			return false;
+		}
+		HWND h = hwnd(hwnd);
+		if (!user32.SetWindowDisplayAffinity(h, WDA_EXCLUDEFROMCAPTURE)) {
+			LOGGER.warn("SetWindowDisplayAffinity(EXCLUDEFROMCAPTURE) failed: error {}", kernel32.GetLastError());
+			return false;
+		}
+		return displayAffinity(hwnd) == WDA_EXCLUDEFROMCAPTURE;
+	}
+
+	/** The window's display affinity, or -1 if it can't be read. */
+	public int displayAffinity(final long hwnd) {
+		IntByReference out = new IntByReference(-1);
+		return hwnd != 0 && user32.GetWindowDisplayAffinity(hwnd(hwnd), out) ? out.getValue() : -1;
+	}
+
+	/** Whether {@code build} (0 = unknown: try) has WDA_EXCLUDEFROMCAPTURE. Pure. */
+	public static boolean supportsExcludeFromCapture(final int build) {
+		return build == 0 || build >= EXCLUDE_FROM_CAPTURE_BUILD;
+	}
+
+	/** Windows build number (registry CurrentBuildNumber), or 0 if unknown. */
+	public static int windowsBuild() {
+		try {
+			String b = com.sun.jna.platform.win32.Advapi32Util.registryGetStringValue(com.sun.jna.platform.win32.WinReg.HKEY_LOCAL_MACHINE,
+					"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "CurrentBuildNumber");
+			return Integer.parseInt(b.trim());
+		} catch (Throwable e) {
+			return 0;
+		}
+	}
+
+	/** Minimizes {@code hwnd} (Mirror zoom: Minecraft steps aside so the player is on their real desktop). */
+	public boolean minimize(final long hwnd) {
+		return hwnd != 0 && user32.ShowWindow(hwnd(hwnd), SW_MINIMIZE);
+	}
+
+	public boolean isMinimized(final long hwnd) {
+		return hwnd != 0 && user32.IsIconic(hwnd(hwnd));
+	}
+
+	/**
+	 * The primary monitor's index in EnumDisplayDevices order, which is also webrtc's screen-source id on Windows (both its
+	 * GDI and DXGI capturers number screens that way); -1 if none is marked primary.
+	 */
+	public int primaryDisplayIndex() {
+		for (int i = 0; i < 64; i++) {
+			DisplayDevice d = new DisplayDevice();
+			if (!user32.EnumDisplayDevices(null, i, d, 0)) {
+				break;
+			}
+			if ((d.StateFlags & DISPLAY_DEVICE_ACTIVE) != 0 && (d.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	/** True if this process can see the interactive input desktop (false on headless service sessions). */

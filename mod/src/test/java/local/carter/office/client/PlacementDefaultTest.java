@@ -12,7 +12,7 @@ import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
 import org.junit.jupiter.api.Test;
 
-/** Windows clients switch a hologram they just placed from Extend to Window mode, and touch nothing else. */
+/** Windows clients switch a hologram they just placed from Extend to Mirror (no virtual displays there), and touch nothing else. */
 class PlacementDefaultTest {
 	private static final UUID ME = UUID.randomUUID();
 
