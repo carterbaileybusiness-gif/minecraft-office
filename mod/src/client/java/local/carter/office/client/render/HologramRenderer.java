@@ -40,7 +40,8 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Draws a hologram above its emitter: the content quad (live screen or a look panel), a soft additive cyan edge glow
  * 0.06 blocks wide, faint scanlines from more than 3 blocks away, and for placeholder looks an icon + label in the game
- * font (crisp at any size). While resizing, a cyan outline shows the new size.
+ * font (crisp at any size). When the owner looks at it holding an emitter, four glowing corner handles and a thin
+ * outline show it can be resized; while resizing, a cyan outline (with handles) shows the new size.
  *
  * <p>Everything is emitted through vanilla's block-entity submit pipeline with stock render types (text = full-bright
  * textured, eyes = emissive textured without alpha cut-off, lightning = additive colour), so it works unchanged with
@@ -93,6 +94,8 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		st.visible = spec != null;
 		st.outline = null;
 		st.hoverCorner = null;
+		st.dragCorner = null;
+		st.handles = false;
 		if (spec == null) {
 			return;
 		}
@@ -121,11 +124,13 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		HologramInteractions.Hover hover = HologramInteractions.hover(partialTicks);
 		st.highlighted = dragging || (hover != null && hover.be() == be);
 		if (hover != null && hover.be() == be) {
+			st.handles = true;
 			st.hoverCorner = hover.corner();
 		}
 		CornerDrag drag = HologramInteractions.cornerDrag();
 		if (drag != null && drag.blockEntity() == be) {
 			st.outline = drag.preview();
+			st.dragCorner = drag.corner();
 		}
 	}
 
@@ -190,10 +195,13 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			submitLabel(poseStack, collector.order(4), label, st.look, hw, hh, seconds);
 		}
 
-		// grab bracket on the hovered corner (owner holding an emitter)
-		Corner corner = st.hoverCorner;
-		if (corner != null) {
-			collector.order(4).submitCustomGeometry(poseStack, RenderTypes.lightning(), (pose, buf) -> bracket(buf, pose, corner, hw, hh, 0.9f));
+		// resize affordance (owner holding an emitter, looking at it): thin outline + four corner handles
+		if (st.handles) {
+			Corner hovered = st.hoverCorner;
+			collector.order(4).submitCustomGeometry(poseStack, RenderTypes.lightning(), (pose, buf) -> {
+				edgeLine(buf, pose, hw, hh, 0.010f, 0.007f, argb(0.70f, CYAN));
+				handles(buf, pose, hw, hh, hovered);
+			});
 		}
 		poseStack.popPose();
 
@@ -204,9 +212,11 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			toHologram(poseStack, outline);
 			float ow = (float) outline.width() / 2f;
 			float oh = (float) outline.height() / 2f;
+			Corner dragged = st.dragCorner;
 			collector.order(4).submitCustomGeometry(poseStack, RenderTypes.lightning(), (pose, buf) -> {
 				colored(buf, pose, -ow, -oh, ow, oh, 0.010f, argb(0.06f, CYAN), argb(0.06f, CYAN), true);
 				edgeLine(buf, pose, ow, oh, 0.025f, 0.012f, argb(0.95f, CYAN));
+				handles(buf, pose, ow, oh, dragged);
 			});
 			poseStack.popPose();
 		}
@@ -358,22 +368,38 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		colored(b, p, hw - in, -hh + in, hw + out, hh - in, z, color, color, true); // right
 	}
 
-	/** L-shaped grab handle on a corner. */
-	private static void bracket(final VertexConsumer b, final PoseStack.Pose p, final Corner corner, final float hw, final float hh,
-			final float alpha) {
-		float len = clamp(Math.min(hw, hh) * 0.35f, 0.06f, 0.30f);
-		float t = clamp(len * 0.16f, 0.012f, 0.035f);
-		float sx = corner == Corner.TOP_RIGHT || corner == Corner.BOTTOM_RIGHT ? 1f : -1f;
-		float sy = corner == Corner.TOP_LEFT || corner == Corner.TOP_RIGHT ? 1f : -1f;
-		float cx = sx * hw;
-		float cy = sy * hh;
-		int c = argb(alpha, 0xE6FDFF);
-		float z = 0.006f;
-		// horizontal arm and vertical arm, both reaching slightly outside the corner
-		colored(b, p, Math.min(cx - sx * len, cx + sx * t), Math.min(cy, cy + sy * t), Math.max(cx - sx * len, cx + sx * t),
-				Math.max(cy, cy + sy * t), z, c, c, true);
-		colored(b, p, Math.min(cx, cx + sx * t), Math.min(cy - sy * len, cy + sy * t), Math.max(cx, cx + sx * t),
-				Math.max(cy - sy * len, cy + sy * t), z, c, c, true);
+	/**
+	 * Four glowing square resize handles centred on the corners; the {@code active} one (hovered or being dragged) is
+	 * 1.6x larger, near-white, with a soft halo. Sizes scale with the hologram but stay readable on tiny and huge ones.
+	 */
+	private static void handles(final VertexConsumer b, final PoseStack.Pose p, final float hw, final float hh, final @Nullable Corner active) {
+		float base = handleHalfSize(2f * hw, 2f * hh);
+		for (Corner c : Corner.values()) {
+			float cx = (c == Corner.TOP_RIGHT || c == Corner.BOTTOM_RIGHT ? 1f : -1f) * hw;
+			float cy = (c == Corner.TOP_LEFT || c == Corner.TOP_RIGHT ? 1f : -1f) * hh;
+			boolean hot = c == active;
+			float s = hot ? base * 1.6f : base;
+			if (hot) {
+				float g = s * 2.4f; // soft halo
+				int in = argb(0.30f, CYAN);
+				int out = argb(0f, CYAN);
+				// one quadrant per quad, bright at the corner point, fading outwards
+				quad(b, p, 0.008f, cx - g, cy + g, out, cx - g, cy, out, cx, cy, in, cx, cy + g, out, true);
+				quad(b, p, 0.008f, cx - g, cy, out, cx - g, cy - g, out, cx, cy - g, out, cx, cy, in, true);
+				quad(b, p, 0.008f, cx, cy, in, cx, cy - g, out, cx + g, cy - g, out, cx + g, cy, out, true);
+				quad(b, p, 0.008f, cx, cy + g, out, cx, cy, in, cx + g, cy, out, cx + g, cy + g, out, true);
+			}
+			int border = argb(hot ? 1.0f : 0.85f, hot ? 0xF2FEFF : CYAN);
+			int fill = argb(hot ? 0.95f : 0.55f, hot ? 0xC8FBFF : 0x1FA9C9);
+			colored(b, p, cx - s, cy - s, cx + s, cy + s, 0.009f, border, border, true);
+			float t = Math.max(0.006f, s * 0.28f);
+			colored(b, p, cx - s + t, cy - s + t, cx + s - t, cy + s - t, 0.010f, fill, fill, true);
+		}
+	}
+
+	/** Half the side of a corner handle for a w x h hologram (blocks). */
+	static float handleHalfSize(final float w, final float h) {
+		return clamp(0.05f * Math.min(w, h), 0.03f, 0.09f);
 	}
 
 	/** "Connecting" sweep: a soft band with a bright leading line moving top to bottom every 2.2 s. */

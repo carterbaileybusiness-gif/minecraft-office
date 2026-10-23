@@ -14,6 +14,7 @@ import local.carter.office.core.HologramGeometry.Corner;
 import local.carter.office.core.HologramGeometry.Frame;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
+import local.carter.office.core.Mount;
 import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
 import local.carter.office.core.Vec3d;
@@ -125,6 +126,55 @@ class HologramPlacementTest {
 		CornerDrag.Result r = CornerDrag.resize(f, Corner.BOTTOM_RIGHT, corner(f, 1, -1).add(new Vec3d(20, 0, 0)), s);
 		assertEquals(HologramSpec.MAX_WIDTH, r.width(), EPS);
 		assertTrue(Math.abs(r.offY()) <= 16.0 && Math.abs(r.offX()) <= 16.0 && Math.abs(r.offZ()) <= 16.0);
+	}
+
+	/** A wall hologram as placed: facing south, content plane 0.03 off the wall (z offset -0.47). */
+	private static HologramSpec wallSpec(double width) {
+		return new HologramSpec(OWNER, Shape.WIDE_16_9, Mode.EXTEND, Privacy.PUBLIC, 1, null, width, 0, 0, Mount.WALL_PLANE, 0f);
+	}
+
+	@Test
+	void wallResizeStaysOnTheWallPlaneInEveryDirection() {
+		HologramSpec s = wallSpec(2.0);
+		Frame f = HologramPlacement.frame(0, 0, 0, s);
+		double plane = f.center().z();
+		for (Corner c : Corner.values()) {
+			double sx = c == Corner.TOP_RIGHT || c == Corner.BOTTOM_RIGHT ? 1 : -1;
+			double sy = c == Corner.TOP_LEFT || c == Corner.TOP_RIGHT ? 1 : -1;
+			for (double grow : new double[] {1.5, -0.6}) {
+				Vec3d to = corner(f, sx, sy).add(new Vec3d(sx * grow, sy * grow * 0.3, 0));
+				HologramSpec after = CornerDrag.resize(f, c, to, s, Mount.WALL).apply(s);
+				assertEquals(Mount.WALL_PLANE, after.offZ(), EPS, c + " " + grow + ": never off the wall plane");
+				Frame af = HologramPlacement.frame(0, 0, 0, after);
+				assertEquals(plane, af.center().z(), EPS);
+				// opposite corner fixed (within the plane)
+				near(corner(f, -sx, -sy), corner(af, -sx, -sy));
+			}
+		}
+	}
+
+	@Test
+	void wallHologramMayGrowDownwardsFreely() {
+		// No floor-emitter clamp on a wall: dragging the bottom-right corner down grows it downwards, top-left fixed.
+		HologramSpec s = wallSpec(2.0);
+		Frame f = HologramPlacement.frame(0, 0, 0, s);
+		Vec3d to = corner(f, 1, -1).add(new Vec3d(0, -1.0, 0));
+		HologramSpec after = CornerDrag.resize(f, Corner.BOTTOM_RIGHT, to, s, Mount.WALL).apply(s);
+		assertTrue(after.width() > 3.5, "grew from the vertical drag: " + after.width());
+		near(corner(f, -1, 1), corner(HologramPlacement.frame(0, 0, 0, after), -1, 1));
+		assertTrue(after.offY() - after.height() / 2 < HologramPlacement.EMITTER_TOP, "below the (floor) emitter top is fine on a wall");
+	}
+
+	@Test
+	void ceilingHologramNeverRisesIntoTheCeiling() {
+		HologramSpec s = new HologramSpec(OWNER, Shape.WIDE_16_9, Mode.EXTEND, Privacy.PUBLIC, 1, null, 2.0, 0,
+				Mount.CEILING.defaultOffsets(0, 1.125).y(), 0, 0f);
+		Frame f = HologramPlacement.frame(0, 0, 0, s);
+		Vec3d to = corner(f, 1, 1).add(new Vec3d(0, 2.0, 0)); // drag the top-right corner up into the ceiling
+		HologramSpec after = CornerDrag.resize(f, Corner.TOP_RIGHT, to, s, Mount.CEILING).apply(s);
+		assertTrue(after.width() > 2.0);
+		assertTrue(after.offY() + after.height() / 2 <= Mount.CEILING_MOUNT_BOTTOM - HologramPlacement.EMITTER_CLEARANCE + EPS,
+				"top edge stays under the mount");
 	}
 
 	@Test

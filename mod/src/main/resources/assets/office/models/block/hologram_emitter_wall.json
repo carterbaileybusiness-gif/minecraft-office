@@ -1,0 +1,141 @@
+{
+  "parent": "minecraft:block/block",
+  "ambientocclusion": false,
+  "textures": {
+    "particle": "office:block/hologram_emitter_side",
+    "side": "office:block/hologram_emitter_side",
+    "top": "office:block/hologram_emitter_top",
+    "lens": "office:block/hologram_emitter_lens"
+  },
+  "elements": [
+    {
+      "from": [
+        4,
+        6,
+        15.6
+      ],
+      "to": [
+        12,
+        10,
+        16
+      ],
+      "faces": {
+        "north": {
+          "uv": [
+            4,
+            6,
+            12,
+            10
+          ],
+          "texture": "#top"
+        },
+        "south": {
+          "uv": [
+            4,
+            6,
+            12,
+            10
+          ],
+          "texture": "#side",
+          "cullface": "south"
+        },
+        "up": {
+          "uv": [
+            4,
+            15,
+            12,
+            16
+          ],
+          "texture": "#side"
+        },
+        "down": {
+          "uv": [
+            4,
+            15,
+            12,
+            16
+          ],
+          "texture": "#side"
+        },
+        "west": {
+          "uv": [
+            15,
+            6,
+            16,
+            10
+          ],
+          "texture": "#side"
+        },
+        "east": {
+          "uv": [
+            15,
+            6,
+            16,
+            10
+          ],
+          "texture": "#side"
+        }
+      }
+    },
+    {
+      "from": [
+        5,
+        7.6,
+        15.56
+      ],
+      "to": [
+        11,
+        8.4,
+        15.6
+      ],
+      "light_emission": 15,
+      "faces": {
+        "north": {
+          "uv": [
+            5,
+            7,
+            11,
+            8
+          ],
+          "texture": "#lens"
+        },
+        "up": {
+          "uv": [
+            5,
+            7,
+            11,
+            8
+          ],
+          "texture": "#lens"
+        },
+        "down": {
+          "uv": [
+            5,
+            7,
+            11,
+            8
+          ],
+          "texture": "#lens"
+        },
+        "west": {
+          "uv": [
+            5,
+            7,
+            6,
+            8
+          ],
+          "texture": "#lens"
+        },
+        "east": {
+          "uv": [
+            5,
+            7,
+            6,
+            8
+          ],
+          "texture": "#lens"
+        }
+      }
+    }
+  ]
+}
