@@ -10,6 +10,8 @@ import java.util.UUID;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
+import local.carter.office.client.platform.Platform;
+import local.carter.office.client.platform.WindowsPlatform;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Privacy;
@@ -24,6 +26,7 @@ import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.CycleButton;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.core.BlockPos;
@@ -53,6 +56,8 @@ public class HologramSettingsScreen extends Screen {
 	private final boolean editable;
 	private final String ownerName;
 	private final List<WindowChoice> windows;
+	/** Whole-display (Extend) mode can't be picked on this computer (Windows beta): shown greyed out. */
+	private final boolean extendUnavailable;
 
 	private Shape shape;
 	private Mode mode;
@@ -83,6 +88,11 @@ public class HologramSettingsScreen extends Screen {
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
 		this.windowKey = spec == null ? null : spec.windowKey();
 		this.windows = editable ? List.copyOf(WindowListProvider.get().windows()) : List.of();
+		this.extendUnavailable = editable && !Platform.current().supportsExtend();
+		if (extendUnavailable && mode == Mode.EXTEND) {
+			mode = Mode.WINDOW; // the only mode this computer can show
+			send();
+		}
 	}
 
 	@Override
@@ -107,15 +117,25 @@ public class HologramSettingsScreen extends Screen {
 		choice(left + 2 * (bw + 4), y, bw, "9:16", shape == Shape.TALL_9_16, () -> setShape(Shape.TALL_9_16));
 		y += ROW + 4;
 
-		CycleButton<Mode> modeButton = CycleButton.<Mode>builder(m -> Component.literal(m == Mode.EXTEND ? "Whole display" : "One window"), mode)
-				.withValues(List.of(Mode.EXTEND, Mode.WINDOW))
-				.create(left, y, COL_W, 20, Component.literal("Shows"), (b, m) -> {
-					mode = m;
-					send();
-					rebuildWidgets();
-				});
-		modeButton.active = editable;
-		addRenderableWidget(modeButton);
+		if (extendUnavailable) {
+			int hw = (COL_W - 4) / 2;
+			Button extend = Button.builder(Component.literal("Whole display"), b -> {}).bounds(left, y, hw, 20).build();
+			extend.active = false;
+			extend.setTooltip(Tooltip.create(Component.literal(Platform.current() instanceof WindowsPlatform
+					? "Coming soon on Windows" : "Not available on this computer")));
+			addRenderableWidget(extend);
+			choice(left + hw + 4, y, hw, "One window", true, () -> {});
+		} else {
+			CycleButton<Mode> modeButton = CycleButton.<Mode>builder(m -> Component.literal(m == Mode.EXTEND ? "Whole display" : "One window"), mode)
+					.withValues(List.of(Mode.EXTEND, Mode.WINDOW))
+					.create(left, y, COL_W, 20, Component.literal("Shows"), (b, m) -> {
+						mode = m;
+						send();
+						rebuildWidgets();
+					});
+			modeButton.active = editable;
+			addRenderableWidget(modeButton);
+		}
 		y += ROW + 4;
 
 		if (mode == Mode.EXTEND) {
