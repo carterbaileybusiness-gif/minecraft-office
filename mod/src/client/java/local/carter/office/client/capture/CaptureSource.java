@@ -1,5 +1,7 @@
 package local.carter.office.client.capture;
 
+import org.jspecify.annotations.Nullable;
+
 import local.carter.office.client.render.HologramLook;
 
 /**
@@ -33,5 +35,10 @@ public interface CaptureSource {
 	/** Problems only the owner's client knows (helper missing, permission missing, window closed) for the look. */
 	default HologramLook.OwnSource status() {
 		return HologramLook.OwnSource.READY;
+	}
+
+	/** Why {@link #status()} is UNAVAILABLE, short enough for the owner's panel; null otherwise. */
+	default @Nullable String statusDetail() {
+		return null;
 	}
 }

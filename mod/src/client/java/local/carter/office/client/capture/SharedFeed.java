@@ -136,7 +136,10 @@ public final class SharedFeed {
 				if (!alive) {
 					return;
 				}
-				for (FrameSink s : sinks) {
+				for (FrameSink s : new ArrayList<>(sinks)) { // a copy: a sink may unsubscribe inside full()
+					if (!alive || !sinks.contains(s)) {
+						continue; // unsubscribed (or the feed stopped) during this delivery
+					}
 					try {
 						s.full(w, h, rgba.duplicate());
 					} catch (RuntimeException e) {

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 /** Windows Mirror: every Mirror hologram shares one screen capture; it runs while anyone subscribes, then stops. */
 class SharedFeedTest {
-	static final class Sink implements FrameSink {
+	static class Sink implements FrameSink {
 		final AtomicInteger fulls = new AtomicInteger();
 		final List<String> ended = new CopyOnWriteArrayList<>();
 
@@ -93,6 +93,50 @@ class SharedFeedTest {
 		feed.subscribe(a);
 		assertTrue(waitUntil(() -> fake.runs.get() == 2 && a.fulls.get() > seen), "a new subscriber starts it again");
 		feed.unsubscribe(a);
+	}
+
+	@Test
+	void aSinkThatUnsubscribesInsideItsFrameDoesntBreakTheOthers() throws Exception {
+		Fake fake = new Fake();
+		SharedFeed feed = new SharedFeed("test", () -> fake);
+		Sink b = new Sink();
+		Sink[] self = new Sink[1];
+		self[0] = new Sink() {
+			@Override
+			public void full(final int w, final int h, final ByteBuffer rgba) {
+				super.full(w, h, rgba);
+				feed.unsubscribe(this); // from the feed's own thread, mid-delivery
+			}
+		};
+		Sink c = new Sink();
+		feed.subscribe(self[0]);
+		feed.subscribe(b);
+		feed.subscribe(c);
+		assertTrue(waitUntil(() -> b.fulls.get() > 5 && c.fulls.get() > 5), "the other sinks keep getting frames");
+		assertEquals(List.of(), b.ended, "the capture didn't fail");
+		assertEquals(1, self[0].fulls.get(), "called once, then never again");
+		assertEquals(2, feed.subscribers());
+		feed.unsubscribe(b);
+		feed.unsubscribe(c);
+		assertFalse(feed.active());
+	}
+
+	@Test
+	void restartsAfterTheCaptureEndedOnItsOwn() throws Exception {
+		Fake fake = new Fake();
+		fake.endAfter = 2;
+		SharedFeed feed = new SharedFeed("test", () -> fake);
+		Sink a = new Sink();
+		feed.subscribe(a);
+		assertTrue(waitUntil(() -> !a.ended.isEmpty() && !feed.active()));
+		fake.endAfter = -1;
+		Sink b = new Sink();
+		feed.subscribe(b);
+		assertTrue(waitUntil(() -> b.fulls.get() > 3), "a new subscriber gets a fresh capture");
+		assertEquals(2, fake.runs.get());
+		assertEquals(2, a.fulls.get(), "the ended sink isn't fed by the restarted capture");
+		feed.unsubscribe(b);
+		assertFalse(feed.active());
 	}
 
 	@Test

@@ -174,6 +174,30 @@ class MacHelperSourceTest {
 		assertEquals(HologramLook.OwnSource.NEEDS_HELPER, s.status(), "Mirror needs Screen Recording too");
 	}
 
+	/** Every Mac capture failure surfaces on the hologram (owner only), never an endless "Connecting…". */
+	@Test
+	void aFailedCaptureShowsScreensUnavailableWithTheReason() {
+		welcome(true);
+		MacHelperSource s = source();
+		s.start(new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9), 5, sink);
+		Capture c = last(Capture.class);
+		helper.message(new Ended(c.surface(), "capture failed: Minecraft (pid 42) can't be excluded from the mirror"));
+		assertEquals(HologramLook.OwnSource.UNAVAILABLE, s.status());
+		assertEquals("Can't hide Minecraft from the mirror", s.statusDetail());
+		HologramSpec spec = new HologramSpec(ME, Shape.WIDE_16_9, Mode.MIRROR, Privacy.PUBLIC, 1, null, 2, 0, 1, 0, 0);
+		HologramLook.State look = HologramLook.forViewer(spec, ME, true, true, s.status());
+		assertEquals(HologramLook.State.UNAVAILABLE, look);
+		assertEquals("Can't hide Minecraft from the mirror", HologramLook.label(look, spec, true, "Carter", s.statusDetail()).subtitle());
+		assertEquals("", HologramLook.label(look, spec, false, "Carter", s.statusDetail()).subtitle(), "owner only");
+
+		MacHelperSource w = source();
+		w.start(window(NOTES), 5, new RecordingSink());
+		helper.message(new Ended(last(Capture.class).surface(), "capture failed: The stream was interrupted"));
+		assertEquals(HologramLook.OwnSource.UNAVAILABLE, w.status(), "any failure, not only Mirror's");
+		assertEquals("The stream was interrupted", w.statusDetail());
+		assertEquals(null, source().statusDetail(), "nothing ended: no detail");
+	}
+
 	@Test
 	void framesAndPatchesReachTheSinkAndAreAcknowledged() {
 		welcome(true);
