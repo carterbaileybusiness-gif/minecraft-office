@@ -116,6 +116,9 @@ Only the owner can resize, change settings or remove a hologram **(my call)**.
   on Minecraft's window), so there is no Minecraft-inside-Minecraft.
 - Zooming into a Mirror hologram: camera zoom animation, then Minecraft steps aside (hidden/minimized) so the player uses their
   real desktop natively; double-tap Esc (global hotkey) brings Minecraft back and zooms out.
+- **Model (Carter):** Minecraft is on the real screen (monitor 1); holograms are the other monitors. The player's **first**
+  hologram defaults to Mirror (everything except Minecraft); each **additional** hologram defaults to **Extend** (a new extra
+  monitor, like plugging in monitor #3, #4).
 - Settings offer Mirror / Extend / Window. This supersedes the earlier "no mirror main screen" call in 5.4.
 
 ## 6. How the screens work (architecture)
