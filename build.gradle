@@ -119,10 +119,10 @@ publishing {
 	}
 }
 
-// CI (Linux, Mesa llvmpipe under xvfb): force OpenGL so Minecraft never probes Vulkan.
-if (System.getenv('CI')) {
+// CI: pick the graphics backend (opengl | vulkan | default) for the client gametest via env.
+if (System.getenv('OFFICE_GRAPHICS_BACKEND')) {
 	loom.runs.matching { it.name == 'clientGameTest' }.configureEach {
-		programArgs '--graphicsBackend', 'opengl'
+		programArgs '--graphicsBackend', System.getenv('OFFICE_GRAPHICS_BACKEND')
 	}
 }
 
