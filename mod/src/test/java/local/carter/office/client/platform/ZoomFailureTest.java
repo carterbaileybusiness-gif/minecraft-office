@@ -20,6 +20,7 @@ class ZoomFailureTest {
 	void zoomInThatCannotBeSentIsAFailure() {
 		assertEquals(ZoomFailure.NO_HELPER, ZoomFailure.forZoomIn(false, 7, false));
 		assertEquals(ZoomFailure.NOT_READY, ZoomFailure.forZoomIn(true, 0, false), "no capture surface for the hologram");
+		assertEquals(ZoomFailure.NOT_READY, ZoomFailure.forZoomIn(true, 0, true), "surface 0 is never a zoom, whatever was sent");
 		assertEquals(ZoomFailure.NOT_READY, ZoomFailure.forZoomIn(true, 7, false), "send refused");
 		assertNull(ZoomFailure.forZoomIn(true, 7, true));
 	}
