@@ -155,6 +155,17 @@ fi
 
 info "mods folder has $(ls "$GAME/mods"/*.jar 2>/dev/null | wc -l | tr -d ' ') jars in total"
 
+# ---- 4b. macOS fullscreen: never the exclusive kind ------------------------
+# Sodium switches Minecraft to *exclusive* fullscreen on first launch on any non-Windows system. On a Mac that is a
+# display-capturing window with no title bar, no green button and no menu bar: the only way out is the F11 key, which on
+# a MacBook is Volume Down (fn+F11 is often "Show Desktop"). Use macOS's normal fullscreen instead; when the switch is
+# made, the next start is windowed once, so a game left stuck in exclusive fullscreen comes back as a window.
+OPTS="$GAME/options.txt"
+if [ -f "$OPTS" ] && grep -q '^exclusiveFullscreen:true' "$OPTS"; then
+  /usr/bin/sed -i '' -e 's/^exclusiveFullscreen:true$/exclusiveFullscreen:false/' -e 's/^fullscreen:true$/fullscreen:false/' "$OPTS"
+  info "options.txt: exclusive fullscreen off (starts windowed; fn+F11 or Options > Video Settings > Fullscreen gives macOS fullscreen)"
+fi
+
 if [ "$DRY" = 1 ]; then
   say "Dry run done - stopping before launch."
   info "instance: $INST"
@@ -178,13 +189,27 @@ game_pid() {
   ps -axo pid=,command= | awk -v me="$$" '/minecraft-office-test/ && /java/ && !/awk/ && !/prismlauncher/ && $1 != me {print $1; exit}'
 }
 
+# Minecraft's window is up: its log (rotated on start, so newer than the launch) says the SDL window was created.
+LAUNCH_MARK="$(mktemp -t minecraft-office-launch)"
+window_up() {
+  [ "$GAME/logs/latest.log" -nt "$LAUNCH_MARK" ] && grep -q 'Created window using SDL' "$GAME/logs/latest.log" 2>/dev/null
+}
+# This Terminal window steps aside (minimise / restore) with xterm escape codes: no AppleScript, no Automation prompt.
+in_terminal() { [ "${TERM_PROGRAM:-}" = "Apple_Terminal" ] && [ -t 1 ]; }
+MINIMISED=0
+
 say "Launching Minecraft Office via Prism (sign in with Microsoft if it asks)"
 "$PRISM_BIN" --launch "$ID" >/dev/null 2>&1 &
 PRISM_PID=$!
-start=$SECONDS; seen=0; told=0
+start=$SECONDS; seen=0; told=0; fronted=0
 while :; do
   if [ -n "$(game_pid)" ]; then
     if [ "$seen" = 0 ]; then seen=1; info "game is running - agents stay paused until you quit it"; fi
+    if [ "$fronted" = 0 ] && window_up; then
+      fronted=1
+      info ">>> Minecraft's window is open. If keys or mouse look don't reach it, click the Minecraft window once. <<<"
+      if in_terminal; then sleep 1; printf '\033[2t'; MINIMISED=1; fi
+    fi
   else
     [ "$seen" = 1 ] && break
     kill -0 "$PRISM_PID" 2>/dev/null || break
@@ -192,6 +217,8 @@ while :; do
   fi
   sleep 3
 done
+rm -f "$LAUNCH_MARK"
+[ "$MINIMISED" = 1 ] && printf '\033[1t'
 say "Game closed - releasing lock. Agents may resume."
 release_lock
 sleep 2

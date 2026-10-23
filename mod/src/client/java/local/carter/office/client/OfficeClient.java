@@ -6,6 +6,7 @@ import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.platform.Platform;
+import local.carter.office.client.platform.StartupFocus;
 import local.carter.office.client.render.HologramRenderer;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.client.zoom.ZoomClient;
@@ -33,6 +34,8 @@ public class OfficeClient implements ClientModInitializer {
 		// Windows (beta) = window list + zoom via Win32, Window-mode placement default, zoom undone on CLIENT_STOPPING;
 		// otherwise none. Only the Mac platform touches the helper; only Windows loads the webrtc natives.
 		Platform.current().register();
+		// Mac: bring the game to the front once at startup (a script-launched java process starts behind the Terminal).
+		StartupFocus.register();
 		// Own holograms' live screens: platform capture (Mac helper / Windows JavaDesktopSource), or the test pattern
 		// with -Doffice.testPattern=true. The owner's placeholder look comes from each source's status().
 		OwnScreens.register();

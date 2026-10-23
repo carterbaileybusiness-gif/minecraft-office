@@ -24,6 +24,8 @@ final class MacApp {
 		Pointer objc_msgSend(Pointer receiver, Pointer selector);
 
 		Pointer objc_msgSend(Pointer receiver, Pointer selector, Pointer arg);
+
+		Pointer objc_msgSend(Pointer receiver, Pointer selector, boolean arg);
 	}
 
 	interface LibC extends Library {
@@ -31,6 +33,37 @@ final class MacApp {
 	}
 
 	private MacApp() {}
+
+	/**
+	 * Asks macOS to make Minecraft the active app ({@code [NSApp activate]} on macOS 14+, else
+	 * {@code activateIgnoringOtherApps:YES}). Only activates; never touches the window's frame or fullscreen state. Used
+	 * by {@link StartupFocus}. Main thread only (does nothing elsewhere). Never throws.
+	 */
+	static void activate() {
+		if (!Platform.isMac()) {
+			return;
+		}
+		try {
+			LibC libc = Native.load("c", LibC.class);
+			if (libc.pthread_main_np() != 1) {
+				return;
+			}
+			ObjC objc = Native.load("objc", ObjC.class);
+			Pointer app = objc.objc_msgSend(objc.objc_getClass("NSApplication"), objc.sel_registerName("sharedApplication"));
+			if (app == null) {
+				return;
+			}
+			Pointer activate = objc.sel_registerName("activate");
+			Pointer responds = objc.objc_msgSend(app, objc.sel_registerName("respondsToSelector:"), activate);
+			if (responds != null && (Pointer.nativeValue(responds) & 0xFF) != 0) {
+				objc.objc_msgSend(app, activate);
+			} else {
+				objc.objc_msgSend(app, objc.sel_registerName("activateIgnoringOtherApps:"), true);
+			}
+		} catch (Throwable e) {
+			LOGGER.debug("MacApp: couldn't activate Minecraft: {}", e.toString());
+		}
+	}
 
 	/** Unhides (and so activates) Minecraft if it is hidden. True if it was hidden. Never throws. */
 	static boolean unhideIfHidden() {
