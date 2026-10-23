@@ -119,6 +119,13 @@ publishing {
 	}
 }
 
+// CI (Linux, Mesa llvmpipe under xvfb): force OpenGL so Minecraft never probes Vulkan.
+if (System.getenv('CI')) {
+	loom.runs.matching { it.name == 'clientGameTest' }.configureEach {
+		programArgs '--graphicsBackend', 'opengl'
+	}
+}
+
 // Loom registers runGameTest / runClientGameTest; expose the spellings used by CI and docs too.
 tasks.register('runGametest') {
 	group = 'verification'

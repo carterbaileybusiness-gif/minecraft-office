@@ -23,13 +23,35 @@ jobs:
         run: chmod +x ./gradlew
       - name: build, unit tests, server gametests
         run: ./gradlew build test runGametest
-      - name: install xvfb (Linux client gametest)
+      - name: install xvfb + Mesa software GL (Linux client gametest)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0 mesa-utils
       - name: client gametests (Linux only, virtual display)
         if: runner.os == 'Linux'
-        timeout-minutes: 15
-        run: xvfb-run ./gradlew runClientGametest
+        timeout-minutes: 12
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          set -o pipefail
+          # Fail fast: if Minecraft cannot create a graphics backend it otherwise hangs until the step timeout.
+          (
+            for _ in $(seq 1 120); do
+              sleep 5
+              if grep -qE "Failed to create backend|No supported graphics backend" client-gametest.log 2>/dev/null; then
+                echo "::error::Minecraft could not create a graphics backend; killing the client"
+                sleep 5
+                pkill -f net.fabricmc.devlaunchinjector || true
+                exit 0
+              fi
+            done
+          ) &
+          watchdog=$!
+          rc=0
+          xvfb-run -a -s "-screen 0 1920x1080x24 +extension GLX +render -noreset" \
+            ./gradlew runClientGametest --no-daemon 2>&1 | tee client-gametest.log || rc=$?
+          kill "$watchdog" 2>/dev/null || true
+          exit "$rc"
       - name: store reports
         if: failure()
         uses: actions/upload-artifact@v4
@@ -41,6 +63,7 @@ jobs:
             build/run/clientGameTest/screenshots/
             build/run/clientGameTest/logs/
             build/run/gameTest/logs/
+            client-gametest.log
           if-no-files-found: ignore
       - name: capture build artifacts
         if: matrix.os == 'ubuntu-latest'
