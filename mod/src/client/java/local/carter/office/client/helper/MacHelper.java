@@ -31,6 +31,7 @@ import local.carter.office.client.helper.HelperProtocol.ListWindows;
 import local.carter.office.client.helper.HelperProtocol.Message;
 import local.carter.office.client.helper.HelperProtocol.Patch;
 import local.carter.office.client.helper.HelperProtocol.RemoveDisplay;
+import local.carter.office.client.helper.HelperProtocol.RequestPermissions;
 import local.carter.office.client.helper.HelperProtocol.Welcome;
 import local.carter.office.client.helper.HelperProtocol.WindowInfo;
 import local.carter.office.client.helper.HelperProtocol.Windows;
@@ -376,6 +377,11 @@ public final class MacHelper implements HelperConnection.Listener {
 		return send(new ZoomOut());
 	}
 
+	/** Asks the helper to show macOS's prompts for missing permissions (it answers with a fresh WELCOME). */
+	public boolean requestPermissions() {
+		return send(new RequestPermissions());
+	}
+
 	// ---------------------------------------------------------------- HelperConnection.Listener (connection thread)
 
 	@Override
@@ -437,6 +443,7 @@ public final class MacHelper implements HelperConnection.Listener {
 					clientThread.execute(r);
 				}
 			}
+			case Welcome w -> permissionsChanged(w);
 			case HelperError e -> {
 				LOGGER.warn("Office helper error {}: {}", e.code(), e.message());
 				for (Consumer<HelperError> l : errorListeners) {
@@ -445,6 +452,23 @@ public final class MacHelper implements HelperConnection.Listener {
 			}
 			default -> LOGGER.debug("Office helper: ignoring {}", m.getClass().getSimpleName());
 		}
+	}
+
+	/**
+	 * A WELCOME after the handshake: a permission changed while connected (the helper re-checks every 2 s). A new
+	 * Screen Recording grant restarts the captures that had ended with "no permission".
+	 */
+	private void permissionsChanged(final Welcome w) {
+		Welcome old = welcome;
+		welcome = w;
+		LOGGER.info("Office helper permissions now: screen recording {}, accessibility {}", w.screenRecording(), w.accessibility());
+		if (w.screenRecording() && (permissionDenied || old == null || !old.screenRecording())) {
+			permissionDenied = false;
+			for (MacHelperSource s : attached) {
+				s.permissionGranted();
+			}
+		}
+		fireStatus();
 	}
 
 	@Override
