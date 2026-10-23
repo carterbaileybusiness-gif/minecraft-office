@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  helper:
+    name: Mac helper (Swift)
+    runs-on: macos-15
+    env:
+      OFFICE_HELPER_NO_SIGN: "1"   # signing only ever happens on Carter's Mac
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test and build OfficeHelper.app
+        run: bash helper-mac/check.sh && bash helper-mac/build.sh
+      - name: Protocol fixtures are committed and current
+        run: git diff --exit-code -- helper-mac/Tests/fixtures

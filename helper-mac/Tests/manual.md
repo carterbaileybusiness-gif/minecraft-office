@@ -1,0 +1,100 @@
+# OfficeHelper manual checks (Carter's Mac)
+
+These need a person: Screen Recording and Accessibility can only be granted by clicking in System Settings, and
+zoom behaviour needs eyes and hands. Everything else is automated (`check.sh`) or was verified from the terminal
+(see "Already verified" at the end).
+
+All steps run from the repo root. `devclient.py` stands in for the mod; it prints every message it receives and
+answers each FRAME/PATCH with READY. The helper quits when the client disconnects, so each step launches it again.
+
+```
+bash scripts/heavy.sh bash helper-mac/build.sh      # signed with "Minecraft Office Helper"
+alias helper='open -g helper-mac/build/OfficeHelper.app && sleep 1'
+alias dev='python3 -I helper-mac/Tools/devclient.py'
+```
+
+## 0. Grant permissions once
+
+1. `helper; dev list sleep 2`
+   - Expected: macOS asks to allow **OfficeHelper** to record the screen (Screen Recording). Click **Open System
+     Settings** and turn **OfficeHelper** on in Privacy & Security › Screen & System Audio Recording.
+2. `helper; dev create 1 1920 1080 capture 1 display 1 1280 5 zoomin 1 0 0 1440 900 sleep 1 zoomout`
+   - Expected: macOS asks for Accessibility for OfficeHelper. Turn it on in Privacy & Security › Accessibility.
+3. `helper; dev sleep 1` → first line `<- WELCOME {"accessibility": true, "screenRecording": true, "version": 1}`.
+4. Rebuild (`bash scripts/heavy.sh bash helper-mac/build.sh`) and repeat step 3.
+   - Expected: still both `true` (the persistent signature keeps the grants).
+
+If a grant shows on but WELCOME says `false`, reset only this app:
+`tccutil reset ScreenCapture local.carter.office-helper` / `tccutil reset Accessibility local.carter.office-helper`,
+then grant again.
+
+## 1. Virtual display in System Settings
+
+`helper; dev create 1 1920 1080 sleep 20` and open System Settings › Displays while it sleeps.
+- Expected: a display named **Office Display 1** (1920 × 1080) next to the built-in display.
+- When the client exits (after 20 s): the display disappears within 3 s and the helper quits.
+
+## 2. Display capture (Screen Recording)
+
+`helper; dev create 1 1920 1080 capture 1 display 1 1280 5 sleep 5`
+- Expected: `<- FRAME surface 1 gen N 1280x720 (3686420 bytes)` first, then mostly `PATCH` lines (only changed
+  regions) at up to 5 per second while something moves on Office Display 1 (drag a Finder window onto it during the
+  sleep). The cursor is visible in captured frames.
+- Wrong-display guard: the FRAME size is 1280 × 720 (from the 1920 × 1080 virtual display), never the built-in
+  display's aspect (2560 × 1600 → 1280 × 800).
+
+## 3. Window capture and "window closed"
+
+1. Open TextEdit with a new document. `helper; dev list` → note the TextEdit `windowKey`
+   (e.g. `com.apple.TextEdit|1234`).
+2. `helper; dev capture 2 window com.apple.TextEdit|1234 1280 5 sleep 15` (quote the key in zsh:
+   `'com.apple.TextEdit|1234'`). Type in TextEdit during the sleep.
+   - Expected: FRAME then PATCH lines while typing.
+3. Close the TextEdit window (don't save) before the sleep ends.
+   - Expected: within about 1 s `<- ENDED {"reason": "window closed", "surface": 2}`.
+
+## 4. Zoom into a display: cursor warp and clamp
+
+`helper; dev create 1 1920 1080 capture 1 display 1 1280 5 sleep 1 zoomin 1 0 0 1440 900 sleep 10 zoomout sleep 1`
+- Expected on `zoomin`: the pointer jumps off the built-in screen onto Office Display 1 (its centre). Moving the
+  mouse hard toward the built-in display does not leave Office Display 1 (it is pulled back at the edge).
+  Frames arrive faster (up to 30 per second) while zoomed.
+- On `zoomout`: the pointer returns to where it was before the zoom and moves freely again.
+- Note: Office Display 1 is not a physical screen, so the pointer is invisible while it is held there. It is always
+  released when the client ends (the helper quits), so the longest it can stay trapped is the `sleep`. Without
+  Accessibility the pointer is only moved there, never held (the exit hotkey could not fire).
+
+## 5. Exit hotkey (Accessibility)
+
+`helper; dev create 1 1920 1080 capture 1 display 1 1280 5 sleep 1 zoomin 1 0 0 1440 900 sleep 15`
+- Press **Esc** once: nothing happens (the app in front still gets that Esc).
+- Press **Esc** twice quickly (within about a third of a second):
+  `<- EXIT_ZOOM {}` appears and the pointer is released and returns to where it was. (With the real mod, Minecraft
+  is also brought to the front; the dev client is not an app, so nothing is activated here.)
+- Repeat the command and instead press **Control + Option + Command + Esc**: same result.
+- Two slow presses (about a second apart) do not exit; holding Esc down (auto-repeat) does not exit.
+
+## 6. Window placement on zoom (Accessibility)
+
+1. Open a TextEdit window somewhere small; `helper; dev list` → note its key.
+2. `helper; dev capture 2 window 'com.apple.TextEdit|1234' 1280 5 sleep 1 zoomin 2 100 100 1000 700 sleep 8 zoomout sleep 2`
+   - Expected on `zoomin`: TextEdit comes to the front and its window moves/resizes to x 100, y 100, 1000 × 700
+     points (top-left origin). A new FRAME (new generation) follows at the new size within about 1 s.
+   - On `zoomout`: the window goes back to its original position and size.
+3. Repeat and press Esc twice during the sleep instead of waiting for `zoomout`: `EXIT_ZOOM`, window restored.
+4. Repeat and close the TextEdit window while zoomed: `ENDED {"reason":"window closed"}` then `EXIT_ZOOM`.
+
+## 7. With the mod (after Task 9)
+
+Place an Extend hologram → "Office Display 1" appears in System Settings › Displays; quit Minecraft → it disappears
+within 3 s and OfficeHelper is no longer running (`pgrep OfficeHelper` prints nothing).
+
+## Already verified from the terminal (no permissions needed)
+
+- CREATE_DISPLAY slot 1 → DISPLAY in ~0.4 s; `system_profiler SPDisplaysDataType` lists "Office Display 1"
+  (1920 × 1080); slots 1–4 with all three shapes at once.
+- REMOVE_DISPLAY → display offline in 0.07–0.12 s.
+- Client disconnect → helper quits, displays gone. `kill -9` of the helper → displays gone within 0.5 s.
+  SIGTERM → displays removed and helper quits.
+- Wrong token → connection closed; slot 0 / 5 → `ERROR bad_slot`; 1366 × 768 → `ERROR bad_size`.
+- No mod connection within 120 s → helper quits by itself.

@@ -1,0 +1,51 @@
+import Foundation
+
+enum HotkeyLogicTests {
+    static let esc: UInt16 = 53
+
+    static func runAll() {
+        run("double Esc within 350 ms exits") {
+            var d = ExitChordDetector()
+            expect(!d.keyDown(keyCode: esc, modifiers: [], time: 10.0, isRepeat: false), "first Esc alone does nothing")
+            expect(d.keyDown(keyCode: esc, modifiers: [], time: 10.35, isRepeat: false), "second Esc at 350 ms exits")
+            // A third press starts over rather than chaining.
+            expect(!d.keyDown(keyCode: esc, modifiers: [], time: 10.5, isRepeat: false), "detector resets after firing")
+        }
+
+        run("slow, repeated, or interrupted Esc does not exit") {
+            var d = ExitChordDetector()
+            _ = d.keyDown(keyCode: esc, modifiers: [], time: 1.0, isRepeat: false)
+            expect(!d.keyDown(keyCode: esc, modifiers: [], time: 1.351, isRepeat: false), "351 ms is too slow")
+            expect(d.keyDown(keyCode: esc, modifiers: [], time: 1.6, isRepeat: false), "but that press starts a new pair")
+
+            var r = ExitChordDetector()
+            _ = r.keyDown(keyCode: esc, modifiers: [], time: 2.0, isRepeat: false)
+            expect(!r.keyDown(keyCode: esc, modifiers: [], time: 2.05, isRepeat: true), "auto-repeat is not a second tap")
+
+            var i = ExitChordDetector()
+            _ = i.keyDown(keyCode: esc, modifiers: [], time: 3.0, isRepeat: false)
+            _ = i.keyDown(keyCode: 0, modifiers: [], time: 3.1, isRepeat: false) // "a"
+            expect(!i.keyDown(keyCode: esc, modifiers: [], time: 3.2, isRepeat: false), "another key between breaks the pair")
+
+            var m = ExitChordDetector()
+            _ = m.keyDown(keyCode: esc, modifiers: [.shift], time: 4.0, isRepeat: false)
+            expect(!m.keyDown(keyCode: esc, modifiers: [], time: 4.1, isRepeat: false), "modified Esc is not a tap")
+        }
+
+        run("Ctrl+Alt+Cmd+Esc always exits") {
+            var d = ExitChordDetector()
+            expect(d.keyDown(keyCode: esc, modifiers: [.control, .option, .command], time: 5, isRepeat: false), "fallback chord")
+            expect(d.keyDown(keyCode: esc, modifiers: [.control, .option, .command, .shift], time: 9, isRepeat: false), "extra shift ok")
+            expect(!d.keyDown(keyCode: esc, modifiers: [.control, .command], time: 12, isRepeat: false), "missing option")
+        }
+
+        run("cursor clamp keeps the pointer inside the display") {
+            let bounds = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+            expect(CursorClamp.clamp(CGPoint(x: 2000, y: 500), to: bounds) == nil, "inside: no warp")
+            expectEqual(CursorClamp.clamp(CGPoint(x: 100, y: 500), to: bounds), CGPoint(x: 1440, y: 500))
+            expectEqual(CursorClamp.clamp(CGPoint(x: 4000, y: -5), to: bounds), CGPoint(x: 3359, y: 0))
+            expectEqual(CursorClamp.clamp(CGPoint(x: 3360, y: 1080), to: bounds), CGPoint(x: 3359, y: 1079))
+            expectEqual(CursorClamp.center(of: bounds), CGPoint(x: 2400, y: 540))
+        }
+    }
+}
