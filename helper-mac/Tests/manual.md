@@ -63,6 +63,15 @@ then grant again.
 - Note: Office Display 1 is not a physical screen, so the pointer is invisible while it is held there. It is always
   released when the client ends (the helper quits), so the longest it can stay trapped is the `sleep`. Without
   Accessibility the pointer is only moved there, never held (the exit hotkey could not fire).
+- Safety release (secure input): in Terminal turn on **Terminal › Secure Keyboard Entry**, keep Terminal in front,
+  and run the command again. Expected: the pointer jumps to Office Display 1 but is not held (it can be moved back
+  at once), and `~/Library/Application Support/Minecraft Office/helper.log` shows
+  `cursor clamp released: secure event input is on`. `zoomout` still returns the pointer to its starting place.
+  Turn Secure Keyboard Entry off again afterwards.
+- Safety release (Accessibility revoked): run the command, then during the sleep switch OfficeHelper off in
+  Privacy & Security › Accessibility (use the keyboard or wait for the sleep if the pointer is held).
+  Expected: within about 0.1 s the pointer is free; the log shows `cursor clamp released: Accessibility is not
+  granted`. Switch it back on afterwards.
 
 ## 5. Exit hotkey (Accessibility)
 

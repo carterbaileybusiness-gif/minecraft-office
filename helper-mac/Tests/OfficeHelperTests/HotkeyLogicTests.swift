@@ -47,5 +47,34 @@ enum HotkeyLogicTests {
             expectEqual(CursorClamp.clamp(CGPoint(x: 3360, y: 1080), to: bounds), CGPoint(x: 3359, y: 1079))
             expectEqual(CursorClamp.center(of: bounds), CGPoint(x: 2400, y: 540))
         }
+
+        run("clamp releases when the exit hotkey can no longer fire") {
+            // Secure Event Input (a password field) hides keys from the global monitor: release at once.
+            var secure = ClampGuard()
+            expect(secure.shouldRelease(secureInput: true, accessibilityTrusted: { true }), "secure input releases")
+
+            // Accessibility revoked: noticed on the first tick...
+            var revokedAtStart = ClampGuard()
+            expect(revokedAtStart.shouldRelease(secureInput: false, accessibilityTrusted: { false }), "untrusted releases")
+
+            // ...and within one check interval (~100 ms at 120 Hz) when revoked mid-zoom, without asking every tick.
+            var g = ClampGuard()
+            var asks = 0
+            var trusted = true
+            var releasedAt: Int?
+            for tick in 0..<60 {
+                if tick == 20 { trusted = false }
+                if g.shouldRelease(secureInput: false, accessibilityTrusted: { asks += 1; return trusted }) { releasedAt = tick; break }
+            }
+            expect(releasedAt != nil, "revocation noticed")
+            expect((releasedAt ?? 99) - 20 < ClampGuard.permissionCheckInterval, "noticed within one interval, got tick \(releasedAt ?? -1)")
+            expect(asks <= 20 / ClampGuard.permissionCheckInterval + 2, "permission not polled every tick (\(asks) asks)")
+
+            // Trusted and no secure input: keeps holding.
+            var ok = ClampGuard()
+            var held = true
+            for _ in 0..<240 { if ok.shouldRelease(secureInput: false, accessibilityTrusted: { true }) { held = false } }
+            expect(held, "holds while the hotkey works")
+        }
     }
 }

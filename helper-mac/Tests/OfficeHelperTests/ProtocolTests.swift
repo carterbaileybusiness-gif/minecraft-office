@@ -155,6 +155,8 @@ enum ProtocolTests {
         }
 
         run("socket: bad token closes, good token gets WELCOME") { try socketTests() }
+        run("socket: a second client is refused while one is connected") { try secondClientTest() }
+        run("socket: a closed client's fd is not reused under a pending write") { try fdReuseTest() }
 
         if let fixtures {
             run("golden fixtures written") {
@@ -245,5 +247,77 @@ enum ProtocolTests {
         expect(hellos.wait(timeout: .now() + 5) == .success, "onConnect called")
         expectEqual(helloPid, 4242, "mcPid passed on")
         close(good)
+    }
+
+    static func makeServer(_ tag: String) throws -> (HelperServer, URL, String) {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("oh-\(tag)-\(getpid())", isDirectory: true)
+        let server = HelperServer(directory: directory, callbackQueue: DispatchQueue(label: "test-\(tag)"))
+        try server.start()
+        return (server, directory, try String(contentsOf: server.tokenURL, encoding: .utf8))
+    }
+
+    /// A second authenticated HELLO must not take over: the session's captures, zoom and displays belong to the
+    /// first connection, and a new client must never be handed that session's (possibly private) frames.
+    static func secondClientTest() throws {
+        let (server, directory, token) = try makeServer("second")
+        var connects = 0
+        let lock = NSLock()
+        server.onConnect = { _, _ in lock.lock(); connects += 1; lock.unlock() }
+        defer { server.stop(); try? FileManager.default.removeItem(at: directory) }
+
+        let first = connect(server.socketURL.path)
+        try send(first, .hello(HelloPayload(token: token, version: 1, mcPid: 1)))
+        if case .welcome? = try receive(first) {} else { expect(false, "first client gets WELCOME") }
+
+        let second = connect(server.socketURL.path)
+        try send(second, .hello(HelloPayload(token: token, version: 1, mcPid: 2)))
+        let reply = try receive(second)
+        if case .error(let e)? = reply { expectEqual(e.code, "busy", "second client error code") }
+        else { expect(false, "second client: ERROR busy expected, got \(String(describing: reply))") }
+        let afterBusy = try receive(second)
+        expect(afterBusy == nil, "second client closed")
+        close(second)
+
+        // The first connection is untouched and still receives messages.
+        server.send(.exitZoom)
+        let stillFirst = try receive(first)
+        expectEqual(stillFirst, .exitZoom, "first client still connected")
+        lock.lock(); expectEqual(connects, 1, "onConnect only for the first client"); lock.unlock()
+        close(first)
+    }
+
+    /// The writer reads the client fd, then the client disconnects before the bytes go out. The reader must not
+    /// close that fd while the write is pending, or the number could be reused (by a new socket or a log file)
+    /// and receive frame pixels. The hook opens files after the disconnect: none may get the server's fd number.
+    static func fdReuseTest() throws {
+        let (server, directory, token) = try makeServer("fd")
+        let disconnected = DispatchSemaphore(value: 0)
+        server.onDisconnect = { disconnected.signal() }
+        defer { server.stop(); try? FileManager.default.removeItem(at: directory) }
+
+        let client = connect(server.socketURL.path)
+        try send(client, .hello(HelloPayload(token: token, version: 1, mcPid: 1)))
+        if case .welcome? = try receive(client) {} else { expect(false, "WELCOME") }
+
+        let hookDone = DispatchSemaphore(value: 0)
+        let armed = NSLock()
+        var once = true
+        var sawDisconnect = false
+        var reused = true
+        server.beforeWriteForTesting = { fd in
+            armed.lock(); let go = once; once = false; armed.unlock()
+            guard go else { return }
+            close(client) // the mod goes away while this write is pending
+            sawDisconnect = disconnected.wait(timeout: .now() + 3) == .success
+            var opened: [Int32] = []
+            for _ in 0..<64 { let f = open("/dev/null", O_RDONLY); if f >= 0 { opened.append(f) } }
+            reused = opened.contains(fd)
+            for f in opened { close(f) }
+            hookDone.signal()
+        }
+        server.send(.exitZoom)
+        expect(hookDone.wait(timeout: .now() + 5) == .success, "write hook ran")
+        expect(sawDisconnect, "reader saw the disconnect while the write was pending")
+        expect(!reused, "server fd stayed open until the pending write finished (not reusable)")
     }
 }

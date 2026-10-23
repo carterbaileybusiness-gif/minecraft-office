@@ -54,9 +54,11 @@ length=37    67  surface=7    generation=3             width=2      height=2    
 
 - HELLO must be the first message, within 3 s, with the token from `helper.token` and version 1. Wrong token or a
   different first message → the socket is closed with no reply. Wrong version → `ERROR {"code":"version"}`, then closed.
+  A second authenticated client while one is connected → `ERROR {"code":"busy"}`, then closed (the first stays).
 - CAPTURE lets the first frame go without READY; after that each FRAME/PATCH waits for `READY {surface}`.
 - ENDED reasons: `"window closed"`, `"display removed"`, `"no display"`, `"no permission"` (Screen Recording missing),
   `"capture failed: <detail>"`.
-- ERROR codes: `bad_slot`, `bad_size`, `display_failed`, `not_found`, `no_accessibility`, `bad_request`, `version`.
+- ERROR codes: `bad_slot`, `bad_size`, `display_failed`, `not_found`, `no_accessibility`, `bad_request`, `version`,
+  `busy`.
 - `windowKey` = `"<bundleId>|<CGWindowID>"` (id after the last `|`; bundle id may be empty).
 - `mcWindowFrame` and WINDOWS `w`/`h` are global points, top-left origin (Quartz window coordinates).

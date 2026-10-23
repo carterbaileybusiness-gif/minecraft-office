@@ -21,7 +21,7 @@ mkdir -p "$app/Contents/MacOS"
 swiftc -swift-version 5 -O -target arm64-apple-macos14.0 \
   -import-objc-header "$here/Sources/OfficeHelper/CGVirtualDisplay.h" \
   -framework AppKit -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo \
-  -framework Accelerate -framework ApplicationServices -framework CoreGraphics \
+  -framework Accelerate -framework ApplicationServices -framework CoreGraphics -framework Carbon \
   "$here"/Sources/OfficeHelper/*.swift \
   -o "$app/Contents/MacOS/OfficeHelper"
 

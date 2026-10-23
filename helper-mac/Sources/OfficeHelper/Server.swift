@@ -22,6 +22,8 @@ final class HelperServer {
     var onDisconnect: (() -> Void)?
     /// Builds the WELCOME reply (called on the accept thread).
     var welcome: () -> WelcomePayload = { WelcomePayload(version: OfficeProtocol.version, screenRecording: false, accessibility: false) }
+    /// Test hook: runs on the writer queue after a write has picked its fd, before any byte is written.
+    var beforeWriteForTesting: ((Int32) -> Void)?
     /// Diagnostics only (never frame contents).
     var log: (String) -> Void = { _ in }
 
@@ -107,12 +109,23 @@ final class HelperServer {
             timeout = timeval(tv_sec: 0, tv_usec: 0)
             setsockopt(connection, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
+            // One mod per helper. A second client never takes over: the session's captures, zoom and displays
+            // belong to the first connection, and its (possibly private) frames must not reach anyone else.
             lock.lock()
-            let previous = client
-            client = connection; clientSession &+= 1; wants.removeAll(); pending.removeAll(); sentGeneration.removeAll()
+            let busy = client >= 0
+            if !busy {
+                client = connection; clientSession &+= 1; wants.removeAll(); pending.removeAll(); sentGeneration.removeAll()
+            }
             let session = clientSession
             lock.unlock()
-            if previous >= 0 { shutdown(previous, SHUT_RDWR) }
+            if busy {
+                log("refused second client pid \(pid): a mod is already connected")
+                if let bytes = try? Message.error(ErrorPayload(code: "busy", message: "another Minecraft is connected")).encode() {
+                    _ = Self.writeAll(connection, [bytes])
+                }
+                close(connection)
+                continue
+            }
             send(.welcome(welcome()))
             callbackQueue.async { self.onConnect?(hello, pid) }
             let readerThread = Thread { [weak self] in self?.readLoop(connection, session: session, reader: reader) }
@@ -156,7 +169,9 @@ final class HelperServer {
         let current = clientSession == session && client == fd
         if current { client = -1; wants.removeAll(); pending.removeAll() }
         lock.unlock()
-        close(fd)
+        // Close on the serial writer queue: a write that already picked this fd finishes first, so the number can't
+        // be reused (by a new socket or a log file) and receive frame bytes. Later writes see client == -1.
+        writer.async { close(fd) }
         if current { callbackQueue.async { [weak self] in self?.onDisconnect?() } }
     }
 
@@ -265,6 +280,7 @@ final class HelperServer {
     private func write(_ parts: [Data]) -> Bool {
         lock.lock(); let fd = client; lock.unlock()
         guard fd >= 0 else { return false }
+        beforeWriteForTesting?(fd)
         if Self.writeAll(fd, parts) { return true }
         shutdown(fd, SHUT_RDWR)
         return false
@@ -282,8 +298,12 @@ final class HelperServer {
     }
 
     func stop() {
-        lock.lock(); let fd = client; client = -1; let listen = listener; listener = -1; lock.unlock()
-        if fd >= 0 { shutdown(fd, SHUT_RDWR) }
+        lock.lock()
+        let fd = client; client = -1; let listen = listener; listener = -1
+        // Enqueued under the lock, so it runs before the reader's close (which the reader enqueues after taking
+        // the lock): the fd is still this connection's when it is shut down.
+        if fd >= 0 { writer.async { shutdown(fd, SHUT_RDWR) } }
+        lock.unlock()
         if listen >= 0 { close(listen); unlink(socketURL.path) }
         try? FileManager.default.removeItem(at: tokenURL)
     }

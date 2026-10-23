@@ -39,3 +39,17 @@ enum CursorClamp {
 
     static func center(of bounds: CGRect) -> CGPoint { CGPoint(x: bounds.midX, y: bounds.midY) }
 }
+
+/// Decides, each 120 Hz clamp tick, whether the cursor clamp must let go for good because the exit hotkey can no
+/// longer fire: Secure Event Input (a password field) hides keys from the global monitor, and without Accessibility
+/// the monitor sees nothing. Accessibility is re-checked every `permissionCheckInterval` ticks (about 100 ms).
+struct ClampGuard {
+    static let permissionCheckInterval = 12
+    private var ticks = 0
+
+    mutating func shouldRelease(secureInput: Bool, accessibilityTrusted: () -> Bool) -> Bool {
+        if secureInput { return true }
+        defer { ticks += 1 }
+        return ticks % Self.permissionCheckInterval == 0 && !accessibilityTrusted()
+    }
+}
