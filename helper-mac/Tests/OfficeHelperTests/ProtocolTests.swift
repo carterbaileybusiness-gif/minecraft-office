@@ -17,6 +17,7 @@ enum ProtocolTests {
         ("ready", .ready(SurfacePayload(surface: 7))),
         ("zoom_in", .zoomIn(ZoomInPayload(surface: 7, mcWindowFrame: WindowRect(x: 0, y: 25, w: 1440, h: 875)))),
         ("zoom_out", .zoomOut),
+        ("request_permissions", .requestPermissions),
         ("welcome", .welcome(WelcomePayload(version: 1, screenRecording: true, accessibility: false))),
         ("windows", .windows([
             WindowInfo(windowKey: "com.apple.Notes|4321", app: "Notes", title: "Groceries — List", w: 800, h: 600),
@@ -250,6 +251,12 @@ enum ProtocolTests {
         expectEqual(try receive(good), .welcome(WelcomePayload(version: 1, screenRecording: false, accessibility: false)), "WELCOME")
         expect(hellos.wait(timeout: .now() + 5) == .success, "onConnect called")
         expectEqual(helloPid, 4242, "mcPid passed on")
+        expectEqual(server.lastWelcome, WelcomePayload(version: 1, screenRecording: false, accessibility: false), "handshake WELCOME remembered")
+        // A permission granted while connected: the helper sends WELCOME again with the new values.
+        let granted = WelcomePayload(version: 1, screenRecording: true, accessibility: true)
+        server.sendWelcome(granted)
+        expectEqual(try receive(good), .welcome(granted), "WELCOME re-sent after a permission change")
+        expectEqual(server.lastWelcome, granted, "re-sent WELCOME remembered")
         close(good)
     }
 

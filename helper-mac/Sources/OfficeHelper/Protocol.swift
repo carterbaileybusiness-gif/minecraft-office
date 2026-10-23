@@ -52,6 +52,8 @@ enum OfficeProtocol {
 enum MessageType: UInt8, CaseIterable {
     // Mod → helper
     case hello = 1, listWindows = 2, createDisplay = 3, removeDisplay = 4, capture = 5, stop = 6, ready = 7, zoomIn = 8, zoomOut = 9
+    /// Ask macOS for the missing permissions now (native prompts); the helper answers with a fresh WELCOME.
+    case requestPermissions = 10
     // Helper → mod
     case welcome = 64, windows = 65, display = 66, frame = 67, patch = 68, ended = 69, exitZoom = 70, error = 71
 }
@@ -167,6 +169,7 @@ enum Message: Equatable {
     case ready(SurfacePayload)
     case zoomIn(ZoomInPayload)
     case zoomOut
+    case requestPermissions
     case welcome(WelcomePayload)
     case windows([WindowInfo])
     case display(DisplayPayload)
@@ -187,6 +190,7 @@ enum Message: Equatable {
         case .ready: return .ready
         case .zoomIn: return .zoomIn
         case .zoomOut: return .zoomOut
+        case .requestPermissions: return .requestPermissions
         case .welcome: return .welcome
         case .windows: return .windows
         case .display: return .display
@@ -212,7 +216,7 @@ enum Message: Equatable {
     func payload() throws -> Data {
         switch self {
         case .hello(let p): return try Self.json(p)
-        case .listWindows, .zoomOut, .exitZoom: return try Self.json(Empty())
+        case .listWindows, .zoomOut, .requestPermissions, .exitZoom: return try Self.json(Empty())
         case .createDisplay(let p): return try Self.json(p)
         case .removeDisplay(let p): return try Self.json(p)
         case .capture(let p): return try Self.json(p)
@@ -291,6 +295,7 @@ enum Message: Equatable {
         case .ready: return .ready(try decodeJSON(SurfacePayload.self, payload))
         case .zoomIn: return .zoomIn(try decodeJSON(ZoomInPayload.self, payload))
         case .zoomOut: return .zoomOut
+        case .requestPermissions: return .requestPermissions
         case .welcome: return .welcome(try decodeJSON(WelcomePayload.self, payload))
         case .windows: return .windows(try decodeJSON([WindowInfo].self, payload))
         case .display: return .display(try decodeJSON(DisplayPayload.self, payload))

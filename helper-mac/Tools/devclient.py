@@ -11,6 +11,7 @@ Steps (run in order; incoming messages are printed as they arrive):
   stop SURFACE               STOP
   zoomin SURFACE X Y W H     ZOOM_IN with mcWindowFrame
   zoomout                    ZOOM_OUT
+  permissions                REQUEST_PERMISSIONS (macOS prompts for what is missing), then a fresh WELCOME
   sleep SECONDS              wait (still printing incoming messages)
   displays                   print online display ids (CoreGraphics)
   uuid SLOT                  print the display UUID macOS uses to restore arrangement / window positions
@@ -31,7 +32,7 @@ DIR = os.path.expanduser("~/Library/Application Support/Minecraft Office")
 SOCK = os.path.join(DIR, "helper.sock")
 TOKEN = os.path.join(DIR, "helper.token")
 NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY", 5: "CAPTURE", 6: "STOP", 7: "READY",
-         8: "ZOOM_IN", 9: "ZOOM_OUT", 64: "WELCOME", 65: "WINDOWS", 66: "DISPLAY", 67: "FRAME", 68: "PATCH",
+         8: "ZOOM_IN", 9: "ZOOM_OUT", 10: "REQUEST_PERMISSIONS", 64: "WELCOME", 65: "WINDOWS", 66: "DISPLAY", 67: "FRAME", 68: "PATCH",
          69: "ENDED", 70: "EXIT_ZOOM", 71: "ERROR"}
 CODES = {v: k for k, v in NAMES.items()}
 
@@ -185,6 +186,8 @@ def main(argv):
             c.send("ZOOM_IN", {"surface": surface, "mcWindowFrame": {"x": x, "y": y, "w": w, "h": h}})
         elif step == "zoomout":
             c.send("ZOOM_OUT"); i += 1
+        elif step == "permissions":
+            c.send("REQUEST_PERMISSIONS"); i += 1
         elif step == "sleep":
             time.sleep(float(argv[i + 1])); i += 2
         elif step == "uuid":

@@ -215,6 +215,17 @@ public final class MacHelperSource implements CaptureSource {
 		update(false);
 	}
 
+	/** Screen Recording was granted while connected: a capture that ended with "no permission" starts again. */
+	public void permissionGranted() {
+		synchronized (lock) {
+			if (!noPermission) {
+				return;
+			}
+			noPermission = false;
+		}
+		update(false);
+	}
+
 	public void helperDisconnected() {
 		synchronized (lock) {
 			surface = 0;

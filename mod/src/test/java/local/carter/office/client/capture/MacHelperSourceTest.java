@@ -27,6 +27,7 @@ import local.carter.office.client.helper.HelperProtocol.Patch;
 import local.carter.office.client.helper.HelperProtocol.PixelRect;
 import local.carter.office.client.helper.HelperProtocol.Ready;
 import local.carter.office.client.helper.HelperProtocol.RemoveDisplay;
+import local.carter.office.client.helper.HelperProtocol.RequestPermissions;
 import local.carter.office.client.helper.HelperProtocol.Stop;
 import local.carter.office.client.helper.HelperProtocol.Welcome;
 import local.carter.office.client.helper.MacHelper;
@@ -287,6 +288,37 @@ class MacHelperSourceTest {
 		welcome(true);
 		assertEquals(HologramLook.OwnSource.READY, s.status());
 		assertTrue(last(Capture.class).surface() != surface);
+	}
+
+	@Test
+	void aLaterWelcomeUpdatesPermissionsWithoutARestart() {
+		helper.connected(new Welcome(1, false, false));
+		MacHelperSource s = source();
+		s.start(window(NOTES), 5, sink);
+		int surface = last(Capture.class).surface();
+		helper.message(new Ended(surface, "no permission"));
+		assertEquals(HologramLook.OwnSource.NEEDS_HELPER, s.status());
+		int captures = (int) sent.stream().filter(Capture.class::isInstance).count();
+
+		// Accessibility switched on in System Settings: the helper re-sends WELCOME on the same connection.
+		helper.message(new Welcome(1, false, true));
+		assertTrue(helper.welcome().accessibility());
+		assertEquals(MacHelper.Status.NO_PERMISSION, helper.status());
+		assertEquals(captures, (int) sent.stream().filter(Capture.class::isInstance).count(), "no capture without Screen Recording");
+
+		// Screen Recording granted too: status READY and the capture starts again, still on this connection.
+		helper.message(new Welcome(1, true, true));
+		assertEquals(MacHelper.Status.READY, helper.status());
+		assertEquals(HologramLook.OwnSource.READY, s.status());
+		assertTrue(last(Capture.class).surface() != surface);
+		assertTrue(channelOpen);
+	}
+
+	@Test
+	void requestPermissionsIsSentToTheHelper() {
+		welcome(false);
+		assertTrue(helper.requestPermissions());
+		assertInstanceOf(RequestPermissions.class, sent.get(sent.size() - 1));
 	}
 
 	@Test

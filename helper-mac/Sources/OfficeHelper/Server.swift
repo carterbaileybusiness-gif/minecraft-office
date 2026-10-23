@@ -22,6 +22,8 @@ final class HelperServer {
     var onDisconnect: (() -> Void)?
     /// Builds the WELCOME reply (called on the accept thread).
     var welcome: () -> WelcomePayload = { WelcomePayload(version: OfficeProtocol.version, screenRecording: false, accessibility: false) }
+    /// The WELCOME the current client last got (handshake or `sendWelcome`), so permission changes can be detected.
+    var lastWelcome: WelcomePayload? { lock.lock(); defer { lock.unlock() }; return sentWelcome }
     /// Test hook: runs on the writer queue after a write has picked its fd, before any byte is written.
     var beforeWriteForTesting: ((Int32) -> Void)?
     /// Diagnostics only (never frame contents).
@@ -32,6 +34,7 @@ final class HelperServer {
     private var listener: Int32 = -1
     private var client: Int32 = -1
     private var clientSession: UInt64 = 0
+    private var sentWelcome: WelcomePayload?
     private var wants = Set<Int>()
     /// Newest undelivered frame per surface and the regions changed since the last one sent.
     private var pending: [Int: (buffer: CVPixelBuffer, generation: UInt64, dirty: [CGRect]?)] = [:]
@@ -126,7 +129,7 @@ final class HelperServer {
                 close(connection)
                 continue
             }
-            send(.welcome(welcome()))
+            sendWelcome(welcome())
             callbackQueue.async { self.onConnect?(hello, pid) }
             let readerThread = Thread { [weak self] in self?.readLoop(connection, session: session, reader: reader) }
             readerThread.name = "OfficeHelper reader"
@@ -180,6 +183,12 @@ final class HelperServer {
     func send(_ message: Message) {
         guard let bytes = try? message.encode() else { log("could not encode \(message.type)"); return }
         writer.async { [weak self] in _ = self?.write([bytes]) }
+    }
+
+    /// Sends WELCOME (the handshake reply, or again later when a permission changed) and remembers it.
+    func sendWelcome(_ payload: WelcomePayload) {
+        lock.lock(); sentWelcome = payload; lock.unlock()
+        send(.welcome(payload))
     }
 
     /// The mod may receive one frame for this surface (READY, or a fresh CAPTURE).
