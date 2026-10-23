@@ -23,7 +23,8 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
 /**
  * Feeds the local player's own loaded holograms from capture sources: one {@link CaptureSource} + {@link ScreenTexture}
- * per hologram, keyed by hologram id, restarted when the hologram's {@link Target} changes and stopped when it unloads,
+ * per hologram, keyed by hologram id (texture id {@code office:screen/<hologramUuid>}, kept across restarts), restarted
+ * when the hologram's {@link Target} changes and stopped when it unloads,
  * changes owner, or the player disconnects. Client thread only.
  *
  * <p>Task 7: disabled unless {@code -Doffice.testPattern=true}, and then every own hologram shows a
@@ -90,12 +91,18 @@ public final class OwnScreens {
 			if (feed != null && feed.target().equals(target)) {
 				continue;
 			}
+			ScreenTexture texture;
 			if (feed != null) {
+				// same hologram, new target: keep the texture (stable id), drop the old picture until the new source's
+				// first frame arrives
 				feed.source().stop();
+				texture = feed.texture();
+				texture.clear();
+			} else {
+				texture = ScreenTexture.forHologram(id);
 			}
-			ScreenTexture texture = ScreenTexture.create("own");
 			CaptureSource source = factory.get();
-			ScreenTextureRegistry.register(id, texture); // clears the old texture, if any
+			ScreenTextureRegistry.register(id, texture);
 			FEEDS.put(id, new Feed(target, source, texture));
 			source.start(target, MAX_FPS, texture);
 		}

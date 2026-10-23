@@ -5,11 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
@@ -30,6 +36,24 @@ class ScreenTextureMathTest {
 		final List<int[]> allocations = new ArrayList<>();
 		final List<Write> writes = new ArrayList<>();
 		int frees;
+		boolean onRenderThread = true;
+		final List<Runnable> queued = new ArrayList<>();
+
+		@Override
+		public boolean canFreeNow() {
+			return onRenderThread;
+		}
+
+		@Override
+		public void runOnRenderThread(final Runnable task) {
+			queued.add(task);
+		}
+
+		void runQueued() {
+			List<Runnable> tasks = new ArrayList<>(queued);
+			queued.clear();
+			tasks.forEach(Runnable::run);
+		}
 
 		record Write(int level, int x, int y, int w, int h, byte[] data) {}
 
@@ -56,8 +80,11 @@ class ScreenTextureMathTest {
 		}
 	}
 
+	private static int serial;
+
+	/** A fake-GPU texture with its own id (one live texture per id). */
 	private static ScreenTexture texture(final FakeGpu gpu) {
-		return new ScreenTexture(Identifier.fromNamespaceAndPath("office", "screen/test"), gpu);
+		return new ScreenTexture(Identifier.fromNamespaceAndPath("office", "screen/test-" + serial++), gpu);
 	}
 
 	/** w*h RGBA where pixel (x, y) = (x, y, seed, 255). */
@@ -290,6 +317,190 @@ class ScreenTextureMathTest {
 		t.full(8, 6, solid(8, 6, 1, 1, 1));
 		t.patch(0, 0, 4, 4, ByteBuffer.allocate(4));
 		assertTrue(t.needsFullFrame());
+	}
+
+	// ---- fix round 1: no render-thread stalls, stable ids, off-thread clear ----
+
+	@Test
+	void prepareForRenderNeverWaitsForAProducerMidFrame() throws Exception {
+		FakeGpu gpu = new FakeGpu();
+		ScreenTexture t = texture(gpu);
+		t.full(1920, 1080, solid(1920, 1080, 1, 1, 1));
+		assertTrue(t.prepareForRender());
+		gpu.writes.clear();
+
+		CountDownLatch inside = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		t.setMidFullFrameHookForTest(() -> {
+			inside.countDown();
+			try {
+				release.await(10, TimeUnit.SECONDS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		Thread producer = new Thread(() -> t.full(1920, 1080, solid(1920, 1080, 2, 2, 2)), "test-producer");
+		producer.start();
+		try {
+			assertTrue(inside.await(10, TimeUnit.SECONDS), "producer reached the middle of its frame");
+			long start = System.nanoTime();
+			boolean drawable = assertTimeoutPreemptively(Duration.ofMillis(500), t::prepareForRender);
+			long ms = (System.nanoTime() - start) / 1_000_000;
+			assertTrue(drawable, "keeps drawing the previous frame (no flicker to CONNECTING)");
+			assertTrue(ms < 100, "prepareForRender returned in " + ms + " ms while the producer held the frame");
+			assertTrue(gpu.writes.isEmpty(), "nothing half-written was uploaded");
+		} finally {
+			release.countDown();
+			producer.join(10_000);
+		}
+		t.setMidFullFrameHookForTest(null);
+		assertTrue(t.prepareForRender());
+		assertArrayEquals(new int[] {2, 2, 2, 255}, px(gpu.level0().get(0), 0, 0), "the finished frame is uploaded next time");
+	}
+
+	@Test
+	void hologramTextureIdsAreStable() {
+		UUID id = UUID.fromString("12345678-1234-1234-1234-123456789abc");
+		assertEquals(Identifier.fromNamespaceAndPath("office", "screen/12345678-1234-1234-1234-123456789abc"), ScreenTexture.idFor(id));
+		assertEquals(ScreenTexture.idFor(id), ScreenTexture.idFor(UUID.fromString(id.toString())));
+	}
+
+	@Test
+	void offThreadClearQueuesTheFreeOnTheRenderThread() {
+		FakeGpu gpu = new FakeGpu();
+		ScreenTexture t = texture(gpu);
+		t.full(8, 6, solid(8, 6, 1, 1, 1));
+		assertTrue(t.prepareForRender());
+
+		gpu.onRenderThread = false; // e.g. a network thread
+		t.clear();
+		assertEquals(0, gpu.frees, "not freed off the render thread");
+		assertEquals(1, gpu.queued.size(), "free queued onto the render thread");
+		gpu.onRenderThread = true;
+		gpu.runQueued();
+		assertEquals(1, gpu.frees, "freed without any further prepareForRender");
+		gpu.runQueued();
+		assertEquals(1, gpu.frees);
+	}
+
+	@Test
+	void queuedFreeNeverFreesANewerAllocation() {
+		FakeGpu gpu = new FakeGpu();
+		ScreenTexture t = texture(gpu);
+		t.full(8, 6, solid(8, 6, 1, 1, 1));
+		assertTrue(t.prepareForRender());
+
+		gpu.onRenderThread = false;
+		t.clear();
+		t.full(16, 12, solid(16, 12, 3, 3, 3)); // the source reconnects before the queued free ran
+		gpu.onRenderThread = true;
+		assertTrue(t.prepareForRender()); // frees the old texture first, then allocates the new one
+		assertEquals(1, gpu.frees);
+		assertEquals(2, gpu.allocations.size());
+		gpu.runQueued();
+		assertEquals(1, gpu.frees, "the late queued free is a no-op");
+		assertTrue(t.prepareForRender());
+	}
+
+	// ---- fix round 2: one live texture per id, no upload starvation ----
+
+	@Test
+	void secondLiveTextureForAHologramFailsLoudlyInDevelopment() {
+		ScreenTexture.setStrictIdsForTest(true);
+		try {
+			UUID hologram = UUID.randomUUID();
+			FakeGpu gpuA = new FakeGpu();
+			FakeGpu gpuB = new FakeGpu();
+			ScreenTexture a = new ScreenTexture(ScreenTexture.idFor(hologram), gpuA);
+			ScreenTexture b = new ScreenTexture(ScreenTexture.idFor(hologram), gpuB);
+			a.full(8, 6, solid(8, 6, 1, 1, 1));
+			assertTrue(a.prepareForRender());
+			assertThrows(IllegalStateException.class, () -> b.full(8, 6, solid(8, 6, 2, 2, 2)));
+			assertFalse(b.hasFrame(), "the refused texture got nothing");
+			assertFalse(b.prepareForRender());
+			assertTrue(gpuB.allocations.isEmpty());
+			assertTrue(a.prepareForRender(), "the live one is untouched");
+
+			a.clear(); // the right way: clear the old one first
+			b.full(8, 6, solid(8, 6, 2, 2, 2));
+			assertTrue(b.prepareForRender());
+		} finally {
+			ScreenTexture.setStrictIdsForTest(false);
+		}
+	}
+
+	@Test
+	void secondLiveTextureForAHologramSupersedesTheOlderInProduction() {
+		ScreenTexture.setStrictIdsForTest(false);
+		UUID hologram = UUID.randomUUID();
+		FakeGpu gpuA = new FakeGpu();
+		FakeGpu gpuB = new FakeGpu();
+		ScreenTexture a = new ScreenTexture(ScreenTexture.idFor(hologram), gpuA);
+		ScreenTexture b = new ScreenTexture(ScreenTexture.idFor(hologram), gpuB);
+		a.full(8, 6, solid(8, 6, 1, 1, 1));
+		assertTrue(a.prepareForRender());
+		int aAllocs = gpuA.allocations.size();
+		int aWrites = gpuA.writes.size();
+
+		b.full(8, 6, solid(8, 6, 2, 2, 2)); // newer wins
+		assertTrue(a.isSuperseded());
+		assertFalse(a.hasFrame(), "the older one stops drawing");
+		a.patch(0, 0, 2, 2, image(2, 2, 9));
+		a.full(8, 6, solid(8, 6, 3, 3, 3));
+		assertFalse(a.prepareForRender());
+		assertEquals(aAllocs, gpuA.allocations.size(), "superseded texture never touches the GPU again");
+		assertEquals(aWrites, gpuA.writes.size());
+		assertTrue(b.prepareForRender());
+		assertArrayEquals(new int[] {2, 2, 2, 255}, px(gpuB.level0().get(0), 0, 0));
+
+		a.clear(); // must not drop b's claim
+		ScreenTexture c = new ScreenTexture(ScreenTexture.idFor(hologram), new FakeGpu());
+		c.full(8, 6, solid(8, 6, 4, 4, 4));
+		assertTrue(b.isSuperseded(), "b was still the live owner after a.clear()");
+		c.clear();
+		b.clear();
+	}
+
+	@Test
+	void repeatedLockMissesWaitOnceSoUploadsCannotStarve() throws Exception {
+		FakeGpu gpu = new FakeGpu();
+		ScreenTexture t = texture(gpu);
+		t.full(64, 64, solid(64, 64, 1, 1, 1));
+		assertTrue(t.prepareForRender());
+		gpu.writes.clear();
+		CountDownLatch inside = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		t.setMidFullFrameHookForTest(() -> {
+			inside.countDown();
+			try {
+				release.await(10, TimeUnit.SECONDS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+		});
+		Thread producer = new Thread(() -> t.full(64, 64, solid(64, 64, 5, 5, 5)), "test-producer");
+		producer.start();
+		assertTrue(inside.await(10, TimeUnit.SECONDS));
+		for (int i = 1; i < ScreenTexture.MAX_MISSED_LOCKS; i++) {
+			assertTrue(assertTimeoutPreemptively(Duration.ofMillis(500), t::prepareForRender), "miss " + i + " returns at once");
+		}
+		assertTrue(gpu.writes.isEmpty());
+		Thread releaser = new Thread(() -> {
+			try {
+				Thread.sleep(150);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			}
+			release.countDown();
+		});
+		releaser.start();
+		long start = System.nanoTime();
+		assertTrue(t.prepareForRender(), "the next miss waits for the producer once");
+		long ms = (System.nanoTime() - start) / 1_000_000;
+		producer.join(10_000);
+		t.setMidFullFrameHookForTest(null);
+		assertTrue(ms >= 100, "waited for the producer (" + ms + " ms)");
+		assertArrayEquals(new int[] {5, 5, 5, 255}, px(gpu.level0().get(0), 0, 0), "and uploaded its frame");
 	}
 
 	// ---- test pattern ----

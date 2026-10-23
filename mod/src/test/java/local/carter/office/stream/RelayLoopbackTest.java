@@ -415,11 +415,18 @@ class RelayLoopbackTest {
 	void unexpectedSocketCloseWithoutRebindSwitchesToFallbackAndSaysSo() throws Exception {
 		java.util.concurrent.CountDownLatch lost = new java.util.concurrent.CountDownLatch(1);
 		relay.onUdpLost(lost::countDown);
-		int port = relay.udpPort();
-		relay.channelForTest().close().syncUninterruptibly();
-		DatagramSocket squatter = new DatagramSocket(new InetSocketAddress(LOOPBACK, port)); // takes the port first
-		sockets.add(squatter);
+		java.util.concurrent.CountDownLatch attempted = new java.util.concurrent.CountDownLatch(1);
+		io.netty.channel.Channel old = relay.channelForTest();
+		// Force the rebind to fail with an injected bind instead of squatting the port: NIO on Linux releases the fd
+		// only when the selector flushes the cancelled key, so whether a second socket can grab the port right after
+		// close() differs per OS (that race made this test fail with BindException on ubuntu CI).
+		relay.rebinderForTest((bootstrap, address) -> {
+			attempted.countDown();
+			return old.newFailedFuture(new java.net.BindException("injected: address in use"));
+		});
+		old.close().syncUninterruptibly();
 		assertTrue(lost.await(5, TimeUnit.SECONDS), "UDP-lost callback ran");
+		assertEquals(0, attempted.getCount(), "the relay tried to rebind first");
 		assertTrue(relay.payloadOnly(), "payload-only");
 		assertEquals(0, relay.udpPort());
 		List<byte[]> fallback = new CopyOnWriteArrayList<>();
