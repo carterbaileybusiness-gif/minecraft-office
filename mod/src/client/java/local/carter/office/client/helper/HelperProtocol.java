@@ -46,6 +46,8 @@ public final class HelperProtocol {
     public static final int READY = 7;
     public static final int ZOOM_IN = 8;
     public static final int ZOOM_OUT = 9;
+    /** Ask macOS for the missing permissions now (native prompts); the helper answers with a fresh WELCOME. */
+    public static final int REQUEST_PERMISSIONS = 10;
     // Helper -> mod
     public static final int WELCOME = 64;
     public static final int WINDOWS = 65;
@@ -70,7 +72,7 @@ public final class HelperProtocol {
     // ---------------------------------------------------------------- messages
 
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
-            ZoomIn, ZoomOut, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError {
+            ZoomIn, ZoomOut, RequestPermissions, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -83,6 +85,7 @@ public final class HelperProtocol {
                 case Ready m -> READY;
                 case ZoomIn m -> ZOOM_IN;
                 case ZoomOut m -> ZOOM_OUT;
+                case RequestPermissions m -> REQUEST_PERMISSIONS;
                 case Welcome m -> WELCOME;
                 case Windows m -> WINDOWS;
                 case Display m -> DISPLAY;
@@ -158,7 +161,10 @@ public final class HelperProtocol {
 
     public record ZoomOut() implements Message {}
 
+    public record RequestPermissions() implements Message {}
+
     // Helper -> mod
+    /** The handshake reply; sent again whenever a permission changes while connected. */
     public record Welcome(int version, boolean screenRecording, boolean accessibility) implements Message {}
 
     public record Windows(List<WindowInfo> windows) implements Message {}
@@ -285,6 +291,7 @@ public final class HelperProtocol {
                             "y", m.mcWindowFrame().y()),
                     "surface", m.surface());
             case ZoomOut m -> map();
+            case RequestPermissions m -> map();
             case Welcome m -> map("accessibility", m.accessibility(), "screenRecording", m.screenRecording(),
                     "version", m.version());
             case Windows m -> {
@@ -348,6 +355,8 @@ public final class HelperProtocol {
             }
             case ZOOM_OUT:
                 return new ZoomOut();
+            case REQUEST_PERMISSIONS:
+                return new RequestPermissions();
             case WELCOME: {
                 JsonObject o = object(root);
                 return new Welcome(integer(o, "version"), bool(o, "screenRecording"), bool(o, "accessibility"));
@@ -673,6 +682,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= ZOOM_OUT) || (t >= WELCOME && t <= ERROR);
+        return (t >= HELLO && t <= REQUEST_PERMISSIONS) || (t >= WELCOME && t <= ERROR);
     }
 }

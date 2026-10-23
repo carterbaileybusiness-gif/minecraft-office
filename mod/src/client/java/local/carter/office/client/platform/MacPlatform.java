@@ -28,13 +28,12 @@ import local.carter.office.core.HologramSpec;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ConfirmScreen;
-import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
@@ -52,7 +51,6 @@ public final class MacPlatform implements Platform {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 	public static final String SCREEN_RECORDING_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 	public static final String ACCESSIBILITY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-	private static final String COMMAND = "officescreens";
 
 	private final HelperInstaller installer;
 	private final MacHelper helper;
@@ -107,15 +105,14 @@ public final class MacPlatform implements Platform {
 		});
 		ClientTickEvents.END_CLIENT_TICK.register(this::tick);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(this::leftWorld));
-		ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(ClientCommands.literal(COMMAND)
-				.then(ClientCommands.literal("setup").executes(ctx -> {
-					setUpScreens();
-					return 1;
-				}))
-				.then(ClientCommands.literal("retry").executes(ctx -> {
-					checkAgain();
-					return 1;
-				}))));
+		// The chat links' /officescreens: a Fabric client command, so clicks never reach the (dedicated) server.
+		ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
+				OfficeScreensCommand.<FabricClientCommandSource>tree(action -> {
+					switch (action) {
+						case SETUP -> setUpScreens();
+						case RETRY -> checkAgain();
+					}
+				})));
 	}
 
 	// ---------------------------------------------------------------- Platform
@@ -223,7 +220,7 @@ public final class MacPlatform implements Platform {
 			case ASK -> ask();
 			case BAD_OVERRIDE -> chat(Component.literal("office.helperPath does not point to OfficeHelper.app.").withStyle(ChatFormatting.RED));
 			case REPORT_FAILURE -> chat(Component.literal("Screen helper setup failed: " + (failure == null ? "unknown error" : cause(failure).getMessage()) + " ")
-					.withStyle(ChatFormatting.RED).append(link("Try again", "setup", "Download again")));
+					.withStyle(ChatFormatting.RED).append(link("Try again", OfficeScreensCommand.Action.SETUP, "Download again")));
 			case NONE -> {
 				// waiting for an answer or a download, or "Not now" this session
 			}
@@ -237,7 +234,7 @@ public final class MacPlatform implements Platform {
 				if (err != null && asked == setup.session()) {
 					LOGGER.warn("Office helper: release manifest unavailable: {}", cause(err).toString());
 					chat(Component.literal("Couldn't reach GitHub to set up your screens (" + cause(err).getMessage() + "). ")
-							.append(link("Try again", "setup", "Ask again")));
+							.append(link("Try again", OfficeScreensCommand.Action.SETUP, "Ask again")));
 				}
 				return;
 			}
@@ -268,7 +265,7 @@ public final class MacPlatform implements Platform {
 	private void answered(final int asked, final boolean yes) {
 		if (!setup.answered(asked, yes)) {
 			if (!yes && asked == setup.session()) {
-				chat(Component.literal("Your screens stay off for now. ").append(link("Set up screens", "setup", "Download the helper app")));
+				chat(Component.literal("Your screens stay off for now. ").append(link("Set up screens", OfficeScreensCommand.Action.SETUP, "Download the helper app")));
 			}
 			return;
 		}
@@ -299,9 +296,14 @@ public final class MacPlatform implements Platform {
 					act(HelperSetup.Action.START, null);
 					chat(Component.literal("Starting the screen helper…"));
 				} else if (!w.screenRecording() || helper.status() == MacHelper.Status.NO_PERMISSION) {
+					helper.requestPermissions();
 					openSetupPages(SCREEN_RECORDING_PANE);
+					chat(Component.literal("Opened System Settings → Privacy & Security → Screen Recording: switch on OfficeHelper."));
 				} else if (!w.accessibility()) {
+					helper.requestPermissions(); // macOS lists OfficeHelper under Accessibility and shows its prompt
 					openSetupPages(ACCESSIBILITY_PANE);
+					chat(Component.literal("Opened System Settings → Privacy & Security → Accessibility: switch on OfficeHelper. "
+							+ "Your screens update by themselves."));
 				} else {
 					chat(Component.literal("Your screens are set up."));
 				}
@@ -340,9 +342,9 @@ public final class MacPlatform implements Platform {
 				missing.add("Accessibility (to work on a screen)");
 			}
 			chat(Component.literal("OfficeHelper needs macOS " + String.join(" and ", missing) + ". ")
-					.append(link("Set up screens", "setup", "Opens the setup guide and System Settings"))
+					.append(link("Set up screens", OfficeScreensCommand.Action.SETUP, "Asks macOS again and opens System Settings"))
 					.append(" ")
-					.append(link("Check again", "retry", "Restart the helper after switching it on")));
+					.append(link("Check again", OfficeScreensCommand.Action.RETRY, "Restart the helper after switching it on")));
 		} else if (st == MacHelper.Status.READY && permissionNotified) {
 			permissionNotified = false;
 			chat(Component.literal("Screens ready."));
@@ -372,9 +374,9 @@ public final class MacPlatform implements Platform {
 		}
 	}
 
-	private static MutableComponent link(final String text, final String sub, final String hover) {
+	private static MutableComponent link(final String text, final OfficeScreensCommand.Action action, final String hover) {
 		return Component.literal("[" + text + "]").withStyle(s -> s.withColor(ChatFormatting.AQUA).withUnderlined(true)
-				.withClickEvent(new ClickEvent.RunCommand("/" + COMMAND + " " + sub))
+				.withClickEvent(OfficeScreensCommand.click(action))
 				.withHoverEvent(new HoverEvent.ShowText(Component.literal(hover))));
 	}
 

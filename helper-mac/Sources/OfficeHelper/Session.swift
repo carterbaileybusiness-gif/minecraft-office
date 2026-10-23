@@ -13,6 +13,9 @@ import ScreenCaptureKit
     private var zoomedSurface: Int?
     private var nextGeneration: UInt64 = 0
     private var pollTimer: Timer?
+    private var permissionTimer: Timer?
+    /// How often Screen Recording / Accessibility are re-checked, so a grant reaches the mod without a restart.
+    static let permissionPollSeconds: TimeInterval = 2
     private var askedScreenRecording = false
     private var askedAccessibility = false
     /// Called when the mod disconnects: the helper quits and its displays vanish with it.
@@ -37,6 +40,12 @@ import ScreenCaptureKit
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
+        // Without this macOS never lists OfficeHelper under Accessibility: AXIsProcessTrusted() alone doesn't add it.
+        if !AXIsProcessTrusted() { askAccessibilityOnce() }
+        permissionTimer?.invalidate()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: Self.permissionPollSeconds, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sendWelcomeIfPermissionsChanged() }
+        }
     }
 
     func disconnected() {
@@ -48,6 +57,7 @@ import ScreenCaptureKit
     /// Restores everything this helper changed and removes its displays.
     func shutdown() {
         pollTimer?.invalidate(); pollTimer = nil
+        permissionTimer?.invalidate(); permissionTimer = nil
         endZoom(notifyMod: false, activateMinecraft: false)
         for capture in captures.values { capture.stop() }
         captures.removeAll()
@@ -73,6 +83,7 @@ import ScreenCaptureKit
         case .stop(let p): stopCapture(surface: p.surface)
         case .zoomIn(let p): zoomIn(p)
         case .zoomOut: endZoom(notifyMod: false)
+        case .requestPermissions: requestPermissions()
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error:
@@ -264,7 +275,26 @@ import ScreenCaptureKit
         if !activated { minecraft.activate(options: [.activateAllWindows]) }
     }
 
-    // MARK: Permissions (native prompts, asked at most once per launch and only when needed)
+    // MARK: Permissions (native prompts, asked once per launch unless the mod asks again, and only when needed)
+
+    /// The mod's REQUEST_PERMISSIONS (its "Set up screens" link): prompt for whatever is missing, then report.
+    private func requestPermissions() {
+        if !AXIsProcessTrusted() { askAccessibility() }
+        if !CGPreflightScreenCaptureAccess() {
+            askedScreenRecording = true
+            _ = CGRequestScreenCaptureAccess()
+        }
+        Log.write("permissions requested: screen recording \(CGPreflightScreenCaptureAccess()), accessibility \(AXIsProcessTrusted())")
+        server.sendWelcome(Session.welcome)
+    }
+
+    /// Every couple of seconds: a WELCOME with the new values when a permission changed since the last one sent.
+    private func sendWelcomeIfPermissionsChanged() {
+        let now = Session.welcome
+        guard let last = server.lastWelcome, last != now else { return }
+        Log.write("permissions changed: screen recording \(now.screenRecording), accessibility \(now.accessibility)")
+        server.sendWelcome(now)
+    }
 
     private func askScreenRecordingOnce() {
         guard !askedScreenRecording, !CGPreflightScreenCaptureAccess() else { return }
@@ -274,9 +304,16 @@ import ScreenCaptureKit
 
     private func askAccessibilityOnce() {
         guard !askedAccessibility else { return }
+        askAccessibility()
+    }
+
+    /// Adds OfficeHelper to System Settings → Accessibility (switched off) and shows macOS's
+    /// "would like to control this computer" prompt.
+    private func askAccessibility() {
         askedAccessibility = true
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        let trusted = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+        Log.write("asked macOS for Accessibility (trusted \(trusted))")
     }
 }
 

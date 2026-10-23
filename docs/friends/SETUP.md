@@ -112,8 +112,10 @@ downloads the small helper (OfficeHelper, a few MB, from this project's GitHub p
    **OfficeHelper** on:
    - macOS 15 and macOS 26: **System Settings, Privacy & Security, Screen & System Audio Recording**.
    - macOS 14: **System Settings, Privacy & Security, Screen Recording**.
-2. **Accessibility.** The next time you use a hologram, macOS asks again. Switch **OfficeHelper** on in
-   **System Settings, Privacy & Security, Accessibility**. This lets your mouse and keyboard work inside a hologram.
+2. **Accessibility.** macOS asks "OfficeHelper would like to control this computer" when the helper starts (or
+   click **[Set up screens]** in chat to be asked again). Click **Open System Settings** and switch **OfficeHelper**
+   on in **System Settings, Privacy & Security, Accessibility**. This lets your mouse and keyboard work inside a
+   hologram. The game notices within a couple of seconds; no restart needed.
 3. Normally nothing else shows up. But if macOS ever says OfficeHelper cannot be opened because it is from an
    unidentified developer, open **System Settings, Privacy & Security**, scroll to the Security section, and click
    **Open Anyway** next to OfficeHelper. (We do not pay Apple for signing.)

@@ -120,6 +120,12 @@ class HelperProtocolTest {
         checkModMessage("zoom_out", new ZoomOut());
     }
 
+    @Test
+    void requestPermissions() throws IOException {
+        checkModMessage("request_permissions", new RequestPermissions());
+        assertEquals(10, new RequestPermissions().type());
+    }
+
     // ---- helper -> mod fixtures ----
 
     @Test
@@ -194,7 +200,7 @@ class HelperProtocolTest {
     @Test
     void everyFixtureDecodesAndReencodes() throws IOException {
         List<byte[]> all = allFixtures();
-        assertEquals(18, all.size());
+        assertEquals(19, all.size());
         for (byte[] bytes : all) {
             FrameReader reader = FrameReader.forHelperMessages();
             reader.push(bytes, 0, bytes.length);
@@ -311,7 +317,7 @@ class HelperProtocolTest {
 
     @Test
     void unknownTypeRejected() {
-        for (int type : new int[] {0, 10, 63, 72, 255}) {
+        for (int type : new int[] {0, 11, 63, 72, 255}) {
             FrameReader reader = FrameReader.forHelperMessages();
             byte[] bytes = envelope(type, "{}");
             reader.push(bytes, 0, bytes.length);
