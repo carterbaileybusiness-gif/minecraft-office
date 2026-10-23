@@ -7,6 +7,9 @@
 	"entrypoints": {
 		"fabric-gametest": [
 			"local.carter.office.gametest.OfficeGameTest"
+		],
+		"fabric-client-gametest": [
+			"local.carter.office.gametest.OfficeClientGameTest"
 		]
 	}
 }
