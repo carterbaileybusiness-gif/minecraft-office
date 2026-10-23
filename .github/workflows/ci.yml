@@ -23,13 +23,45 @@ jobs:
         run: chmod +x ./gradlew
       - name: build, unit tests, server gametests
         run: ./gradlew build test runGametest
-      - name: install xvfb (Linux client gametest)
+      - name: install xvfb + Mesa GL/Vulkan drivers (Linux client gametest)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb mesa-utils libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers
+      - name: GL diagnostics (Linux)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: |
+          xvfb-run --auto-servernum glxinfo -B || true
+          xvfb-run --auto-servernum sh -c 'glxinfo | grep -i -E "visual|direct rendering|OpenGL (core|version)" | head -15' || true
+      # Same approach as FabricMC/fabric client_test: no custom xvfb flags. Loom's run task wraps the client in
+      # `xvfb-run --auto-servernum` by itself when CI is set and xvfb is installed (do NOT nest xvfb-run here).
+      # Try OpenGL first, then Vulkan (lavapipe); either one passing proves the wiring.
       - name: client gametests (Linux only, virtual display)
         if: runner.os == 'Linux'
-        timeout-minutes: 15
-        run: xvfb-run ./gradlew runClientGametest
+        timeout-minutes: 14
+        run: |
+          set -o pipefail
+          run_backend() {
+            backend="$1"; log="client-gametest-$backend.log"; : > "$log"
+            # Fail fast: with no usable graphics backend the client otherwise hangs until the step timeout.
+            (
+              for _ in $(seq 1 60); do
+                sleep 5
+                if grep -qE "Failed to create backend|No supported graphics backend" "$log" 2>/dev/null; then
+                  sleep 5
+                  pkill -f net.fabricmc.devlaunchinjector || true
+                  exit 0
+                fi
+              done
+            ) &
+            watchdog=$!
+            rc=0
+            OFFICE_GRAPHICS_BACKEND="$backend" ./gradlew runClientGametest --no-daemon 2>&1 | tee "$log" || rc=$?
+            kill "$watchdog" 2>/dev/null || true
+            return "$rc"
+          }
+          if run_backend opengl; then exit 0; fi
+          echo "::warning::client gametest failed with the opengl backend, retrying with vulkan"
+          run_backend vulkan
       - name: store reports
         if: failure()
         uses: actions/upload-artifact@v4
@@ -41,6 +73,7 @@ jobs:
             build/run/clientGameTest/screenshots/
             build/run/clientGameTest/logs/
             build/run/gameTest/logs/
+            client-gametest-*.log
           if-no-files-found: ignore
       - name: capture build artifacts
         if: matrix.os == 'ubuntu-latest'
