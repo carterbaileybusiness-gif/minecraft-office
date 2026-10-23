@@ -68,8 +68,12 @@ fi
 HELPER_APP="$REPO/helper-mac/build/OfficeHelper.app"
 HELPER_ARG=""
 if [ -d "$HELPER_APP" ]; then
-  HELPER_ARG="-Doffice.helperPath=$HELPER_APP"
-  info "using local helper: $HELPER_APP"
+  # Prism splits JvmArgs on spaces and ignores quotes, and the repo path has a space: link the app from a space-free path.
+  HELPER_LINK="$HOME/.minecraft-office/OfficeHelper.app"
+  mkdir -p "$HOME/.minecraft-office"
+  ln -sfn "$HELPER_APP" "$HELPER_LINK"
+  HELPER_ARG="-Doffice.helperPath=$HELPER_LINK"
+  info "using local helper: $HELPER_APP (via $HELPER_LINK)"
 else
   info "NOTE: no local helper at $HELPER_APP (build with: scripts/heavy.sh bash helper-mac/build.sh)"
 fi
@@ -79,7 +83,7 @@ import sys, os
 path, java, helper_arg = sys.argv[1:4]
 jvm_args = "-XX:+UseZGC"
 if helper_arg:
-    jvm_args += ' "' + helper_arg + '"'  # quoted: the path contains a space; Prism splits JvmArgs shell-style
+    jvm_args += " " + helper_arg  # space-free path (Prism splits JvmArgs on spaces and does not honour quotes)
 want = {
   "InstanceType": "OneSix", "ConfigVersion": "1.3", "name": "Minecraft Office (Test)", "iconKey": "default",
   "OverrideMemory": "true", "MaxMemAlloc": "3072", "MinMemAlloc": "1024",
