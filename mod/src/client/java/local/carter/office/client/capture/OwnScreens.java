@@ -1,14 +1,19 @@
 package local.carter.office.client.capture;
 
+import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+
+import com.mojang.logging.LogUtils;
 
 import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.platform.Platform;
@@ -42,10 +47,21 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * {@link JavaDesktopSource}, which paces itself under {@link #MAX_FPS}). With
  * {@code -Doffice.testPattern=true} (dev override) every own hologram shows a {@link TestPatternSource} at 30 fps
  * instead. Without either, own holograms are not fed.
+ *
+ * <p>Sharing (Task 14): every source (Mac helper, Windows desktop capture, test pattern) feeds a {@link FanOutSink}:
+ * the hologram's texture first, then the share tap ({@link #setShareTaps}) while friends are watching. A watched
+ * hologram is captured at least {@link #SHARE_FPS} even when its owner isn't looking at it (adaptive-rate sources only;
+ * a source that paces itself is left alone).
  */
 public final class OwnScreens {
 	public static final String TEST_PATTERN_PROPERTY = "office.testPattern";
 	public static final int MAX_FPS = 30;
+	/** Capture rate floor while a hologram is being shared (the shared stream's rate). */
+	public static final int SHARE_FPS = 10;
+
+	private static final Logger LOGGER = LogUtils.getLogger();
+	/** The share tap of a hologram while it is being shared, else null (thread-safe; called from capture threads). */
+	private static volatile Function<UUID, @Nullable FrameSink> shareTaps = id -> null;
 
 	private static final Map<UUID, Feed> FEEDS = new HashMap<>();
 	private static boolean enabled;
@@ -100,6 +116,19 @@ public final class OwnScreens {
 		stopAll();
 	}
 
+	/** Installs the share taps (Task 14's sender). */
+	public static void setShareTaps(final @Nullable Function<UUID, @Nullable FrameSink> taps) {
+		shareTaps = taps == null ? id -> null : taps;
+	}
+
+	private static boolean shared(final UUID hologramId) {
+		try {
+			return shareTaps.apply(hologramId) != null;
+		} catch (RuntimeException e) {
+			return false;
+		}
+	}
+
 	/** The texture currently fed for one of the local player's holograms, if any. */
 	public static @Nullable ScreenTexture texture(final UUID hologramId) {
 		Feed f = FEEDS.get(hologramId);
@@ -139,6 +168,10 @@ public final class OwnScreens {
 					? CaptureRate.fps(visibility.update(visible(camera, be.getBlockPos(), spec), System.nanoTime() / 1_000_000L),
 							HologramRenderer.isZoomed(id))
 					: MAX_FPS;
+			if (adaptiveRate && shared(id)) {
+				// a source that paces itself (Windows: 10 fps, 30 while working) already runs fast enough to share
+				fps = Math.max(fps, SHARE_FPS);
+			}
 			if (feed != null && feed.target.equals(target)) {
 				if (feed.fps != fps) {
 					feed.fps = fps;
@@ -167,7 +200,7 @@ public final class OwnScreens {
 			Feed fresh = new Feed(target, source, texture, fps);
 			fresh.visibility = visibility;
 			FEEDS.put(id, fresh);
-			source.start(target, fps, texture);
+			source.start(target, fps, new FanOutSink(id, texture));
 		}
 		for (Iterator<Map.Entry<UUID, Feed>> it = FEEDS.entrySet().iterator(); it.hasNext();) {
 			Map.Entry<UUID, Feed> e = it.next();
@@ -195,6 +228,78 @@ public final class OwnScreens {
 		AABB box = new AABB(c.x() - Math.abs(half.x()), c.y() - hy, c.z() - Math.abs(half.z()),
 				c.x() + Math.abs(half.x()), c.y() + hy, c.z() + Math.abs(half.z())).inflate(0.1);
 		return camera.getCullFrustum().isVisible(box);
+	}
+
+	/**
+	 * Delivers every frame to the hologram's texture, then to its share tap if it is being shared. A failing tap is
+	 * logged and skipped; it never affects the owner's own picture.
+	 */
+	static final class FanOutSink implements FrameSink {
+		static final long WARN_EVERY_NANOS = 10_000_000_000L;
+		private final UUID id;
+		private final FrameSink primary;
+		private volatile long lastWarn;
+
+		FanOutSink(final UUID id, final FrameSink primary) {
+			this.id = id;
+			this.primary = primary;
+		}
+
+		private @Nullable FrameSink tap() {
+			try {
+				return shareTaps.apply(id);
+			} catch (RuntimeException e) {
+				return null;
+			}
+		}
+
+		/** Logs a tap failure at most once per {@link #WARN_EVERY_NANOS} per hologram (it could fail every frame). */
+		private void tapFailed(final RuntimeException e) {
+			long now = System.nanoTime();
+			if (lastWarn == 0 || now - lastWarn >= WARN_EVERY_NANOS) {
+				lastWarn = now;
+				LOGGER.warn("[office] Share tap of hologram {} failed (further failures muted for 10 s)", id, e);
+			}
+		}
+
+		@Override
+		public void full(final int w, final int h, final ByteBuffer rgba) {
+			primary.full(w, h, rgba);
+			FrameSink t = tap();
+			if (t != null) {
+				try {
+					t.full(w, h, rgba);
+				} catch (RuntimeException e) {
+					tapFailed(e);
+				}
+			}
+		}
+
+		@Override
+		public void patch(final int x, final int y, final int w, final int h, final ByteBuffer rgba) {
+			primary.patch(x, y, w, h, rgba);
+			FrameSink t = tap();
+			if (t != null) {
+				try {
+					t.patch(x, y, w, h, rgba);
+				} catch (RuntimeException e) {
+					tapFailed(e);
+				}
+			}
+		}
+
+		@Override
+		public void ended(final String reason) {
+			primary.ended(reason);
+			FrameSink t = tap();
+			if (t != null) {
+				try {
+					t.ended(reason);
+				} catch (RuntimeException e) {
+					tapFailed(e);
+				}
+			}
+		}
 	}
 
 	static void stopAll() {

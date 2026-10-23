@@ -14,6 +14,7 @@ import local.carter.office.client.interact.WindowListProvider.WindowChoice;
 import local.carter.office.client.platform.NoPlatform;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.platform.WindowsPlatform;
+import local.carter.office.client.stream.StreamClient;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Privacy;
@@ -297,7 +298,10 @@ public class HologramSettingsScreen extends Screen {
 			return;
 		}
 		Set<UUID> list = privacyLevel == Privacy.Level.SHOW_TO ? allowed : Set.of();
-		ClientPlayNetworking.send(new OfficePayloads.UpdateHologram(pos, shape, mode, new Privacy(privacyLevel, list), displaySlot,
+		Privacy privacy = new Privacy(privacyLevel, list);
+		// privacy is enforced at the source: going PRIVATE stops sharing before the server even hears about it
+		StreamClient.localPrivacyChanged(be.hologramId(), privacy);
+		ClientPlayNetworking.send(new OfficePayloads.UpdateHologram(pos, shape, mode, privacy, displaySlot,
 				mode == Mode.WINDOW ? windowKey : null));
 	}
 
