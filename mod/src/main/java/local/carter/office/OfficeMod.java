@@ -48,6 +48,7 @@ public class OfficeMod implements ModInitializer {
 		PlayerBlockBreakEvents.BEFORE.register(HologramEmitterBlock::allowBreak);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			StarterKit.giveIfFirstJoin(handler.player);
+			HologramActions.sendWorkingTo(handler.player);
 			HologramBlockEntity.setOwnerOnline(server, handler.player.getUUID(), true);
 			StreamService s = StreamService.get();
 			if (s != null) {

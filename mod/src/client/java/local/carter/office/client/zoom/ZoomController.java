@@ -3,6 +3,8 @@ package local.carter.office.client.zoom;
 import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import local.carter.office.core.HologramSpec;
 import local.carter.office.hologram.HologramBlockEntity;
@@ -14,8 +16,8 @@ import local.carter.office.hologram.HologramBlockEntity;
  * <pre>
  *   WORLD --request(own LIVE hologram)--> ZOOMING_IN --350 ms--> WORKING
  *     ^                                       |                    |
- *     |                                 exit / ended          exit / ended (double-Esc, EXIT_ZOOM, capture ended,
- *     |                                       v                    v          hologram gone, helper gone)
+ *     |                                 exit / ended          exit / ended (double-Esc, platform exit gesture,
+ *     |                                       v                    v          capture ended, platform problem, ...)
  *     +------------- reaches 0 ---------- ZOOMING_OUT <------------+
  *   abort() (world unload, disconnect): straight back to WORLD from anywhere.
  * </pre>
@@ -23,9 +25,16 @@ import local.carter.office.hologram.HologramBlockEntity;
  * <p>Effects: {@link Env#begin} when the zoom starts (hide hand/HUD, block game input), {@link Env#startWorking} on
  * arriving (platform zoom-in, {@code SetWorking(true)}), {@link Env#stopWorking} when leaving WORKING (platform zoom-out,
  * {@code SetWorking(false)}), {@link Env#end} back in the world (restore everything). {@code stopWorking} runs only if
- * {@code startWorking} did, and {@code end} only if {@code begin} did.
+ * {@code startWorking} ran, and {@code end} only if {@code begin} did. Every effect is guarded: one that throws is
+ * logged and the zoom leaves cleanly (a failing {@code begin} goes straight back to the world).
+ *
+ * <p>While not in the world, {@link #update} also keeps Minecraft from throttling its frame rate as "AFK"
+ * ({@link Env#keepAwake}: the player's input goes to the computer, not to Minecraft) and leaves, with a
+ * {@link Env#notice}, as soon as {@link Env#workProblem} reports one (e.g. the helper failed to zoom or quit).
  */
 public final class ZoomController {
+	private static final Logger LOGGER = LoggerFactory.getLogger("office");
+
 	public enum State { WORLD, ZOOMING_IN, WORKING, ZOOMING_OUT }
 
 	/** Why a {@link #request} did or didn't start a zoom. */
@@ -63,6 +72,12 @@ public final class ZoomController {
 
 		/** Back in the world; {@code aborted} = no animation (world unload / disconnect). */
 		void end(Candidate target, boolean aborted);
+
+		/** While zoomed (every update): counts as player input for Minecraft's inactivity frame-rate limit. */
+		void keepAwake();
+
+		/** A short message for the player (action bar) about why the zoom ended. */
+		void notice(String message);
 	}
 
 	/** Zoom animation length, both ways. */
@@ -127,7 +142,7 @@ public final class ZoomController {
 		if (!c.live()) {
 			return Request.NOT_LIVE;
 		}
-		if (env.workProblem(c) != null) {
+		if (problem(c) != null) {
 			return Request.UNAVAILABLE;
 		}
 		target = c;
@@ -135,7 +150,10 @@ public final class ZoomController {
 		fromProgress = 0;
 		since = env.nowMs();
 		doubleEsc.reset();
-		env.begin(c);
+		if (!run("begin", () -> env.begin(c))) {
+			abort(); // half-begun: restore whatever was changed, no animation
+			return Request.UNAVAILABLE;
+		}
 		return Request.STARTED;
 	}
 
@@ -147,24 +165,36 @@ public final class ZoomController {
 		}
 	}
 
-	/** Advances the animation; call every frame and tick. */
+	/** Advances the animation, keeps the frame rate up and watches for platform problems; call every frame and tick. */
 	public void update() {
 		Candidate t = target;
-		if (t == null) {
+		if (t == null || state == State.WORLD) {
 			return;
 		}
-		double p = linear(env.nowMs());
-		if (state == State.ZOOMING_IN && p >= 1) {
+		run("keepAwake", env::keepAwake);
+		if (state == State.ZOOMING_IN || state == State.WORKING) {
+			String p = problem(t);
+			if (p != null) {
+				LOGGER.info("Zoom: leaving ({})", p);
+				exit();
+				run("notice", () -> env.notice(p));
+			}
+		}
+		double progress = linear(env.nowMs());
+		if (state == State.ZOOMING_IN && progress >= 1) {
 			state = State.WORKING;
-			env.startWorking(t);
-		} else if (state == State.ZOOMING_OUT && p <= 0) {
+			if (!run("startWorking", () -> env.startWorking(t))) {
+				exit();
+				run("notice", () -> env.notice("Couldn't start working on this screen"));
+			}
+		} else if (state == State.ZOOMING_OUT && progress <= 0) {
 			state = State.WORLD;
 			target = null;
-			env.end(t, false);
+			run("end", () -> env.end(t, false));
 		}
 	}
 
-	/** Zoom back out (double-Esc, the platform's exit hotkey, or anything that ends the session). */
+	/** Zoom back out (double-Esc, the platform's exit gesture, or anything that ends the session). */
 	public boolean exit() {
 		Candidate t = target;
 		if (t == null || (state != State.ZOOMING_IN && state != State.WORKING)) {
@@ -177,7 +207,7 @@ public final class ZoomController {
 		fromProgress = p;
 		since = now;
 		if (wasWorking) {
-			env.stopWorking(t);
+			run("stopWorking", () -> env.stopWorking(t));
 		}
 		return true;
 	}
@@ -207,6 +237,11 @@ public final class ZoomController {
 		doubleEsc.otherKey();
 	}
 
+	/** Minecraft's window gained or lost focus: a key release may have been missed, start the double-tap afresh. */
+	public void focusChanged() {
+		doubleEsc.reset();
+	}
+
 	/** World unload / disconnect: back to WORLD immediately, cleaning up whatever was started. */
 	public void abort() {
 		Candidate t = target;
@@ -217,14 +252,34 @@ public final class ZoomController {
 		state = State.WORLD;
 		target = null;
 		if (wasWorking) {
-			env.stopWorking(t);
+			run("stopWorking", () -> env.stopWorking(t));
 		}
-		env.end(t, true);
+		run("end", () -> env.end(t, true));
 	}
 
 	/** Eased progress now: 0 = the player's own view, 1 = the hologram fills the view. */
 	public double progress() {
 		return ease(linear(env.nowMs()));
+	}
+
+	private @Nullable String problem(final Candidate c) {
+		try {
+			return env.workProblem(c);
+		} catch (RuntimeException e) {
+			LOGGER.warn("Zoom: checking the platform failed", e);
+			return "Can't work on this screen right now";
+		}
+	}
+
+	/** Runs one effect; a throwing effect is logged and reported as false (never escapes into the game loop). */
+	private static boolean run(final String what, final Runnable effect) {
+		try {
+			effect.run();
+			return true;
+		} catch (RuntimeException e) {
+			LOGGER.warn("Zoom: {} failed", what, e);
+			return false;
+		}
 	}
 
 	private double linear(final long now) {

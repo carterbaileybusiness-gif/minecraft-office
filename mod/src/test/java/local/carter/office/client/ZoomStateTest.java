@@ -31,6 +31,25 @@ class ZoomStateTest {
 		long now;
 		@Nullable String problem;
 		final List<String> calls = new ArrayList<>();
+		final List<String> notices = new ArrayList<>();
+		int awake;
+		@Nullable String throwIn;
+
+		private void maybeThrow(final String effect) {
+			if (effect.equals(throwIn)) {
+				throw new IllegalStateException("thrown in " + effect);
+			}
+		}
+
+		@Override
+		public void keepAwake() {
+			awake++;
+		}
+
+		@Override
+		public void notice(final String message) {
+			notices.add(message);
+		}
 
 		@Override
 		public long nowMs() {
@@ -55,21 +74,25 @@ class ZoomStateTest {
 		@Override
 		public void begin(final Candidate target) {
 			calls.add("begin");
+			maybeThrow("begin");
 		}
 
 		@Override
 		public void startWorking(final Candidate target) {
 			calls.add("startWorking");
+			maybeThrow("startWorking");
 		}
 
 		@Override
 		public void stopWorking(final Candidate target) {
 			calls.add("stopWorking");
+			maybeThrow("stopWorking");
 		}
 
 		@Override
 		public void end(final Candidate target, final boolean aborted) {
 			calls.add(aborted ? "abort" : "end");
+			maybeThrow("end");
 		}
 	}
 
@@ -255,6 +278,119 @@ class ZoomStateTest {
 		zoom.update();
 		assertEquals(State.WORLD, zoom.state());
 		assertEquals(Request.STARTED, zoom.request(hologram(ME, true)));
+	}
+
+	@Test
+	void keepsMinecraftAwakeOnlyWhileZoomed() {
+		FakeEnv env = new FakeEnv();
+		ZoomController zoom = new ZoomController(env);
+		zoom.update();
+		assertEquals(0, env.awake, "never in the world");
+		zoom.request(hologram(ME, true));
+		env.now = 100;
+		zoom.update();
+		assertEquals(1, env.awake, "zooming in");
+		env.now = 350;
+		zoom.update();
+		env.now = 70_000; // past the 60 s AFK threshold of Minecraft's inactivity frame-rate limit
+		zoom.update();
+		assertEquals(3, env.awake, "every update while working (input goes to the computer, not to Minecraft)");
+		zoom.exit();
+		env.now += 100;
+		zoom.update();
+		assertEquals(4, env.awake, "zooming out");
+		env.now += 400;
+		zoom.update();
+		assertEquals(State.WORLD, zoom.state());
+		int before = env.awake;
+		zoom.update();
+		assertEquals(before, env.awake, "back in the world: no more");
+	}
+
+	@Test
+	void aPlatformProblemWhileWorkingLeavesWithANotice() {
+		FakeEnv env = new FakeEnv();
+		ZoomController zoom = new ZoomController(env);
+		zoomInFully(zoom, env, hologram(ME, true));
+		env.problem = "Your screen isn't ready yet"; // e.g. the helper refused ZOOM_IN
+		env.now += 16;
+		zoom.update();
+		assertEquals(State.ZOOMING_OUT, zoom.state());
+		assertEquals(List.of("Your screen isn't ready yet"), env.notices);
+		assertEquals(List.of("begin", "startWorking", "stopWorking"), env.calls);
+	}
+
+	@Test
+	void aPlatformProblemDuringZoomInAlsoLeaves() {
+		FakeEnv env = new FakeEnv();
+		ZoomController zoom = new ZoomController(env);
+		zoom.request(hologram(ME, true));
+		env.problem = "The screen helper isn't running";
+		env.now = 100;
+		zoom.update();
+		assertEquals(State.ZOOMING_OUT, zoom.state());
+		assertEquals(1, env.notices.size());
+		env.now = 400;
+		zoom.update();
+		assertEquals(State.WORLD, zoom.state());
+		assertEquals(List.of("begin", "end"), env.calls, "never started working");
+	}
+
+	@Test
+	void failingStartWorkingLeavesCleanlyAndStillStops() {
+		FakeEnv env = new FakeEnv();
+		env.throwIn = "startWorking";
+		ZoomController zoom = new ZoomController(env);
+		zoom.request(hologram(ME, true));
+		env.now = 350;
+		zoom.update();
+		assertEquals(State.ZOOMING_OUT, zoom.state());
+		assertEquals(List.of("begin", "startWorking", "stopWorking"), env.calls,
+				"stopWorking (zoomOut + SetWorking(false)) runs even though startWorking threw half way");
+		assertEquals(1, env.notices.size());
+		env.now = 700;
+		zoom.update();
+		assertEquals(State.WORLD, zoom.state());
+	}
+
+	@Test
+	void failingBeginGoesStraightBackToTheWorld() {
+		FakeEnv env = new FakeEnv();
+		env.throwIn = "begin";
+		ZoomController zoom = new ZoomController(env);
+		assertEquals(Request.UNAVAILABLE, zoom.request(hologram(ME, true)));
+		assertEquals(State.WORLD, zoom.state());
+		assertEquals(List.of("begin", "abort"), env.calls, "whatever begin changed is restored");
+	}
+
+	@Test
+	void failingStopWorkingOrEndNeverWedgesTheController() {
+		FakeEnv env = new FakeEnv();
+		env.throwIn = "stopWorking";
+		ZoomController zoom = new ZoomController(env);
+		zoomInFully(zoom, env, hologram(ME, true));
+		assertTrue(zoom.exit());
+		env.throwIn = "end";
+		env.now += 400;
+		zoom.update();
+		assertEquals(State.WORLD, zoom.state());
+		env.throwIn = null;
+		assertEquals(Request.STARTED, zoom.request(hologram(ME, true)), "usable again");
+	}
+
+	@Test
+	void focusChangeClearsAStuckEsc() {
+		FakeEnv env = new FakeEnv();
+		ZoomController zoom = new ZoomController(env);
+		zoomInFully(zoom, env, hologram(ME, true));
+		env.now = 1_000;
+		zoom.escape(false); // pressed; its release never arrives (focus moved to the app)
+		zoom.focusChanged();
+		env.now = 5_000;
+		assertEquals(DoubleEsc.Result.PASS, zoom.escape(false), "a fresh first press, not a repeat");
+		zoom.escapeReleased();
+		env.now = 5_100;
+		assertEquals(DoubleEsc.Result.EXIT, zoom.escape(false));
 	}
 
 	@Test

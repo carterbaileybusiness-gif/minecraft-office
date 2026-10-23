@@ -416,12 +416,15 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			if (mc.options.pauseOnLostFocus) {
 				return "pauseOnLostFocus still on";
 			}
+			if (!local.carter.office.client.zoom.WorkingNames.isWorking(mc.player.getUUID())) {
+				return "client never got the working broadcast";
+			}
 			return ZoomClient.controller().isZoomedInto(clientHologram(mc).hologramId()) ? null : "not zoomed into the clicked hologram";
 		});
 		if (during != null) {
 			throw new AssertionError("while working: " + during);
 		}
-		boolean taggedOnServer = sp.getServer().computeOnServer(server -> local.carter.office.net.WorkingTag.isTagged(player(server)));
+		boolean taggedOnServer = sp.getServer().computeOnServer(server -> local.carter.office.net.HologramActions.isWorking(player(server).getUUID()));
 		if (!taggedOnServer) {
 			throw new AssertionError("server did not get SetWorking(true)");
 		}
@@ -453,7 +456,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			throw new AssertionError("after zooming out: " + after);
 		}
 		sp.getConnection().waitForServerboundPackets();
-		boolean stillTagged = sp.getServer().computeOnServer(server -> local.carter.office.net.WorkingTag.isTagged(player(server)));
+		boolean stillTagged = sp.getServer().computeOnServer(server -> local.carter.office.net.HologramActions.isWorking(player(server).getUUID()));
 		if (stillTagged) {
 			throw new AssertionError("server did not get SetWorking(false)");
 		}

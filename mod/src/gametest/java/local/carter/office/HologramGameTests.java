@@ -1,5 +1,9 @@
 package local.carter.office;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Mount;
@@ -12,7 +16,6 @@ import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.hologram.StarterKit;
 import local.carter.office.net.HologramActions;
 import local.carter.office.net.OfficePayloads;
-import local.carter.office.net.WorkingTag;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -23,7 +26,6 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.StringTag;
-import net.minecraft.server.ServerScoreboard;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityTypes;
@@ -40,7 +42,6 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.AttachFace;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.scores.PlayerTeam;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 
@@ -455,33 +456,35 @@ public class HologramGameTests {
 	}
 
 	@GameTest
-	public void workingSuffixFollowsSetWorking(GameTestHelper h) {
+	public void workingSetIsBroadcastAndClearedOnDisconnect(GameTestHelper h) {
 		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
-		ServerScoreboard board = h.getLevel().getServer().getScoreboard();
-		String name = a.getScoreboardName();
-		PlayerTeam blue = board.getPlayerTeam("office_test_blue");
-		if (blue == null) {
-			blue = board.addPlayerTeam("office_test_blue");
+		String teamBefore = String.valueOf(a.getTeam());
+		List<List<UUID>> sent = new ArrayList<>();
+		HologramActions.setWorkingBroadcast((server, working) -> sent.add(working));
+		try {
+			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "working");
+			h.assertTrue(HologramActions.isWorking(a.getUUID()), "server knows");
+			h.assertTrue(sent.size() == 1 && sent.get(0).contains(a.getUUID()), "broadcast with the player: " + sent);
+			h.assertTrue(HologramActions.workingPayload().players().contains(a.getUUID()), "what a joining player is sent");
+			h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "repeat is a no-op");
+			h.assertValueEqual(sent.size(), 1, "no broadcast without a change");
+			h.assertValueEqual(String.valueOf(a.getTeam()), teamBefore, "teams / scoreboard untouched");
+			h.assertFalse(a.getDisplayName().getString().contains("working"), "server-side name (chat) unchanged");
+
+			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(false)), "stopped working");
+			h.assertFalse(sent.get(sent.size() - 1).contains(a.getUUID()), "broadcast without the player");
+
+			HologramActions.apply(a, new OfficePayloads.SetWorking(true));
+			int before = sent.size();
+			HologramActions.clearWorking(a); // disconnect
+			h.assertFalse(HologramActions.isWorking(a.getUUID()), "cleared on disconnect");
+			h.assertValueEqual(sent.size(), before + 1, "disconnect is broadcast");
+			h.assertFalse(sent.get(sent.size() - 1).contains(a.getUUID()), "everyone drops the suffix");
+			HologramActions.clearWorking(a);
+			h.assertValueEqual(sent.size(), before + 1, "clearing someone not working sends nothing");
+		} finally {
+			HologramActions.setWorkingBroadcast(null);
 		}
-		board.addPlayerToTeam(name, blue);
-
-		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "working");
-		h.assertTrue(HologramActions.isWorking(a.getUUID()), "server knows");
-		h.assertTrue(WorkingTag.isTagged(a), "tagged");
-		h.assertTrue(a.getDisplayName().getString().endsWith(WorkingTag.SUFFIX),
-				"name tag / tab list shows the suffix: " + a.getDisplayName().getString());
-		h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "repeat is a no-op");
-
-		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(false)), "stopped working");
-		h.assertFalse(WorkingTag.isTagged(a), "untagged");
-		h.assertFalse(a.getDisplayName().getString().contains("working"), "suffix gone: " + a.getDisplayName().getString());
-		h.assertValueEqual(board.getPlayersTeam(name), blue, "back on the team they were on");
-
-		HologramActions.apply(a, new OfficePayloads.SetWorking(true));
-		HologramActions.clearWorking(a); // disconnect
-		h.assertFalse(HologramActions.isWorking(a.getUUID()), "cleared on disconnect");
-		h.assertFalse(WorkingTag.isTagged(a), "tag cleared on disconnect");
-		board.removePlayerFromTeam(name, blue);
 		h.succeed();
 	}
 

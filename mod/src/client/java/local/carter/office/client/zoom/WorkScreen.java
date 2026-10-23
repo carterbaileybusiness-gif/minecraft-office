@@ -32,7 +32,7 @@ final class WorkScreen extends Screen {
 	private static final int CTRL = 0xC0;
 	private static final int ALT = 0x300;
 	private static final int GUI = 0xC00;
-	private static final long BAR_FADE_MS = 200;
+	static final long BAR_FADE_MS = 200;
 	private static final long HINT_MS = 2_500;
 
 	private final ZoomController controller;
@@ -67,10 +67,12 @@ final class WorkScreen extends Screen {
 		Candidate t = controller.target();
 		long working = ZoomClient.workingForMs();
 		if (t == null || controller.state() != State.WORKING || working < 0 || t.spec().mode() != Mode.EXTEND) {
+			ZoomClient.overlayDrawn(false);
 			return;
 		}
 		Optional<ScreenTexture> tex = ScreenTextureRegistry.get(t.hologramId());
 		if (tex.isEmpty() || !tex.get().prepareForRender()) {
+			ZoomClient.overlayDrawn(false);
 			return; // nothing uploaded yet: the zoomed hologram itself is showing
 		}
 		Window w = minecraft.getWindow();
@@ -78,7 +80,8 @@ final class WorkScreen extends Screen {
 		int fh = w.getHeight();
 		float scale = Math.max(1, w.getGuiScale());
 		Rect r = ZoomPose.letterbox(fw, fh, t.spec().shape().aspect());
-		int barAlpha = (int) (0xE6 * Math.min(1.0, working / (double) BAR_FADE_MS));
+		// Bars fade to opaque black; once they have, the overlay covers the window and the world isn't rendered.
+		int barAlpha = (int) (0xFF * Math.min(1.0, working / (double) BAR_FADE_MS));
 		int bar = barAlpha << 24;
 
 		graphics.pose().pushMatrix();
@@ -95,17 +98,27 @@ final class WorkScreen extends Screen {
 		}
 		graphics.blit(tex.get().id(), r.x(), r.y(), r.x() + r.w(), r.y() + r.h(), 0f, 1f, 0f, 1f);
 		graphics.pose().popMatrix();
+		ZoomClient.overlayDrawn(true);
 
-		if (working < HINT_MS) {
-			float fade = (float) Math.min(1.0, (HINT_MS - working) / 600.0);
-			int alpha = Math.max(4, (int) (0xFF * fade));
-			Component hint = Component.literal("Double-tap Esc to return to the office");
-			int tw = font.width(hint);
-			int x = (width - tw) / 2;
-			int y = height - 28;
-			graphics.fill(x - 6, y - 4, x + tw + 6, y + 12, ((int) (0xA0 * fade) << 24));
-			graphics.text(font, hint, x, y, (alpha << 24) | 0xFFFFFF, false);
+		int y = height - 28;
+		if (ZoomClient.needsClickToType()) {
+			// The helper moved the cursor onto the display but nothing there has focus yet: keys still reach
+			// Minecraft (and are swallowed here) until the player clicks into an app.
+			hint(graphics, Component.literal("Click to start typing"), y, 1f);
+			y -= 18;
 		}
+		if (working < HINT_MS) {
+			hint(graphics, Component.literal("Double-tap Esc to return to the office"), y,
+					(float) Math.min(1.0, (HINT_MS - working) / 600.0));
+		}
+	}
+
+	private void hint(final GuiGraphicsExtractor graphics, final Component text, final int y, final float fade) {
+		int alpha = Math.max(4, (int) (0xFF * fade));
+		int tw = font.width(text);
+		int x = (width - tw) / 2;
+		graphics.fill(x - 6, y - 4, x + tw + 6, y + 12, ((int) (0xA0 * fade) << 24));
+		graphics.text(font, text, x, y, (alpha << 24) | 0xFFFFFF, false);
 	}
 
 	@Override
@@ -134,5 +147,6 @@ final class WorkScreen extends Screen {
 	@Override
 	public void removed() {
 		controller.escapeReleased();
+		ZoomClient.overlayDrawn(false); // the world renders again at once
 	}
 }

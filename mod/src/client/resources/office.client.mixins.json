@@ -4,8 +4,12 @@
 	"compatibilityLevel": "JAVA_25",
 	"client": [
 		"CameraZoomMixin",
+		"EntityRendererNameTagMixin",
+		"GameRendererSkipWorldMixin",
 		"MinecraftFrameMixin",
-		"MinecraftUseItemMixin"
+		"MinecraftUseItemMixin",
+		"OptionsSaveMixin",
+		"PlayerTabOverlayMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

@@ -45,11 +45,11 @@ import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
  *   <li>Shift + right-click and hold: move, the wheel turns it ({@link MoveDrag}); on a wall it slides along the wall;</li>
  *   <li>right-click the body: settings.</li>
  * </ul>
- * With anything else (or nothing) in the main hand, right-clicking your own hologram zooms in to work on it
- * ({@link ZoomClient}); someone else's hologram is left alone.
- * Right-clicking an emitter block (empty main hand or an emitter, not sneaking) opens settings, read-only for
- * non-owners. Anything else in the main hand (a Wizards staff, food, a shield) is never intercepted, and an emitter in
- * the off hand alone never is either. Called from {@code MinecraftUseItemMixin} at the head of
+ * Without an emitter in the main hand (empty, or any other item: a Wizards staff, food, a shield), right-clicking your
+ * OWN hologram is always taken: it zooms in to work on it ({@link ZoomClient}), or says in the action bar why it can't
+ * (not live yet, helper not ready). Someone else's hologram is never intercepted (no message; the item keeps its own
+ * use), and an emitter in the off hand alone never makes a click a hologram click. Right-clicking an emitter block
+ * (empty main hand or an emitter, not sneaking) opens settings, read-only for non-owners. Called from {@code MinecraftUseItemMixin} at the head of
  * {@code Minecraft.startUseItem} (after vanilla's destroying/hands-busy guards; a consumed click gets vanilla's 4-tick
  * repeat delay and its repeats are swallowed until release, see {@link ClickGate}); a consumed click never reaches
  * vanilla, so an emitter in hand is never placed by accident on the wall behind a hologram.
