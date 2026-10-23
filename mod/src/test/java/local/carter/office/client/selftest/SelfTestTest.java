@@ -111,7 +111,7 @@ class SelfTestTest {
 
 	@Test
 	void zoomWithoutAnOwnHologramIsSkipped() {
-		SelfTest.Outcome o = SelfTestSteps.zoom(context());
+		SelfTest.Outcome o = SelfTestSteps.zoom(new SelfTest.Context(new ZoomPlatform(null), null, null, new SelfTestReport()));
 		assertEquals(Status.SKIP, o.status());
 		assertTrue(o.detail().contains("no hologram"), o.detail());
 	}
@@ -145,6 +145,11 @@ class SelfTestTest {
 		@Override
 		public boolean supportsExtend() {
 			return false;
+		}
+
+		@Override
+		public boolean supportsZoom() {
+			return true; // Windows (beta) still zooms
 		}
 
 		@Override

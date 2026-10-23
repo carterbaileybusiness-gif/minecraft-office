@@ -382,7 +382,7 @@ public final class SelfTestScreen extends Screen {
 		try {
 			Window w = minecraft.getWindow();
 			return w.getWidth() + "x" + w.getHeight() + " px game window, GUI scale " + w.getGuiScale()
-					+ String.format(Locale.ROOT, ", display scale %.2f", w.getPixelDensity()) + (w.isExclusiveFullscreen() ? ", fullscreen" : "");
+					+ String.format(Locale.ROOT, ", display scale %.2f", w.getPixelDensity()) + (w.isExclusiveFullscreen() ? ", full-screen" : "");
 		} catch (Throwable t) {
 			return "unknown (" + t.getClass().getSimpleName() + ")";
 		}

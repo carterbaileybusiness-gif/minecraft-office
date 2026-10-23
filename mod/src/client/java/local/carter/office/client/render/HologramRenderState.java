@@ -29,4 +29,8 @@ public class HologramRenderState extends BlockEntityRenderState {
 	public @Nullable Corner dragCorner;
 	/** New size while a corner drag is in progress: drawn as a cyan outline. */
 	public @Nullable HologramSpec outline;
+	/** In-world pointer (owner only): draw the cursor at (cursorU, cursorV) of the picture. */
+	public boolean cursor;
+	public float cursorU;
+	public float cursorV;
 }

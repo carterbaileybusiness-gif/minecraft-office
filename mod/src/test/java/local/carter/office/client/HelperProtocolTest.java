@@ -74,6 +74,17 @@ class HelperProtocolTest {
         assertEquals(69, HelperProtocol.ENDED);
         assertEquals(70, HelperProtocol.EXIT_ZOOM);
         assertEquals(71, HelperProtocol.ERROR);
+        assertEquals(11, HelperProtocol.POINTER_DOWN);
+        assertEquals(12, HelperProtocol.POINTER_MOVE);
+        assertEquals(13, HelperProtocol.POINTER_UP);
+        assertEquals(14, HelperProtocol.SCROLL);
+        assertEquals(15, HelperProtocol.CLICK);
+        assertEquals(16, HelperProtocol.EXIT_TYPING);
+        assertEquals(17, HelperProtocol.WINDOWS_TO_DISPLAY);
+        assertEquals(18, HelperProtocol.WINDOWS_BACK);
+        assertEquals(72, HelperProtocol.TYPING_EXIT);
+        assertEquals(73, HelperProtocol.DRAG_DELTA);
+        assertEquals(74, HelperProtocol.DRAG_ENDED);
         assertEquals(1, HelperProtocol.VERSION);
         assertEquals(64 * 1024 * 1024, HelperProtocol.MAX_FRAME_LENGTH);
         assertEquals(64 * 1024, HelperProtocol.MAX_CONTROL_LENGTH);
@@ -129,6 +140,37 @@ class HelperProtocolTest {
     void requestPermissions() throws IOException {
         checkModMessage("request_permissions", new RequestPermissions());
         assertEquals(10, new RequestPermissions().type());
+    }
+
+    @Test
+    void inWorldPointer() throws IOException {
+        checkModMessage("pointer_down", new PointerDown(1, 960, 540, PointerButton.LEFT));
+        checkModMessage("pointer_move", new PointerMove(2, 10, 20));
+        checkModMessage("pointer_up", new PointerUp(2, 10, 20, PointerButton.LEFT));
+        checkModMessage("scroll", new Scroll(1, 100, 200, 0, -120));
+        checkModMessage("click", new Click(1, 300, 400, PointerButton.RIGHT));
+        checkModMessage("exit_typing", new ExitTyping());
+    }
+
+    @Test
+    void windowsJoinAndLeave() throws IOException {
+        checkModMessage("windows_to_display", new WindowsToDisplay(1, null));
+        checkModMessage("windows_to_display_apps", new WindowsToDisplay(1, List.of("com.apple.TextEdit")));
+        checkModMessage("windows_back", new WindowsBack());
+    }
+
+    @Test
+    void pointerMessagesNeedTheirButton() {
+        for (int type : new int[] {HelperProtocol.POINTER_DOWN, HelperProtocol.POINTER_UP, HelperProtocol.CLICK}) {
+            byte[] raw = envelope(type, "{\"slot\":1,\"x\":2,\"y\":3}");
+            FrameReader r = FrameReader.forModMessages();
+            r.push(raw, 0, raw.length);
+            assertThrows(HelperProtocol.ProtocolException.class, r::next, "type " + type);
+        }
+        byte[] thumb = envelope(HelperProtocol.CLICK, "{\"button\":\"thumb\",\"slot\":1,\"x\":2,\"y\":3}");
+        FrameReader r = FrameReader.forModMessages();
+        r.push(thumb, 0, thumb.length);
+        assertThrows(HelperProtocol.ProtocolException.class, r::next);
     }
 
     // ---- helper -> mod fixtures ----
@@ -187,6 +229,13 @@ class HelperProtocolTest {
     }
 
     @Test
+    void typingAndDragFromTheHelper() throws IOException {
+        check("typing_exit", new TypingExit("esc"));
+        check("drag_delta", new DragDelta(12, -3));
+        check("drag_ended", new DragEnded("released"));
+    }
+
+    @Test
     void busyErrorIsRecognisable() throws IOException {
         byte[] bytes = HelperProtocol.encode(new HelperError(HelperError.BUSY, "another client is connected"));
         FrameReader reader = FrameReader.forHelperMessages();
@@ -205,7 +254,7 @@ class HelperProtocolTest {
     @Test
     void everyFixtureDecodesAndReencodes() throws IOException {
         List<byte[]> all = allFixtures();
-        assertEquals(20, all.size()); // one per message type, plus a second and third CAPTURE (window, main)
+        assertEquals(32, all.size()); // one per message type, a second and third CAPTURE (window, main), a second WINDOWS_TO_DISPLAY
         for (byte[] bytes : all) {
             FrameReader reader = FrameReader.forHelperMessages();
             reader.push(bytes, 0, bytes.length);
@@ -322,7 +371,7 @@ class HelperProtocolTest {
 
     @Test
     void unknownTypeRejected() {
-        for (int type : new int[] {0, 11, 63, 72, 255}) {
+        for (int type : new int[] {0, 19, 63, 75, 255}) {
             FrameReader reader = FrameReader.forHelperMessages();
             byte[] bytes = envelope(type, "{}");
             reader.push(bytes, 0, bytes.length);

@@ -3,8 +3,9 @@ import ApplicationServices
 
 /// Joining a world: the player's app windows move from the main display onto their first hologram's display, keeping
 /// the layout ({@link WindowMovePlan}); leaving (WINDOWS_BACK, the mod disconnecting, the helper quitting) puts each one
-/// back exactly where it was ({@link WindowLedger}, in memory only). Never moved: Minecraft, the helper, minimized or
-/// full-screen windows, panels and sheets (only standard windows), the desktop and menu bar items (not app windows). If
+/// back exactly where it was ({@link WindowLedger}, in memory only). Never moved: Minecraft, the helper, minimized
+/// windows, windows covering the whole display (an app in its own Space), panels and sheets (only standard windows), the
+/// desktop and menu bar items (not app windows). If
 /// a display disappears without WINDOWS_BACK (crash), macOS moves its windows back to a remaining display by itself.
 /// Needs Accessibility.
 @MainActor final class WindowMover {
@@ -30,12 +31,14 @@ import ApplicationServices
             log("windows: no target display \(display)"); return 0
         }
         let mainBounds = CGDisplayBounds(main)
+        // A window as big as the whole display, menu bar included, is an app in its own Space: leave it alone.
         var picked: [(Element, CGRect)] = []
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && !pids.contains(app.processIdentifier) {
             if let onlyApps, !onlyApps.contains(app.bundleIdentifier ?? "") { continue }
             for window in Self.windows(of: app.processIdentifier) {
                 guard Self.isMovable(window), let frame = Self.frame(window),
-                      frame.width > 40, frame.height > 40, mainBounds.contains(CGPoint(x: frame.midX, y: frame.midY)) else { continue }
+                      frame.width > 40, frame.height > 40, mainBounds.contains(CGPoint(x: frame.midX, y: frame.midY)),
+                      !(abs(frame.width - mainBounds.width) < 1 && abs(frame.height - mainBounds.height) < 1) else { continue }
                 picked.append((Element(ref: window, pid: app.processIdentifier), frame))
             }
         }
@@ -64,13 +67,11 @@ import ApplicationServices
     }
 
     static func isMovable(_ window: AXUIElement) -> Bool {
-        var subrole: CFTypeRef?, minimized: CFTypeRef?, fullScreen: CFTypeRef?, settable: DarwinBoolean = false
+        var subrole: CFTypeRef?, minimized: CFTypeRef?, settable: DarwinBoolean = false
         AXUIElementCopyAttributeValue(window, kAXSubroleAttribute as CFString, &subrole)
         guard (subrole as? String) == (kAXStandardWindowSubrole as String) else { return false }
         AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized)
         if (minimized as? Bool) == true { return false }
-        AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullScreen)
-        if (fullScreen as? Bool) == true { return false }
         guard AXUIElementIsAttributeSettable(window, kAXPositionAttribute as CFString, &settable) == .success, settable.boolValue else { return false }
         return true
     }

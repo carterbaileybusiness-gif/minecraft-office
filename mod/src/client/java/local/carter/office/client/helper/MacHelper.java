@@ -38,6 +38,19 @@ import local.carter.office.client.helper.HelperProtocol.Windows;
 import local.carter.office.client.helper.HelperProtocol.WindowRect;
 import local.carter.office.client.helper.HelperProtocol.ZoomIn;
 import local.carter.office.client.helper.HelperProtocol.ZoomOut;
+import local.carter.office.client.helper.HelperProtocol.Click;
+import local.carter.office.client.helper.HelperProtocol.DragDelta;
+import local.carter.office.client.helper.HelperProtocol.DragEnded;
+import local.carter.office.client.helper.HelperProtocol.ExitTyping;
+import local.carter.office.client.helper.HelperProtocol.PointerButton;
+import local.carter.office.client.helper.HelperProtocol.PointerDown;
+import local.carter.office.client.helper.HelperProtocol.PointerMove;
+import local.carter.office.client.helper.HelperProtocol.PointerUp;
+import local.carter.office.client.helper.HelperProtocol.Scroll;
+import local.carter.office.client.helper.HelperProtocol.TypingExit;
+import local.carter.office.client.helper.HelperProtocol.WindowsBack;
+import local.carter.office.client.helper.HelperProtocol.WindowsToDisplay;
+import local.carter.office.client.pointer.PointerPoint;
 
 /**
  * The mod's model of the Mac helper session: connection state and permissions (from WELCOME), the virtual displays the
@@ -74,6 +87,10 @@ public final class MacHelper implements HelperConnection.Listener {
 	private final List<Runnable> exitListeners = new CopyOnWriteArrayList<>();
 	private final List<Runnable> statusListeners = new CopyOnWriteArrayList<>();
 	private final List<Consumer<HelperError>> errorListeners = new CopyOnWriteArrayList<>();
+	private final List<Consumer<String>> typingExitListeners = new CopyOnWriteArrayList<>();
+	private final List<Consumer<String>> dragEndedListeners = new CopyOnWriteArrayList<>();
+	/** DRAG_DELTA summed until {@link #drainDragDelta}: {dx, dy}. */
+	private final long[] dragDelta = new long[2];
 
 	// guarded by this
 	private @Nullable HelperChannel channel;
@@ -85,6 +102,10 @@ public final class MacHelper implements HelperConnection.Listener {
 	private volatile @Nullable Welcome welcome;
 	private volatile boolean permissionDenied;
 	private volatile List<WindowInfo> windows = List.of();
+	/** Move the player's windows onto the first display of each connection (spec 5.9); off in tests unless asked. */
+	private volatile boolean moveWindowsOnJoin;
+	/** This connection moved the player's windows (so leaving sends WINDOWS_BACK). */
+	private volatile boolean windowsMoved;
 
 	/**
 	 * @param channelFactory makes the connection (a {@link HelperConnection} in the game) for this helper's listener
@@ -206,10 +227,14 @@ public final class MacHelper implements HelperConnection.Listener {
 			return;
 		}
 		if (connected) {
+			if (windowsMoved) {
+				ch.send(new WindowsBack()); // before the displays go, so every window lands exactly where it was
+			}
 			for (int slot : slots) {
 				ch.send(new RemoveDisplay(slot));
 			}
 		}
+		windowsMoved = false;
 		ch.close();
 		boolean was = connected;
 		connected = false;
@@ -338,6 +363,58 @@ public final class MacHelper implements HelperConnection.Listener {
 		}
 	}
 
+	// ---------------------------------------------------------------- in-world use (spec 5.9)
+
+	/** Whether joining moves the player's windows onto their first hologram's display (and leaving moves them back). */
+	public void setMoveWindowsOnJoin(final boolean value) {
+		moveWindowsOnJoin = value;
+	}
+
+	public boolean pointerDown(final PointerPoint p) {
+		return send(new PointerDown(p.slot(), p.x(), p.y(), PointerButton.LEFT));
+	}
+
+	public boolean pointerMove(final PointerPoint p) {
+		return send(new PointerMove(p.slot(), p.x(), p.y()));
+	}
+
+	public boolean pointerUp(final PointerPoint p) {
+		return send(new PointerUp(p.slot(), p.x(), p.y(), PointerButton.LEFT));
+	}
+
+	public boolean click(final PointerPoint p, final PointerButton button) {
+		return send(new Click(p.slot(), p.x(), p.y(), button));
+	}
+
+	public boolean scroll(final PointerPoint p, final int dx, final int dy) {
+		return send(new Scroll(p.slot(), p.x(), p.y(), dx, dy));
+	}
+
+	public boolean exitTyping() {
+		return send(new ExitTyping());
+	}
+
+	/** Physical mouse motion during a helper-driven drag since the last call, {dx, dy} in points. */
+	public int[] drainDragDelta() {
+		synchronized (dragDelta) {
+			int[] out = {(int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, dragDelta[0])),
+					(int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, dragDelta[1]))};
+			dragDelta[0] = 0;
+			dragDelta[1] = 0;
+			return out;
+		}
+	}
+
+	/** Called on the client thread with TYPING_EXIT's reason. */
+	public void onTypingExit(final Consumer<String> listener) {
+		typingExitListeners.add(listener);
+	}
+
+	/** Called on the client thread with DRAG_ENDED's reason. */
+	public void onDragEnded(final Consumer<String> listener) {
+		dragEndedListeners.add(listener);
+	}
+
 	// ---------------------------------------------------------------- windows and zoom
 
 	/** Asks the helper for the window list (it asks macOS for Screen Recording the first time). */
@@ -393,6 +470,7 @@ public final class MacHelper implements HelperConnection.Listener {
 		}
 		welcome = w;
 		permissionDenied = false;
+		windowsMoved = false; // a new helper: windows of an earlier one went back when its displays vanished
 		connected = true;
 		for (Map.Entry<Integer, Size> e : displays) {
 			send(new CreateDisplay(e.getKey(), e.getValue().w(), e.getValue().h()));
@@ -409,6 +487,10 @@ public final class MacHelper implements HelperConnection.Listener {
 			case Display d -> {
 				synchronized (this) {
 					online.put(d.slot(), new Size(d.w(), d.h()));
+				}
+				if (moveWindowsOnJoin && !windowsMoved) {
+					windowsMoved = true; // the first display this session: the player's windows move onto it
+					send(new WindowsToDisplay(d.slot(), null));
 				}
 				for (MacHelperSource s : attached) {
 					s.displayOnline(d.slot(), d.w(), d.h());
@@ -444,6 +526,22 @@ public final class MacHelper implements HelperConnection.Listener {
 				}
 			}
 			case Welcome w -> permissionsChanged(w);
+			case DragDelta d -> {
+				synchronized (dragDelta) {
+					dragDelta[0] += d.dx();
+					dragDelta[1] += d.dy();
+				}
+			}
+			case DragEnded e -> {
+				for (Consumer<String> l : dragEndedListeners) {
+					clientThread.execute(() -> l.accept(e.reason()));
+				}
+			}
+			case TypingExit t -> {
+				for (Consumer<String> l : typingExitListeners) {
+					clientThread.execute(() -> l.accept(t.reason()));
+				}
+			}
 			case HelperError e -> {
 				LOGGER.warn("Office helper error {}: {}", e.code(), e.message());
 				for (Consumer<HelperError> l : errorListeners) {
@@ -474,6 +572,7 @@ public final class MacHelper implements HelperConnection.Listener {
 	@Override
 	public void disconnected() {
 		connected = false;
+		drainDragDelta();
 		synchronized (this) {
 			online.clear();
 		}

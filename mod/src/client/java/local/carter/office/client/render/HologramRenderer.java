@@ -13,6 +13,7 @@ import local.carter.office.OfficeMod;
 import local.carter.office.client.interact.CornerDrag;
 import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramPreview;
+import local.carter.office.client.pointer.PointerClient;
 import local.carter.office.client.render.HologramLook.Label;
 import local.carter.office.client.render.HologramLook.State;
 import local.carter.office.core.HologramGeometry.Corner;
@@ -53,6 +54,10 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 	public static final Identifier OFFLINE = OfficeMod.id("textures/misc/offline.png");
 	public static final Identifier SCANLINES = OfficeMod.id("textures/misc/scanlines.png");
 	public static final Identifier ICONS = OfficeMod.id("textures/misc/icons.png");
+	/** The in-world pointer's arrow (16 x 24, hot spot at the top-left pixel, nearest filtering: crisp). */
+	public static final Identifier CURSOR = OfficeMod.id("textures/misc/cursor.png");
+	/** Cursor height as a share of the hologram's height (like a 32 px pointer on a 1080 px screen). */
+	static final float CURSOR_SHARE = 0.032f;
 
 	/** Edge glow width (blocks) beyond the content. */
 	public static final float GLOW = 0.06f;
@@ -101,6 +106,7 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		st.hoverCorner = null;
 		st.dragCorner = null;
 		st.handles = false;
+		st.cursor = false;
 		if (spec == null) {
 			return;
 		}
@@ -132,6 +138,12 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		if (hover != null && hover.be() == be) {
 			st.handles = true;
 			st.hoverCorner = hover.corner();
+		}
+		double[] cursor = isOwner && st.look == State.LIVE ? PointerClient.cursorOn(be.hologramId()) : null;
+		if (cursor != null) {
+			st.cursor = true;
+			st.cursorU = (float) cursor[0];
+			st.cursorV = (float) cursor[1];
 		}
 		CornerDrag drag = HologramInteractions.cornerDrag();
 		if (drag != null && drag.blockEntity() == be) {
@@ -207,6 +219,16 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			collector.order(4).submitCustomGeometry(poseStack, RenderTypes.lightning(), (pose, buf) -> {
 				edgeLine(buf, pose, hw, hh, 0.010f, 0.007f, argb(0.70f, CYAN));
 				handles(buf, pose, hw, hh, hovered);
+			});
+		}
+		// in-world pointer: a crisp arrow with its tip at the crosshair (only the owner's client draws it)
+		if (st.cursor) {
+			float ch = Math.max(0.035f, 2 * hh * CURSOR_SHARE);
+			float cw = ch * (16f / 24f);
+			float cx = (st.cursorU - 0.5f) * 2 * hw;
+			float cy = (0.5f - st.cursorV) * 2 * hh;
+			collector.order(5).submitCustomGeometry(poseStack, RenderTypes.text(CURSOR), (pose, buf) -> {
+				textured(buf, pose, cx, cy - ch, cx + cw, cy, 0.009f, 0f, 0f, 1f, 1f, 0xFFFFFFFF);
 			});
 		}
 		poseStack.popPose();

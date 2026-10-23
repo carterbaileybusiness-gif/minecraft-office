@@ -114,9 +114,8 @@ downloads the small helper (OfficeHelper, a few MB, from this project's GitHub p
    - macOS 14: **System Settings, Privacy & Security, Screen Recording**.
 2. **Accessibility.** macOS asks "OfficeHelper would like to control this computer" when the helper starts (or
    click **[Set up screens]** in chat to be asked again). Click **Open System Settings** and switch **OfficeHelper**
-   on in **System Settings, Privacy & Security, Accessibility**. This lets your mouse and keyboard work inside a
-   hologram, and double-tap Esc bring you back from your screen. The game notices within a couple of seconds; no
-   restart needed.
+   on in **System Settings, Privacy & Security, Accessibility**. This lets you click, drag, scroll and type on your
+   holograms, and Esc bring you back to the game. The game notices within a couple of seconds; no restart needed.
 3. Normally nothing else shows up. But if macOS ever says OfficeHelper cannot be opened because it is from an
    unidentified developer, open **System Settings, Privacy & Security**, scroll to the Security section, and click
    **Open Anyway** next to OfficeHelper. (We do not pay Apple for signing.)
@@ -176,13 +175,20 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
      "Private" panel), or **Show to...** (pick specific players).
    - **Remove** to pick it back up.
 5. **Move it.** Hold **Shift**, then right-click the hologram and drag. **Scroll** while dragging to rotate it.
-6. **Work on it.** **Click your hologram.** The camera zooms in until it fills your view, and your real mouse and
-   keyboard now control your real computer. On a **Mirror** hologram, Minecraft then steps aside (hidden on Mac,
-   minimized on Windows) and you are simply on your normal desktop.
-7. **Come back.** **Double-tap Esc**, or just click back into Minecraft (Dock, Cmd-Tab, taskbar). If that does not
-   work, use the backup:
-   - Mac: **Ctrl + Option + Cmd + Esc**
-   - Windows: **Ctrl + Alt + Shift + Esc**
+6. **Use it (Mac).** With an empty hand (or anything but an emitter), look at your hologram: a small pointer sits
+   where your crosshair is. Your crosshair is the mouse:
+   - **Left-click** clicks there, **right-click** right-clicks there. Nothing in the world is broken or placed.
+   - **Hold left-click and turn your head** to drag: select text, move a window, even carry it over to another
+     hologram, like between real monitors.
+   - **Scroll** scrolls the app you aim at (your hotbar stays).
+   - **Clicking into an app lets you type:** Minecraft stands still and shows "Typing — Esc to return". Press **Esc**
+     (the app never gets it) or click back into Minecraft to look around again.
+   - When you join, your open windows move onto your first hologram; when you leave, they go back where they were.
+   - **Mirror** holograms are view-only on a Mac.
+7. **Work on it (Windows).** **Click your hologram.** The camera zooms in until it fills your view, and your real
+   mouse and keyboard now control your real computer. On a **Mirror** hologram, Minecraft is minimized and you are
+   simply on your normal desktop. **Double-tap Esc**, or click back into Minecraft (taskbar), to come back. Backup:
+   **Ctrl + Alt + Shift + Esc**.
 
 Good to know:
 - Only **you** can resize, change, or remove your holograms. Emitters survive explosions.

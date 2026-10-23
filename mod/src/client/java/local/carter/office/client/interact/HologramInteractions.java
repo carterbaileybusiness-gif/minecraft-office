@@ -6,6 +6,7 @@ import java.util.Optional;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.interact.HologramPicker.Picked;
+import local.carter.office.client.pointer.PointerClient;
 import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.render.HologramPlacement;
 import local.carter.office.client.zoom.ZoomClient;
@@ -46,8 +47,9 @@ import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
  *   <li>right-click the body: settings.</li>
  * </ul>
  * Without an emitter in the main hand (empty, or any other item: a Wizards staff, food, a shield), right-clicking your
- * OWN hologram is always taken: it zooms in to work on it ({@link ZoomClient}), or says in the action bar why it can't
- * (not live yet, helper not ready). Someone else's hologram is never intercepted (no message; the item keeps its own
+ * OWN hologram is always taken: on a Mac it is a right-click on the app there ({@link PointerClient}, in-world use;
+ * left clicks, drags and the wheel go there too); elsewhere it zooms in to work on it ({@link ZoomClient}). Either way the
+ * action bar says why when it can't (not live yet, helper not ready, Mirror is view-only). Someone else's hologram is never intercepted (no message; the item keeps its own
  * use), and an emitter in the off hand alone never makes a click a hologram click. Right-clicking an emitter block
  * (empty main hand or an emitter, not sneaking) opens settings, read-only for non-owners. Called from {@code MinecraftUseItemMixin} at the head of
  * {@code Minecraft.startUseItem} (after vanilla's destroying/hands-busy guards; a consumed click gets vanilla's 4-tick
@@ -71,7 +73,7 @@ public final class HologramInteractions {
 
 	public static void register() {
 		ClientTickEvents.END_CLIENT_TICK.register(HologramInteractions::tick);
-		ClientHotbarScrollEvents.ALLOW.register((inventory, current, next, dx, dy) -> onScroll(dy != 0 ? dy : dx));
+		ClientHotbarScrollEvents.ALLOW.register((inventory, current, next, dx, dy) -> onScroll(dx, dy));
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			cancel();
 			HologramPreview.clear();
@@ -83,7 +85,11 @@ public final class HologramInteractions {
 	 * Mouse wheel: turns a hologram being moved, or resizes the owned hologram under the crosshair (emitter in the main
 	 * hand). Returns false (hotbar slot unchanged) when the wheel was ours.
 	 */
-	static boolean onScroll(final double amount) {
+	static boolean onScroll(final double dx, final double dy) {
+		if (PointerClient.onScroll(dx, dy)) {
+			return false; // scrolled the app under the crosshair (in-world use): the hotbar stays
+		}
+		double amount = dy != 0 ? dy : dx;
 		int notches = amount > 0 ? 1 : amount < 0 ? -1 : 0;
 		MoveDrag move = moveDrag;
 		if (move != null) {
@@ -196,6 +202,9 @@ public final class HologramInteractions {
 			return onHologram(mc, player, picked.get());
 		}
 		if (hologramFirst && picked.get().be().isOwner(player.getUUID())) {
+			if (PointerClient.available()) {
+				return PointerClient.onUse(mc, picked.get().be());
+			}
 			return zoom(player, picked.get().be());
 		}
 		boolean mainHandFree = holdingEmitter || player.getItemInHand(InteractionHand.MAIN_HAND).isEmpty();

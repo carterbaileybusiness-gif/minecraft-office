@@ -27,6 +27,12 @@ import com.mojang.blaze3d.platform.InputConstants;
 
 import local.carter.office.client.zoom.ZoomClient;
 import local.carter.office.client.zoom.ZoomController;
+import local.carter.office.client.helper.HelperProtocol.PointerButton;
+import local.carter.office.client.pointer.PointerClient;
+import local.carter.office.client.pointer.PointerGesture;
+import local.carter.office.client.pointer.PointerPoint;
+import local.carter.office.client.pointer.PointerPort;
+import local.carter.office.client.pointer.TypingScreen;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -68,6 +74,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			cornerDragResizes(context, sp);
 			liveTextureUpdates(context, sp);
 			zoomInToWorkAndBack(context, sp);
+			inWorldPointer(context, sp);
 			scrollResizes(context, sp);
 			wallMount(context, sp);
 			offlineLook(context, sp);
@@ -464,6 +471,152 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		sp.getServer().runOnServer(server -> player(server).setItemInHand(InteractionHand.MAIN_HAND,
 				new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 4))); // as the following tests expect
 		context.waitTicks(2);
+	}
+
+	/** A fake in-world pointer (the Mac helper's side): records what the mod sends, lets the test answer. */
+	private static final class FakePointer implements PointerPort {
+		final java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+		java.util.function.Consumer<String> typingExit = r -> {};
+		java.util.function.Consumer<String> dragEnded = r -> {};
+
+		@Override
+		public String problem() {
+			return null;
+		}
+
+		@Override
+		public void pointerDown(final PointerPoint p) {
+			calls.add("down " + p.slot());
+		}
+
+		@Override
+		public void pointerMove(final PointerPoint p) {
+			calls.add("move " + p.slot() + " " + p.x() + "," + p.y());
+		}
+
+		@Override
+		public void pointerUp(final PointerPoint p) {
+			calls.add("up");
+		}
+
+		@Override
+		public void click(final PointerPoint p, final PointerButton button) {
+			calls.add("click " + button + " " + p.slot() + " " + p.x() + "," + p.y());
+		}
+
+		@Override
+		public void scroll(final PointerPoint p, final int dx, final int dy) {
+			calls.add("scroll " + dy);
+		}
+
+		@Override
+		public void exitTyping() {
+			calls.add("exit-typing");
+		}
+
+		@Override
+		public void onTypingExit(final java.util.function.Consumer<String> listener) {
+			typingExit = listener;
+		}
+
+		@Override
+		public void onDragEnded(final java.util.function.Consumer<String> listener) {
+			dragEnded = listener;
+		}
+	}
+
+	/**
+	 * Mac in-world use with a fake helper: a left click on your own Extend hologram is a CLICK there (typing mode opens,
+	 * the helper's TYPING_EXIT closes it), holding and turning is POINTER_DOWN + POINTER_MOVE, the wheel scrolls the app
+	 * not the hotbar, and the stone right behind the hologram is never broken.
+	 */
+	private void inWorldPointer(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		FakePointer fake = new FakePointer();
+		BlockPos behind0 = emitter.offset(0, 0, -1);
+		BlockPos behind1 = emitter.offset(0, 1, -1);
+		BlockPos behind2 = emitter.offset(0, 2, -1);
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+			p.level().setBlockAndUpdate(behind0, Blocks.STONE.defaultBlockState());
+			p.level().setBlockAndUpdate(behind1, Blocks.STONE.defaultBlockState());
+			p.level().setBlockAndUpdate(behind2, Blocks.STONE.defaultBlockState());
+			p.teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5); // the stone is within reach
+		});
+		context.runOnClient(mc -> PointerClient.setPortForTesting(fake));
+		try {
+			context.waitTicks(5);
+			HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
+			look(context, hologramCenter(spec));
+			context.waitTicks(3);
+			String aimed = context.computeOnClient(mc -> mc.hitResult == null ? "nothing" : mc.hitResult.getType().name());
+			if (!"BLOCK".equals(aimed)) {
+				throw new AssertionError("the stone behind the hologram should be what vanilla aims at, was " + aimed);
+			}
+
+			// 1. a click: CLICK at the middle of display 1, typing mode, nothing broken
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(5);
+			String click = fake.calls.stream().filter(c -> c.startsWith("click")).findFirst().orElse(null);
+			if (click == null || !click.startsWith("click LEFT 1 ")) {
+				throw new AssertionError("left click should send CLICK on display 1, sent " + fake.calls);
+			}
+			if (!context.computeOnClient(mc -> mc.gui.screen() instanceof TypingScreen)) {
+				throw new AssertionError("typing mode should show its hint screen");
+			}
+			context.takeScreenshot("pointer-typing");
+			context.runOnClient(mc -> fake.typingExit.accept("esc"));
+			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
+
+			// 2. hold and turn: a drag the helper drives, never mining
+			fake.calls.clear();
+			look(context, hologramCenter(spec));
+			context.waitTicks(2);
+			context.getInput().holdMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(3);
+			Frame f = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), spec);
+			look(context, f.center().add(f.right().scale(f.w() * 0.3)));
+			context.waitTicks(10);
+			if (!fake.calls.contains("down 1") || fake.calls.stream().noneMatch(c -> c.startsWith("move 1 "))) {
+				throw new AssertionError("holding and turning should send POINTER_DOWN then POINTER_MOVE, sent " + fake.calls);
+			}
+			context.runOnClient(mc -> fake.dragEnded.accept("released"));
+			context.getInput().releaseMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(3);
+			if (context.computeOnClient(mc -> PointerClient.gesture().state()) != PointerGesture.State.IDLE) {
+				throw new AssertionError("DRAG_ENDED should end the drag");
+			}
+
+			// 3. the wheel scrolls the app, not the hotbar
+			look(context, hologramCenter(spec));
+			context.waitTicks(2);
+			int slot = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+			context.getInput().scroll(-1.0);
+			context.waitTicks(3);
+			if (fake.calls.stream().noneMatch(c -> c.startsWith("scroll"))
+					|| context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot()) != slot) {
+				throw new AssertionError("the wheel on a hologram should scroll the app and keep the hotbar slot, sent " + fake.calls);
+			}
+
+			sp.getConnection().waitForServerboundPackets();
+			boolean intact = sp.getServer().computeOnServer(server -> player(server).level().getBlockState(behind0).is(Blocks.STONE)
+					&& player(server).level().getBlockState(behind1).is(Blocks.STONE)
+					&& player(server).level().getBlockState(behind2).is(Blocks.STONE));
+			if (!intact) {
+				throw new AssertionError("a block behind the hologram was broken");
+			}
+		} finally {
+			context.runOnClient(mc -> PointerClient.setPortForTesting(null));
+			sp.getServer().runOnServer(server -> {
+				ServerPlayer p = player(server);
+				p.level().setBlockAndUpdate(behind0, Blocks.AIR.defaultBlockState());
+				p.level().setBlockAndUpdate(behind1, Blocks.AIR.defaultBlockState());
+				p.level().setBlockAndUpdate(behind2, Blocks.AIR.defaultBlockState());
+				p.teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() + 0.5);
+				p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 4));
+			});
+			context.waitTicks(3);
+		}
 	}
 
 	private static void sleep(final long ms) {

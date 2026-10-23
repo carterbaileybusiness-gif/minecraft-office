@@ -54,6 +54,7 @@ public final class SelfTestSteps {
 		SelfTest.registerStep("jpeg", "JPEG encode/decode", SelfTestSteps::jpeg);
 		SelfTest.registerStep("udp", "Shared-screen link (UDP)", SelfTestSteps::udp);
 		SelfTest.registerStep("zoom", "Zoom in/out dry run", SelfTestSteps::zoom);
+		SelfTest.registerStep("pointer", "In-world pointer (click, drag, type, Esc)", SelfTestSteps::pointer);
 	}
 
 	static Outcome system(final Context ctx) {
@@ -199,6 +200,9 @@ public final class SelfTestSteps {
 	 * the game window at the panel's aspect)?
 	 */
 	static Outcome zoom(final Context ctx) {
+		if (!ctx.platform().supportsZoom()) {
+			return Outcome.skip("Zoom isn't used on this computer — you use screens in-world");
+		}
 		SelfTest.ZoomTarget z = ctx.zoom();
 		if (z == null) {
 			return Outcome.skip("no hologram of yours nearby (place one, or stand near it, to test zooming)");
@@ -228,6 +232,20 @@ public final class SelfTestSteps {
 			return Outcome.fail("can't work on it yet: " + problem + " (" + what + ")");
 		}
 		return Outcome.pass("could work on it (no real zoom done): " + what);
+	}
+
+	/**
+	 * In-world use (Mac): the helper is connected and has Accessibility, which clicks, drags, scrolling and the Esc that
+	 * ends typing all need (the event taps). Run after the platform step, which starts an installed helper.
+	 */
+	static Outcome pointer(final Context ctx) {
+		var port = ctx.platform().pointer();
+		if (port == null) {
+			return Outcome.skip("in-world pointer not used on this computer");
+		}
+		String problem = port.problem();
+		return problem == null ? Outcome.pass("helper connected with Accessibility: click, drag, scroll and Esc-to-return can work")
+				: Outcome.fail(problem);
 	}
 
 	// ------------------------------------------------------------------ capture one frame
