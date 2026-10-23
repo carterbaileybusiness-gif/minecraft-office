@@ -2,6 +2,7 @@ package local.carter.office.core;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -109,6 +110,78 @@ class HologramGeometryTest {
         assertEquals(12.0, HologramGeometry.widthFromDrag(frame, HologramGeometry.Corner.BOTTOM_RIGHT,
                 new Vec3d(40, 0, 0), aspect), 1e-9);
         assertEquals(0.5, HologramGeometry.widthFromDrag(frame, HologramGeometry.Corner.BOTTOM_RIGHT,
-                new Vec3d(-5, 0, 0), aspect), 1e-9);
+                new Vec3d(-5, 0.5, 0), aspect), 1e-9);
+    }
+
+    @Test
+    void verticalDragOnTallFrameGrowsWidth() {
+        double aspect = 1080.0 / 1920.0;
+        var tall = new HologramGeometry.Frame(
+                new Vec3d(0, 0, 0), new Vec3d(1, 0, 0), new Vec3d(0, 1, 0), 1.125, 2.0);
+        // bottom-right corner at (0.5625, -1); drag straight down by 1 block
+        Vec3d pt = new Vec3d(0.5625, -2.0, 0);
+        assertEquals(1.125 + 1.0 * aspect,
+                HologramGeometry.widthFromDrag(tall, HologramGeometry.Corner.BOTTOM_RIGHT, pt, aspect), 1e-9);
+        // top-left, drag straight up by 1 block
+        Vec3d up = new Vec3d(-0.5625, 2.0, 0);
+        assertEquals(1.125 + 1.0 * aspect,
+                HologramGeometry.widthFromDrag(tall, HologramGeometry.Corner.TOP_LEFT, up, aspect), 1e-9);
+    }
+
+    @Test
+    void diagonalDragUsesLargerAxis() {
+        double aspect = 16.0 / 9.0;
+        var c = HologramGeometry.Corner.BOTTOM_RIGHT;
+        // mostly horizontal: +0.5 right, 0.1 down -> horizontal wins (2.5)
+        assertEquals(2.5, HologramGeometry.widthFromDrag(frame, c, new Vec3d(1.5, -0.6625, 0), aspect), 1e-9);
+        // mostly vertical: +0.1 right, 1 down -> vertical wins ((1.125 + 1) * 16/9)
+        assertEquals(2.125 * aspect,
+                HologramGeometry.widthFromDrag(frame, c, new Vec3d(1.1, -1.5625, 0), aspect), 1e-9);
+    }
+
+    @Test
+    void growingBottomRightKeepsTopLeftFixed() {
+        var c = HologramGeometry.centerForFixedCorner(frame, HologramGeometry.Corner.BOTTOM_RIGHT, 3.0, 1.6875);
+        // top-left corner = center + (-w/2) right + (h/2) up
+        assertEquals(-1.0, c.x() - 1.5, 1e-9);
+        assertEquals(0.5625, c.y() + 0.84375, 1e-9);
+        assertEquals(0.0, c.z(), 1e-9);
+    }
+
+    @Test
+    void fixedCornerForEveryCorner() {
+        double nw = 3.0;
+        double nh = 1.6875;
+        for (HologramGeometry.Corner d : HologramGeometry.Corner.values()) {
+            var c = HologramGeometry.centerForFixedCorner(frame, d, nw, nh);
+            boolean dr = d == HologramGeometry.Corner.TOP_RIGHT || d == HologramGeometry.Corner.BOTTOM_RIGHT;
+            boolean dt = d == HologramGeometry.Corner.TOP_LEFT || d == HologramGeometry.Corner.TOP_RIGHT;
+            double fx = dr ? -1.0 : 1.0; // opposite corner x in the old frame
+            double fy = dt ? -0.5625 : 0.5625;
+            assertEquals(fx, c.x() + (dr ? -nw / 2 : nw / 2), 1e-9);
+            assertEquals(fy, c.y() + (dt ? -nh / 2 : nh / 2), 1e-9);
+        }
+    }
+
+    @Test
+    void planePointOutsideQuad() {
+        // aimed 2 blocks beyond the right edge (x = 3), still on the plane
+        var p = HologramGeometry.planePoint(new Vec3d(3, 0, 5), forward, frame);
+        assertTrue(p.isPresent());
+        assertEquals(3.0, p.get().x(), 1e-9);
+        assertEquals(0.0, p.get().z(), 1e-9);
+        assertTrue(HologramGeometry.hit(new Vec3d(3, 0, 5), forward, frame).isEmpty());
+    }
+
+    @Test
+    void planePointParallelOrBehindIsEmpty() {
+        assertTrue(HologramGeometry.planePoint(new Vec3d(0, 0, 5), new Vec3d(1, 0, 0), frame).isEmpty());
+        assertTrue(HologramGeometry.planePoint(new Vec3d(0, 0, 5), new Vec3d(0, 0, 1), frame).isEmpty());
+    }
+
+    @Test
+    void frontFacingFlag() {
+        assertTrue(HologramGeometry.hit(new Vec3d(0, 0, 5), forward, frame).get().frontFacing());
+        assertFalse(HologramGeometry.hit(new Vec3d(0, 0, -5), new Vec3d(0, 0, 1), frame).get().frontFacing());
     }
 }

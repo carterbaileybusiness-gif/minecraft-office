@@ -19,20 +19,39 @@ public final class HologramGeometry {
 
     public record Frame(Vec3d center, Vec3d right, Vec3d up, double w, double h) {}
 
-    /** {@code corner} is null unless the hit is within {@link #CORNER_RADIUS} of a corner. */
-    public record Hit(double u, double v, double distance, Corner corner) {}
+    /**
+     * {@code corner} is null unless the hit is within {@link #CORNER_RADIUS} of a corner.
+     * {@code frontFacing} is true when the ray hit the side the normal {@code right x up} faces.
+     */
+    public record Hit(double u, double v, double distance, Corner corner, boolean frontFacing) {
+        public Hit(double u, double v, double distance, Corner corner) {
+            this(u, v, distance, corner, true);
+        }
+    }
 
-    /** Two-sided ray test; {@code dir} need not be normalised. Empty on miss, parallel, or hit behind origin. */
-    public static Optional<Hit> hit(Vec3d origin, Vec3d dir, Frame f) {
+    /** Ray parameter t of the (unbounded) plane intersection; empty if parallel or behind the origin. */
+    private static Optional<Double> planeT(Vec3d origin, Vec3d dir, Frame f) {
         Vec3d normal = f.right().cross(f.up());
         double denom = dir.dot(normal);
         if (Math.abs(denom) < EPS) {
             return Optional.empty();
         }
         double t = f.center().sub(origin).dot(normal) / denom;
-        if (t < 0) {
+        return t < 0 ? Optional.empty() : Optional.of(t);
+    }
+
+    /** Where the ray meets the frame's infinite plane, even outside the quad (for drags). Empty if parallel or behind. */
+    public static Optional<Vec3d> planePoint(Vec3d origin, Vec3d dir, Frame f) {
+        return planeT(origin, dir, f).map(t -> origin.add(dir.scale(t)));
+    }
+
+    /** Two-sided ray test; {@code dir} need not be normalised. Empty on miss, parallel, or hit behind origin. */
+    public static Optional<Hit> hit(Vec3d origin, Vec3d dir, Frame f) {
+        Optional<Double> maybeT = planeT(origin, dir, f);
+        if (maybeT.isEmpty()) {
             return Optional.empty();
         }
+        double t = maybeT.get();
         Vec3d rel = origin.add(dir.scale(t)).sub(f.center());
         double x = rel.dot(f.right());
         double y = rel.dot(f.up());
@@ -41,7 +60,8 @@ public final class HologramGeometry {
         if (u < 0 || u > 1 || v < 0 || v > 1) {
             return Optional.empty();
         }
-        return Optional.of(new Hit(u, v, t * dir.length(), cornerAt(x, y, f)));
+        boolean front = dir.dot(f.right().cross(f.up())) < 0;
+        return Optional.of(new Hit(u, v, t * dir.length(), cornerAt(x, y, f), front));
     }
 
     private static Corner cornerAt(double x, double y, Frame f) {
@@ -69,14 +89,32 @@ public final class HologramGeometry {
 
     /**
      * New width when corner {@code c} is dragged to {@code planePoint} (a point on the frame's plane)
-     * with the opposite corner fixed. Driven by the horizontal distance from the fixed edge, so the
-     * aspect ratio is preserved by the caller deriving height from the returned width; {@code aspect}
-     * is accepted for API symmetry. Result is clamped to [0.5, 12.0].
+     * with the opposite corner fixed. Takes the larger of the width implied by the horizontal distance
+     * from the fixed edge and the width implied by the vertical distance times {@code aspect}
+     * (width / height), so horizontal, vertical and diagonal drags all resize. Clamped to [0.5, 12.0].
      */
     public static double widthFromDrag(Frame f, Corner c, Vec3d planePoint, double aspect) {
         boolean rightSide = c == Corner.TOP_RIGHT || c == Corner.BOTTOM_RIGHT;
-        double px = planePoint.sub(f.center()).dot(f.right());
-        double width = rightSide ? px + f.w() / 2 : f.w() / 2 - px;
-        return HologramSpec.clampWidth(width);
+        boolean topSide = c == Corner.TOP_LEFT || c == Corner.TOP_RIGHT;
+        Vec3d rel = planePoint.sub(f.center());
+        double px = rel.dot(f.right());
+        double py = rel.dot(f.up());
+        double wH = rightSide ? px + f.w() / 2 : f.w() / 2 - px;
+        double hV = topSide ? py + f.h() / 2 : f.h() / 2 - py;
+        return HologramSpec.clampWidth(Math.max(wH, hV * aspect));
+    }
+
+    /**
+     * Center of the resized frame (newW x newH, same orientation) such that the corner opposite
+     * {@code dragged} stays where it was.
+     */
+    public static Vec3d centerForFixedCorner(Frame f, Corner dragged, double newW, double newH) {
+        boolean draggedRight = dragged == Corner.TOP_RIGHT || dragged == Corner.BOTTOM_RIGHT;
+        boolean draggedTop = dragged == Corner.TOP_LEFT || dragged == Corner.TOP_RIGHT;
+        double sx = draggedRight ? -1 : 1; // side of the fixed corner along right
+        double sy = draggedTop ? -1 : 1; // side of the fixed corner along up
+        return f.center()
+                .add(f.right().scale(sx * (f.w() - newW) / 2))
+                .add(f.up().scale(sy * (f.h() - newH) / 2));
     }
 }
