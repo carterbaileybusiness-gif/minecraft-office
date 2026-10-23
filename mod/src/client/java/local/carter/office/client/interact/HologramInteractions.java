@@ -28,19 +28,23 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
 
 /**
- * Right-click handling for holograms (client thread). While holding a Hologram Emitter, on a hologram you own:
+ * Right-click handling for holograms (client thread). With a Hologram Emitter in the MAIN hand, on a hologram you own:
  * <ul>
  *   <li>right-click a corner and hold: resize ({@link CornerDrag});</li>
  *   <li>Shift + right-click the body and hold: move, mouse-wheel turns it ({@link MoveDrag});</li>
  *   <li>right-click the body: settings.</li>
  * </ul>
- * Right-clicking an emitter block (any hand, not sneaking) opens settings, read-only for non-owners. Called from
- * {@code MinecraftUseItemMixin} at the head of {@code Minecraft.startUseItem}; a consumed click never reaches vanilla, so
- * an emitter in hand is never placed by accident on the wall behind a hologram.
+ * Right-clicking an emitter block (empty main hand or an emitter, not sneaking) opens settings, read-only for
+ * non-owners. Anything else in the main hand (a Wizards staff, food, a shield) is never intercepted, and an emitter in
+ * the off hand alone never is either. Called from {@code MinecraftUseItemMixin} at the head of
+ * {@code Minecraft.startUseItem} (after vanilla's destroying/hands-busy guards; a consumed click gets vanilla's 4-tick
+ * repeat delay and its repeats are swallowed until release, see {@link ClickGate}); a consumed click never reaches
+ * vanilla, so an emitter in hand is never placed by accident on the wall behind a hologram.
  */
 public final class HologramInteractions {
 	private static @Nullable CornerDrag cornerDrag;
 	private static @Nullable MoveDrag moveDrag;
+	private static final ClickGate GATE = new ClickGate();
 
 	private HologramInteractions() {}
 
@@ -134,9 +138,17 @@ public final class HologramInteractions {
 		if (player == null || mc.level == null || mc.gui.screen() != null) {
 			return false;
 		}
-		if (dragging()) {
-			return true; // repeats while the button is held
+		if (dragging() || GATE.isRepeat()) {
+			return true; // auto-repeat of a click we already took: swallow until the button is released
 		}
+		if (consumeClick(mc, player)) {
+			GATE.consumed();
+			return true;
+		}
+		return false;
+	}
+
+	private static boolean consumeClick(final Minecraft mc, final LocalPlayer player) {
 		float partialTick = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
 		Vec3 eye = player.getEyePosition(partialTick);
 		double vanillaDistance = mc.hitResult != null && mc.hitResult.getType() != HitResult.Type.MISS
@@ -147,7 +159,8 @@ public final class HologramInteractions {
 		if (holdingEmitter && picked.isPresent() && picked.get().hit().distance() <= vanillaDistance + 1e-3) {
 			return onHologram(mc, player, picked.get());
 		}
-		if (mc.hitResult instanceof BlockHitResult block && block.getType() == HitResult.Type.BLOCK && !player.isShiftKeyDown()
+		boolean mainHandFree = holdingEmitter || player.getItemInHand(InteractionHand.MAIN_HAND).isEmpty();
+		if (mainHandFree && mc.hitResult instanceof BlockHitResult block && block.getType() == HitResult.Type.BLOCK && !player.isShiftKeyDown()
 				&& mc.level.getBlockEntity(block.getBlockPos()) instanceof HologramBlockEntity be && be.spec() != null) {
 			openSettings(mc, be);
 			return true;
@@ -183,6 +196,7 @@ public final class HologramInteractions {
 	}
 
 	private static void tick(final Minecraft mc) {
+		GATE.tick(mc.options.keyUse.isDown());
 		if (!dragging()) {
 			return;
 		}
@@ -217,9 +231,9 @@ public final class HologramInteractions {
 		moveDrag = null;
 	}
 
+	/** Main hand only: an off-hand emitter must not take right-clicks meant for the main-hand item. */
 	static boolean holdingEmitter(final LocalPlayer player) {
-		return player.getItemInHand(InteractionHand.MAIN_HAND).getItem() == OfficeBlocks.HOLOGRAM_EMITTER_ITEM
-				|| player.getItemInHand(InteractionHand.OFF_HAND).getItem() == OfficeBlocks.HOLOGRAM_EMITTER_ITEM;
+		return player.getItemInHand(InteractionHand.MAIN_HAND).getItem() == OfficeBlocks.HOLOGRAM_EMITTER_ITEM;
 	}
 
 	public static void openSettings(final Minecraft mc, final HologramBlockEntity be) {

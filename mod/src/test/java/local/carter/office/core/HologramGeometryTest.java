@@ -140,6 +140,40 @@ class HologramGeometryTest {
     }
 
     @Test
+    void pureHorizontalInwardDragShrinks() {
+        double aspect = 16.0 / 9.0;
+        // bottom-right corner at (1, -0.5625); drag 0.5 block left, no vertical movement -> 1.5 wide
+        assertEquals(1.5, HologramGeometry.widthFromDrag(frame, HologramGeometry.Corner.BOTTOM_RIGHT,
+                new Vec3d(0.5, -0.5625, 0), aspect), 1e-9);
+        // top-left corner at (-1, 0.5625); drag 0.5 block right -> 1.5 wide
+        assertEquals(1.5, HologramGeometry.widthFromDrag(frame, HologramGeometry.Corner.TOP_LEFT,
+                new Vec3d(-0.5, 0.5625, 0), aspect), 1e-9);
+    }
+
+    @Test
+    void pureVerticalDragOnTallFrameGrowsAndShrinks() {
+        double aspect = 1080.0 / 1920.0;
+        var tall = new HologramGeometry.Frame(
+                new Vec3d(0, 0, 0), new Vec3d(1, 0, 0), new Vec3d(0, 1, 0), 1.125, 2.0);
+        // bottom-right corner at (0.5625, -1): up by 0.5 -> height 1.5 -> width 1.5 * 9/16
+        assertEquals(1.5 * aspect, HologramGeometry.widthFromDrag(tall, HologramGeometry.Corner.BOTTOM_RIGHT,
+                new Vec3d(0.5625, -0.5, 0), aspect), 1e-9);
+        // and down by 0.5 -> height 2.5
+        assertEquals(2.5 * aspect, HologramGeometry.widthFromDrag(tall, HologramGeometry.Corner.BOTTOM_RIGHT,
+                new Vec3d(0.5625, -1.5, 0), aspect), 1e-9);
+    }
+
+    @Test
+    void diagonalInwardDragUsesDominantAxis() {
+        double aspect = 16.0 / 9.0;
+        var c = HologramGeometry.Corner.BOTTOM_RIGHT;
+        // 0.8 left, 0.0375 down: horizontal moved more -> shrink to 1.2 (old max rule kept ~2.07)
+        assertEquals(1.2, HologramGeometry.widthFromDrag(frame, c, new Vec3d(0.2, -0.6, 0), aspect), 1e-9);
+        // 0.05 left, 0.3 up: vertical moved more -> height 0.825 -> width 0.825 * 16/9
+        assertEquals(0.825 * aspect, HologramGeometry.widthFromDrag(frame, c, new Vec3d(0.95, -0.2625, 0), aspect), 1e-9);
+    }
+
+    @Test
     void growingBottomRightKeepsTopLeftFixed() {
         var c = HologramGeometry.centerForFixedCorner(frame, HologramGeometry.Corner.BOTTOM_RIGHT, 3.0, 1.6875);
         // top-left corner = center + (-w/2) right + (h/2) up

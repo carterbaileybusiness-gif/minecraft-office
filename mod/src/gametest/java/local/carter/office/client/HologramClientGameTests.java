@@ -23,6 +23,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.Heightmap;
 
@@ -132,6 +133,53 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		}
 		context.waitTicks(5);
 		context.takeScreenshot("hologram-resized");
+
+		// Shrinking: drag the same corner straight left (horizontal only) -> narrower.
+		double grown = width;
+		double shrunk = dragBottomRightBy(context, sp, -0.6, 0.0);
+		if (shrunk > grown - 0.3) {
+			throw new AssertionError("horizontal inward drag did not shrink: width " + grown + " -> " + shrunk);
+		}
+
+		// Off-hand emitter must not take main-hand right-clicks (e.g. a Wizards staff): nothing changes.
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.STICK));
+			p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 1));
+		});
+		context.waitTicks(5);
+		double untouched = dragBottomRightBy(context, sp, 1.0, 0.0);
+		if (Math.abs(untouched - shrunk) > 1e-6) {
+			throw new AssertionError("off-hand emitter intercepted a main-hand click: width " + shrunk + " -> " + untouched);
+		}
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 4));
+			p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+		});
+		context.waitTicks(5);
+	}
+
+	/** Holds right-click on the bottom-right corner, moves the aim by (right, up) blocks, releases; returns server width. */
+	private double dragBottomRightBy(final ClientGameTestContext context, final TestSingleplayerContext sp, final double right,
+			final double up) {
+		HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
+		Frame f = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), spec);
+		Vec3d grab = f.center().add(f.right().scale(f.w() / 2 - 0.08)).add(f.up().scale(-(f.h() / 2 - 0.08)));
+		look(context, grab);
+		context.waitTicks(3);
+		context.getInput().holdMouse(MOUSE_RIGHT);
+		context.waitTicks(3);
+		look(context, grab.add(f.right().scale(right)).add(f.up().scale(up)));
+		context.waitTicks(5);
+		context.getInput().releaseMouse(MOUSE_RIGHT);
+		context.waitTicks(5);
+		sp.getConnection().waitForServerboundPackets();
+		context.waitTicks(5);
+		return sp.getServer().computeOnServer(server -> {
+			HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
+			return be.spec().width();
+		});
 	}
 
 	private void offlineLook(final ClientGameTestContext context, final TestSingleplayerContext sp) {

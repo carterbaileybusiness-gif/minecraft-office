@@ -109,8 +109,14 @@ public final class HologramLook {
 		return SCANLINE_ALPHA * t;
 	}
 
-	/** Opacity of the content quad: a live screen is fully opaque up close and only slightly see-through from afar. */
-	public static double contentAlpha(final State state, final double distance) {
+	/**
+	 * Opacity of the content quad: a live screen is fully opaque up close (≤ 3 blocks) and while zoomed in, and only
+	 * slightly see-through from afar.
+	 */
+	public static double contentAlpha(final State state, final double distance, final boolean zoomed) {
+		if (zoomed) {
+			return 1.0;
+		}
 		if (state != State.LIVE) {
 			return 1.0; // placeholder textures carry their own translucency
 		}

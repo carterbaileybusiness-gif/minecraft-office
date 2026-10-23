@@ -107,8 +107,9 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		BlockPosView pos = new BlockPosView(be);
 		Frame frame = HologramPlacement.frame(pos.x, pos.y, pos.z, spec);
 		double distance = HologramPlacement.distanceToPanel(frame, new Vec3d(cameraPosition.x, cameraPosition.y, cameraPosition.z));
-		st.contentAlpha = (float) HologramLook.contentAlpha(st.look, distance);
-		st.scanlineAlpha = (float) HologramLook.scanlineAlpha(distance, zoomed.test(be.hologramId()));
+		boolean isZoomed = zoomed.test(be.hologramId());
+		st.contentAlpha = (float) HologramLook.contentAlpha(st.look, distance, isZoomed);
+		st.scanlineAlpha = (float) HologramLook.scanlineAlpha(distance, isZoomed);
 		st.label = HologramLook.label(st.look, spec, isOwner, HologramInteractions.ownerName(mc, be));
 		st.timeMs = Util.getMillis();
 

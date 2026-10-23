@@ -115,8 +115,15 @@ class HologramLookTest {
 
 	@Test
 	void liveContentIsOpaqueUpClose() {
-		assertEquals(1.0, HologramLook.contentAlpha(State.LIVE, 2.0), 1e-9);
-		assertTrue(HologramLook.contentAlpha(State.LIVE, 15.0) < 1.0, "slightly translucent from afar");
-		assertTrue(HologramLook.contentAlpha(State.LIVE, 15.0) >= 0.85, "never washed out");
+		assertEquals(1.0, HologramLook.contentAlpha(State.LIVE, 2.0, false), 1e-9);
+		assertEquals(1.0, HologramLook.contentAlpha(State.LIVE, 3.0, false), 1e-9);
+		assertTrue(HologramLook.contentAlpha(State.LIVE, 15.0, false) < 1.0, "slightly translucent from afar");
+		assertTrue(HologramLook.contentAlpha(State.LIVE, 15.0, false) >= 0.85, "never washed out");
+	}
+
+	@Test
+	void zoomedContentIsFullyOpaqueAtAnyDistance() {
+		assertEquals(1.0, HologramLook.contentAlpha(State.LIVE, 15.0, true), 1e-9);
+		assertEquals(1.0, HologramLook.contentAlpha(State.LIVE, 6.0, true), 1e-9);
 	}
 }

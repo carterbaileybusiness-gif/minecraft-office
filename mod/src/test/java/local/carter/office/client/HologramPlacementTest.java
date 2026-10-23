@@ -76,6 +76,17 @@ class HologramPlacementTest {
 	}
 
 	@Test
+	void horizontalInwardDragShrinksAndKeepsTopLeftFixed() {
+		HologramSpec s = spec(3.0, 2.0, 0f);
+		Frame f = HologramPlacement.frame(0, 0, 0, s);
+		Vec3d topLeft = corner(f, -1, 1);
+		// bottom-right corner straight left by 1 block (no vertical movement)
+		CornerDrag.Result r = CornerDrag.resize(f, Corner.BOTTOM_RIGHT, corner(f, 1, -1).add(new Vec3d(-1.0, 0, 0)), s);
+		assertEquals(2.0, r.width(), EPS);
+		near(topLeft, corner(HologramPlacement.frame(0, 0, 0, r.apply(s)), -1, 1));
+	}
+
+	@Test
 	void shrinkingIsClampedToMinimumWidth() {
 		HologramSpec s = spec(2.0, 2.0, 0f);
 		Frame f = HologramPlacement.frame(0, 0, 0, s);

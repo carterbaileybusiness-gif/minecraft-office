@@ -89,9 +89,11 @@ public final class HologramGeometry {
 
     /**
      * New width when corner {@code c} is dragged to {@code planePoint} (a point on the frame's plane)
-     * with the opposite corner fixed. Takes the larger of the width implied by the horizontal distance
-     * from the fixed edge and the width implied by the vertical distance times {@code aspect}
-     * (width / height), so horizontal, vertical and diagonal drags all resize. Clamped to [0.5, 12.0].
+     * with the opposite corner fixed. Two candidates: the width implied by the horizontal distance from the
+     * fixed edge, and the width implied by the vertical distance times {@code aspect} (width / height).
+     * The axis the user moved more decides: whichever candidate differs more from the current width wins
+     * (ties go to horizontal), so pure horizontal, pure vertical and diagonal drags all grow <em>and</em>
+     * shrink. Clamped to [0.5, 12.0].
      */
     public static double widthFromDrag(Frame f, Corner c, Vec3d planePoint, double aspect) {
         boolean rightSide = c == Corner.TOP_RIGHT || c == Corner.BOTTOM_RIGHT;
@@ -101,7 +103,9 @@ public final class HologramGeometry {
         double py = rel.dot(f.up());
         double wH = rightSide ? px + f.w() / 2 : f.w() / 2 - px;
         double hV = topSide ? py + f.h() / 2 : f.h() / 2 - py;
-        return HologramSpec.clampWidth(Math.max(wH, hV * aspect));
+        double wV = hV * aspect;
+        double chosen = Math.abs(wV - f.w()) > Math.abs(wH - f.w()) ? wV : wH;
+        return HologramSpec.clampWidth(chosen);
     }
 
     /**
