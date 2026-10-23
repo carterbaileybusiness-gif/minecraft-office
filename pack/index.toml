@@ -2,7 +2,7 @@ hash-format = "sha256"
 
 [[files]]
 file = "config/sodium-options.json"
-hash = "50c84084e980ce9792e78b97c3c7a88cdf3dce11e888839e6630eb43025b23fc"
+hash = "37c9167ec4d4ee8f9de7abe3f2644b79a21e023fb8b0754e5147d0c1708129f1"
 preserve = true
 
 [[files]]
