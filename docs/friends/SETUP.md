@@ -104,8 +104,9 @@ Holograms need a small helper to see your screen. **You do not install it yourse
 <a id="mac"></a>
 ### Mac
 
-The first time you place a hologram, the mod **downloads the helper (OfficeHelper) automatically**. Then macOS asks
-for two permissions. You need both.
+The first time one of your holograms is near you, the mod asks **"Set up your screens?"**. Click **Yes** and it
+downloads the small helper (OfficeHelper, a few MB, from this project's GitHub page) and starts it. Clicked
+**Not now**? Click **[Set up screens]** in chat when you're ready. Then macOS asks for two permissions. You need both.
 
 1. **Screen Recording.** macOS pops up a message about "OfficeHelper". Click **Open System Settings** and switch
    **OfficeHelper** on:
@@ -116,7 +117,8 @@ for two permissions. You need both.
 3. Normally nothing else shows up. But if macOS ever says OfficeHelper cannot be opened because it is from an
    unidentified developer, open **System Settings, Privacy & Security**, scroll to the Security section, and click
    **Open Anyway** next to OfficeHelper. (We do not pay Apple for signing.)
-4. **Quit Minecraft completely and start it again.** macOS only applies new permissions to programs that start afterwards.
+4. **Click [Check again] in chat** (or leave the world and join again). macOS only applies new permissions to programs
+   that start afterwards, and this restarts the helper.
 
 <!-- screenshot: macOS prompt asking to let OfficeHelper record the screen -->
 <!-- screenshot: Privacy & Security, Screen & System Audio Recording, OfficeHelper switched on -->

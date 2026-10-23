@@ -1,30 +1,37 @@
 package local.carter.office.client;
 
+import local.carter.office.OfficeMod;
+import local.carter.office.client.capture.HologramTestCommand;
+import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramTracker;
+import local.carter.office.client.platform.Platform;
 import local.carter.office.client.render.HologramRenderer;
-import local.carter.office.client.render.ScreenTextureRegistry;
 import local.carter.office.hologram.OfficeBlocks;
 
-import net.minecraft.network.chat.Component;
-
 import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.rendering.v1.BlockEntityRendererRegistry;
+import net.fabricmc.loader.api.FabricLoader;
 
 public class OfficeClient implements ClientModInitializer {
+	public static final String REPO_URL = "https://github.com/carterbaileybusiness-gif/minecraft-office";
+	/** Friends' setup guide, Mac section (helper + permissions). */
+	public static final String SETUP_MAC_URL = REPO_URL + "/blob/main/docs/friends/SETUP.md#mac";
+	public static final String MOD_VERSION = FabricLoader.getInstance().getModContainer(OfficeMod.MOD_ID)
+			.map(c -> c.getMetadata().getVersion().getFriendlyString()).orElse("0.0.0");
+	/** This version's GitHub Release (manifest.json, OfficeHelper zip); {@code -Doffice.releaseBase} overrides it. */
+	public static final String RELEASE_BASE = System.getProperty("office.releaseBase", REPO_URL + "/releases/download/v" + MOD_VERSION + "/");
+
 	@Override
 	public void onInitializeClient() {
 		BlockEntityRendererRegistry.register(OfficeBlocks.HOLOGRAM_BE, HologramRenderer::new);
 		HologramTracker.register();
 		HologramInteractions.register();
-		// Look check before live capture exists (Task 7 replaces this with its TestPatternSource).
-		ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
-				ClientCommands.literal("hologramtest").executes(ctx -> {
-					boolean on = ScreenTextureRegistry.toggleTestPattern();
-					ctx.getSource().sendFeedback(Component.literal(on ? "Hologram test pattern on" : "Hologram test pattern off"));
-					return 1;
-				})));
+		// This computer's own-screen support (Mac: the helper app; otherwise none until Task 11).
+		Platform.current().register();
+		// Own holograms' live screens: platform capture (Mac helper), or the test pattern with -Doffice.testPattern=true.
+		OwnScreens.register();
+		// Debug: /hologramtest (dev environment or -Doffice.testPattern=true only).
+		HologramTestCommand.register();
 	}
 }

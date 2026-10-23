@@ -75,6 +75,11 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		zoomed = predicate == null ? id -> false : predicate;
 	}
 
+	/** Whether the local player is zoomed into this hologram (OwnScreens captures it at 30 fps then). */
+	public static boolean isZoomed(final UUID hologramId) {
+		return zoomed.test(hologramId);
+	}
+
 	@Override
 	public HologramRenderState createRenderState() {
 		return new HologramRenderState();
@@ -99,9 +104,14 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		Minecraft mc = Minecraft.getInstance();
 		UUID viewer = mc.player == null ? null : mc.player.getUUID();
 		boolean isOwner = viewer != null && viewer.equals(spec.owner());
-		Optional<ScreenTexture> screen = ScreenTextureRegistry.get(be.hologramId()).filter(t -> t.width() > 0 && t.height() > 0);
+		Optional<ScreenTexture> screen = ScreenTextureRegistry.get(be.hologramId()).filter(ScreenTexture::hasFrame);
 		HologramLook.OwnSource own = isOwner ? HologramLook.ownSource(be.hologramId()) : HologramLook.OwnSource.READY;
 		st.look = HologramLook.forViewer(spec, viewer, be.ownerOnline(), screen.isPresent(), own);
+		// Upload what changed since the last frame (render thread; same place vanilla updates map textures). Only for
+		// viewers who will see the screen, so a frosted/offline hologram never costs an upload.
+		if (st.look == State.LIVE && !screen.get().prepareForRender()) {
+			st.look = State.CONNECTING;
+		}
 		st.texture = st.look == State.LIVE ? screen.get().id() : lookTexture(st.look);
 
 		BlockPosView pos = new BlockPosView(be);

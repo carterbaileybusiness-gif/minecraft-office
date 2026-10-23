@@ -7,8 +7,12 @@ import java.util.UUID;
 
 import javax.imageio.ImageIO;
 
+import local.carter.office.client.capture.OwnScreens;
+import local.carter.office.client.capture.TestPatternSource;
 import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.render.HologramPlacement;
+import local.carter.office.client.render.ScreenTexture;
+import local.carter.office.client.render.ScreenTextureRegistry;
 import local.carter.office.core.HologramGeometry.Frame;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Vec3d;
@@ -50,6 +54,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			setUpStage(context, sp);
 			placedHologramVisible(context, sp);
 			cornerDragResizes(context, sp);
+			liveTextureUpdates(context, sp);
 			offlineLook(context, sp);
 		}
 	}
@@ -180,6 +185,82 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
 			return be.spec().width();
 		});
+	}
+
+	/**
+	 * The own hologram fed by {@code TestPatternSource} (through OwnScreens, as with -Doffice.testPattern=true) is LIVE and
+	 * its pixels change between two screenshots 500 ms apart (moving bar + frame counter, uploaded as patches).
+	 */
+	private void liveTextureUpdates(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		context.runOnClient(mc -> {
+			OwnScreens.setSourceFactory(TestPatternSource::new); // not the Mac helper when run on a Mac
+			OwnScreens.setEnabled(true);
+		});
+		context.waitFor(mc -> clientHologram(mc) != null
+				&& ScreenTextureRegistry.get(clientHologram(mc).hologramId()).map(ScreenTexture::hasFrame).orElse(false), 1200);
+		HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
+		look(context, hologramCenter(spec));
+		context.waitTicks(5);
+		HologramLook.State state = context.computeOnClient(mc -> {
+			HologramBlockEntity be = clientHologram(mc);
+			boolean frames = ScreenTextureRegistry.get(be.hologramId()).map(ScreenTexture::hasFrame).orElse(false);
+			return HologramLook.forViewer(be.spec(), mc.player.getUUID(), be.ownerOnline(), frames, HologramLook.OwnSource.READY);
+		});
+		if (state != HologramLook.State.LIVE) {
+			throw new AssertionError("own hologram with a test pattern should be LIVE, was " + state);
+		}
+		long uploadsBefore = context.computeOnClient(mc -> OwnScreens.texture(clientHologram(mc).hologramId()).uploadCount());
+		BufferedImage first = read(context.takeScreenshot("hologram-live-1"));
+		try {
+			Thread.sleep(500); // real time: the pattern thread keeps producing while the client waits
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new AssertionError(e);
+		}
+		context.waitTicks(1);
+		BufferedImage second = read(context.takeScreenshot("hologram-live-2"));
+		long uploadsAfter = context.computeOnClient(mc -> OwnScreens.texture(clientHologram(mc).hologramId()).uploadCount());
+		if (uploadsAfter <= uploadsBefore) {
+			throw new AssertionError("no texture uploads between the screenshots (" + uploadsBefore + " -> " + uploadsAfter + ")");
+		}
+		int changed = changedPixels(first, second);
+		if (changed < 100) {
+			throw new AssertionError("live hologram did not change on screen: only " + changed + " pixels differ after 500 ms");
+		}
+
+		context.runOnClient(mc -> OwnScreens.setEnabled(false));
+		context.waitTicks(2);
+		boolean cleared = context.computeOnClient(mc -> ScreenTextureRegistry.get(clientHologram(mc).hologramId()).isEmpty());
+		if (!cleared) {
+			throw new AssertionError("disabling own screens did not remove the texture");
+		}
+	}
+
+	private static BufferedImage read(final Path screenshot) {
+		try {
+			return ImageIO.read(screenshot.toFile());
+		} catch (IOException e) {
+			throw new AssertionError("cannot read screenshot " + screenshot, e);
+		}
+	}
+
+	/** Pixels whose RGB differs by more than 48 (sum of channel differences). */
+	private static int changedPixels(final BufferedImage a, final BufferedImage b) {
+		int w = Math.min(a.getWidth(), b.getWidth());
+		int h = Math.min(a.getHeight(), b.getHeight());
+		int n = 0;
+		for (int y = 0; y < h; y++) {
+			for (int x = 0; x < w; x++) {
+				int p = a.getRGB(x, y);
+				int q = b.getRGB(x, y);
+				int d = Math.abs(((p >> 16) & 0xFF) - ((q >> 16) & 0xFF)) + Math.abs(((p >> 8) & 0xFF) - ((q >> 8) & 0xFF))
+						+ Math.abs((p & 0xFF) - (q & 0xFF));
+				if (d > 48) {
+					n++;
+				}
+			}
+		}
+		return n;
 	}
 
 	private void offlineLook(final ClientGameTestContext context, final TestSingleplayerContext sp) {

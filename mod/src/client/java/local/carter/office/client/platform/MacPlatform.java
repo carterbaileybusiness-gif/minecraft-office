@@ -1,0 +1,362 @@
+package local.carter.office.client.platform;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletionException;
+
+import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import local.carter.office.client.OfficeClient;
+import local.carter.office.client.capture.CaptureSource;
+import local.carter.office.client.capture.MacHelperSource;
+import local.carter.office.client.capture.Target;
+import local.carter.office.client.helper.HelperConnection;
+import local.carter.office.client.helper.HelperInstaller;
+import local.carter.office.client.helper.HelperProtocol.Welcome;
+import local.carter.office.client.helper.HelperProtocol.WindowRect;
+import local.carter.office.client.helper.MacHelper;
+import local.carter.office.client.interact.HologramSettingsScreen;
+import local.carter.office.client.interact.WindowListProvider;
+import local.carter.office.client.interact.WindowListProvider.WindowChoice;
+import local.carter.office.core.HologramSpec;
+
+import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConfirmScreen;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.network.chat.MutableComponent;
+
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+
+/**
+ * macOS: the player's own screens come from OfficeHelper.app (virtual displays, ScreenCaptureKit, window placement,
+ * cursor focus, exit hotkey) over {@link HelperConnection}.
+ *
+ * <p>Setup UX: the first time an own hologram needs the helper and it isn't installed, an in-game confirm screen asks
+ * before anything is downloaded ("Set up your screens?", Yes / Not now). Until the helper runs with Screen Recording,
+ * own holograms show NEEDS_HELPER and chat offers <b>[Set up screens]</b> (opens SETUP.md#mac and System Settings'
+ * Screen Recording pane) and <b>[Check again]</b> (restarts the helper so new permissions apply). Leaving the world
+ * removes the displays and disconnects; the helper quits.
+ */
+public final class MacPlatform implements Platform {
+	private static final Logger LOGGER = LoggerFactory.getLogger("office");
+	public static final String SCREEN_RECORDING_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+	public static final String ACCESSIBILITY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+	private static final String COMMAND = "officescreens";
+
+	private enum Setup { UNKNOWN, ASKING, INSTALLING, DECLINED, FAILED, READY }
+
+	private final HelperInstaller installer;
+	private final MacHelper helper;
+	private volatile @Nullable Path app;
+	// client thread
+	private Setup setup = Setup.UNKNOWN;
+	private HelperInstaller.@Nullable Asset pendingAsk;
+	private int session;
+	private boolean permissionNotified;
+
+	MacPlatform() {
+		installer = HelperInstaller.create(OfficeClient.MOD_VERSION, OfficeClient.RELEASE_BASE);
+		int pid = (int) ProcessHandle.current().pid();
+		helper = new MacHelper(listener -> new HelperConnection(installer.supportDir(), pid, () -> {
+			Path a = app;
+			if (a != null) {
+				HelperInstaller.launch(a);
+			}
+		}, listener), r -> Minecraft.getInstance().execute(r));
+	}
+
+	public MacHelper helper() {
+		return helper;
+	}
+
+	@Override
+	public void register() {
+		helper.onStatusChange(this::statusChanged);
+		helper.onWindows(() -> {
+			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
+				s.refreshWindows();
+			}
+		});
+		WindowListProvider.set(new WindowListProvider() {
+			@Override
+			public List<WindowChoice> windows() {
+				List<WindowChoice> out = new ArrayList<>();
+				for (WindowInfo w : MacPlatform.this.windows()) {
+					out.add(new WindowChoice(w.key(), w.title().isEmpty() ? w.app() : w.app() + " — " + w.title()));
+				}
+				return out;
+			}
+
+			@Override
+			public void refresh() {
+				refreshWindows();
+			}
+		});
+		ClientTickEvents.END_CLIENT_TICK.register(this::tick);
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(this::leftWorld));
+		ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(ClientCommands.literal(COMMAND)
+				.then(ClientCommands.literal("setup").executes(ctx -> {
+					setUpScreens();
+					return 1;
+				}))
+				.then(ClientCommands.literal("retry").executes(ctx -> {
+					checkAgain();
+					return 1;
+				}))));
+	}
+
+	// ---------------------------------------------------------------- Platform
+
+	@Override
+	public boolean supportsExtend() {
+		return true;
+	}
+
+	@Override
+	public List<WindowInfo> windows() {
+		List<WindowInfo> out = new ArrayList<>();
+		for (var w : helper.windows()) {
+			out.add(new WindowInfo(w.windowKey(), w.app(), w.title(), w.w(), w.h()));
+		}
+		return out;
+	}
+
+	@Override
+	public void refreshWindows() {
+		helper.listWindows();
+	}
+
+	@Override
+	public void zoomIn(final HologramSpec spec, final Rect mcWindow) {
+		helper.zoomIn(helper.surfaceFor(Target.of(spec)), new WindowRect(mcWindow.x(), mcWindow.y(), mcWindow.w(), mcWindow.h()));
+	}
+
+	@Override
+	public void zoomOut() {
+		helper.zoomOut();
+	}
+
+	@Override
+	public void onExitRequested(final Runnable r) {
+		helper.onExitZoom(r);
+	}
+
+	@Override
+	public CaptureSource newOwnSource() {
+		return new MacHelperSource(helper, this::ensureStarted);
+	}
+
+	// ---------------------------------------------------------------- setup (client thread)
+
+	/** An own hologram needs the helper: connect, or ask to install it first. */
+	private void ensureStarted() {
+		Minecraft mc = Minecraft.getInstance();
+		if (!mc.isSameThread()) {
+			mc.execute(this::ensureStarted);
+			return;
+		}
+		switch (setup) {
+			case READY -> helper.start();
+			case UNKNOWN -> {
+				Optional<Path> installed = installer.installedApp();
+				if (installed.isPresent()) {
+					use(installed.get());
+				} else if (installer.usesOverride()) {
+					setup = Setup.FAILED;
+					chat(Component.literal("office.helperPath does not point to OfficeHelper.app.").withStyle(ChatFormatting.RED));
+				} else {
+					ask();
+				}
+			}
+			default -> {
+				// asking, installing, declined or failed this session: holograms show "Set up screens"
+			}
+		}
+	}
+
+	private void ask() {
+		setup = Setup.ASKING;
+		int mySession = session;
+		installer.fetchHelperInfo().whenComplete((asset, err) -> Minecraft.getInstance().execute(() -> {
+			if (session != mySession || setup != Setup.ASKING) {
+				return;
+			}
+			if (err != null) {
+				setup = Setup.FAILED;
+				LOGGER.warn("Office helper: release manifest unavailable: {}", cause(err).toString());
+				chat(Component.literal("Couldn't reach GitHub to set up your screens (" + cause(err).getMessage() + "). ")
+						.append(link("Try again", "setup", "Ask again")));
+			} else {
+				pendingAsk = asset;
+			}
+		}));
+	}
+
+	private void tick(final Minecraft mc) {
+		HelperInstaller.Asset asset = pendingAsk;
+		if (asset == null || mc.player == null || mc.gui.screen() != null) {
+			return;
+		}
+		pendingAsk = null;
+		int mySession = session;
+		mc.gui.setScreen(new ConfirmScreen(yes -> {
+			mc.gui.setScreen(null);
+			if (session == mySession) {
+				answered(yes);
+			}
+		}, Component.literal("Set up your screens?"),
+				Component.literal("This downloads the small Minecraft Office helper app (" + HelperInstaller.sizeLabel(asset.size())
+						+ ") from GitHub."),
+				Component.literal("Yes"), Component.literal("Not now")));
+	}
+
+	private void answered(final boolean yes) {
+		if (!yes) {
+			setup = Setup.DECLINED;
+			chat(Component.literal("Your screens stay off for now. ").append(link("Set up screens", "setup", "Download the helper app")));
+			return;
+		}
+		setup = Setup.INSTALLING;
+		chat(Component.literal("Downloading the screen helper…"));
+		int mySession = session;
+		installer.ensureInstalled().whenComplete((path, err) -> Minecraft.getInstance().execute(() -> {
+			if (session != mySession) {
+				return;
+			}
+			if (err != null) {
+				setup = Setup.FAILED;
+				LOGGER.warn("Office helper install failed", cause(err));
+				chat(Component.literal("Screen helper setup failed: " + cause(err).getMessage() + " ").withStyle(ChatFormatting.RED)
+						.append(link("Try again", "setup", "Download again")));
+			} else {
+				chat(Component.literal("Screen helper installed."));
+				use(path);
+			}
+		}));
+	}
+
+	private void use(final Path helperApp) {
+		app = helperApp;
+		setup = Setup.READY;
+		helper.setSetUp(true);
+		helper.start();
+	}
+
+	/** {@code /officescreens setup} (the chat link). */
+	private void setUpScreens() {
+		switch (setup) {
+			case UNKNOWN, DECLINED, FAILED -> {
+				setup = Setup.UNKNOWN;
+				ensureStarted();
+			}
+			case ASKING, INSTALLING -> chat(Component.literal("Setting up your screens…"));
+			case READY -> {
+				Welcome w = helper.welcome();
+				if (w == null) {
+					helper.start();
+					chat(Component.literal("Starting the screen helper…"));
+				} else if (!w.screenRecording() || helper.status() == MacHelper.Status.NO_PERMISSION) {
+					openSetupPages(SCREEN_RECORDING_PANE);
+				} else if (!w.accessibility()) {
+					openSetupPages(ACCESSIBILITY_PANE);
+				} else {
+					chat(Component.literal("Your screens are set up."));
+				}
+			}
+		}
+	}
+
+	/** {@code /officescreens retry}: restart the helper so permissions granted meanwhile apply. */
+	private void checkAgain() {
+		if (setup != Setup.READY) {
+			setUpScreens();
+			return;
+		}
+		permissionNotified = false;
+		helper.restart();
+		chat(Component.literal("Restarting the screen helper…"));
+	}
+
+	private void statusChanged() {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.player == null) {
+			return;
+		}
+		Welcome w = helper.welcome();
+		MacHelper.Status st = helper.status();
+		if (w != null && (st == MacHelper.Status.NO_PERMISSION || !w.accessibility())) {
+			if (permissionNotified) {
+				return;
+			}
+			permissionNotified = true;
+			List<String> missing = new ArrayList<>();
+			if (st == MacHelper.Status.NO_PERMISSION) {
+				missing.add("Screen Recording (to show your screens)");
+			}
+			if (!w.accessibility()) {
+				missing.add("Accessibility (to work on a screen)");
+			}
+			chat(Component.literal("OfficeHelper needs macOS " + String.join(" and ", missing) + ". ")
+					.append(link("Set up screens", "setup", "Opens the setup guide and System Settings"))
+					.append(" ")
+					.append(link("Check again", "retry", "Restart the helper after switching it on")));
+		} else if (st == MacHelper.Status.READY && permissionNotified) {
+			permissionNotified = false;
+			chat(Component.literal("Screens ready."));
+		}
+	}
+
+	private void leftWorld() {
+		session++;
+		helper.stop();
+		pendingAsk = null;
+		permissionNotified = false;
+		if (setup != Setup.READY && setup != Setup.INSTALLING) {
+			setup = Setup.UNKNOWN; // ask again next time
+		}
+	}
+
+	// ---------------------------------------------------------------- helpers
+
+	/** Opens SETUP.md#mac in the browser and the given System Settings pane (never changes any setting). */
+	private static void openSetupPages(final String pane) {
+		open(OfficeClient.SETUP_MAC_URL);
+		open(pane);
+	}
+
+	private static void open(final String target) {
+		try {
+			new ProcessBuilder("/usr/bin/open", target).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+		} catch (IOException e) {
+			LOGGER.warn("Could not open {}: {}", target, e.toString());
+		}
+	}
+
+	private static MutableComponent link(final String text, final String sub, final String hover) {
+		return Component.literal("[" + text + "]").withStyle(s -> s.withColor(ChatFormatting.AQUA).withUnderlined(true)
+				.withClickEvent(new ClickEvent.RunCommand("/" + COMMAND + " " + sub))
+				.withHoverEvent(new HoverEvent.ShowText(Component.literal(hover))));
+	}
+
+	private static void chat(final Component message) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.player != null) {
+			mc.gui.hud.getChat().addClientSystemMessage(Component.literal("[Office] ").withStyle(ChatFormatting.DARK_AQUA).append(message));
+		}
+	}
+
+	private static Throwable cause(final Throwable t) {
+		return t instanceof CompletionException && t.getCause() != null ? t.getCause() : t;
+	}
+}
