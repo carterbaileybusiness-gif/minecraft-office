@@ -97,10 +97,10 @@ cat > "$INST/mmc-pack.json" <<JSON
 JSON
 info "instance.cfg + mmc-pack.json written (Minecraft $MC_VERSION, Fabric Loader $FABRIC_VERSION, 3 GB heap)"
 
-# ---- 3. client mods via packwiz -------------------------------------------
+# ---- 3. all pack mods via packwiz (singleplayer needs the server-side world mods) -------------------------------------------
 PACK_URL="file://$(printf '%s' "$REPO/pack/pack.toml" | sed 's/ /%20/g')"
-say "Installing client mods from the packwiz pack (first run downloads ~hundreds of MB)"
-( cd "$GAME" && "$JAVA" -jar "$BOOTSTRAP" -g -s client "$PACK_URL" ) \
+say "Installing all pack mods (singleplayer runs the server side too) (first run downloads ~hundreds of MB)"
+( cd "$GAME" && "$JAVA" -jar "$BOOTSTRAP" -g -s both "$PACK_URL" ) \
   || die "packwiz install failed (see output above). Check your internet connection."
 # Headless mode switches every optional mod ON; turn them off again (Iris, Distant Horizons, LambDynamicLights)
 # and remember that choice in packwiz.json so later runs don't re-download them.
