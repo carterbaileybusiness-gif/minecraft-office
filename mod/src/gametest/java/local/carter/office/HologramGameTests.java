@@ -91,7 +91,39 @@ public class HologramGameTests {
 		h.assertTrue(s.windowKey() == null, "windowKey null");
 		h.assertValueEqual(s.offY(), 0.5 + s.height() / 2 + 0.1, "offY");
 		h.assertTrue(be.hologramId() != null, "hologramId set");
+		h.assertValueEqual(be.ownerName(), a.getName().getString(), "owner name recorded for panels");
+		h.assertTrue(!be.ownerName().isEmpty(), "owner name not empty");
 		h.assertValueEqual(HologramIndex.get(h.getLevel().getServer()).countOwnedBy(a.getUUID()), 1, "indexed");
+		h.succeed();
+	}
+
+	/** The client's corner drag sends ResizeHologram then MoveHologram (fixed opposite corner); both apply in order. */
+	@GameTest
+	public void resizeThenMoveKeepsOppositeCorner(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		BlockPos rel = new BlockPos(1, 1, 1);
+		HologramBlockEntity be = place(h, a, rel);
+		BlockPos abs = h.absolutePos(rel);
+		HologramSpec s = be.spec();
+		// Grow 2 -> 3 wide by the bottom-right corner: the top-left corner stays put. right = (cos yaw, 0, sin yaw).
+		double rx = Math.cos(Math.toRadians(s.yaw()));
+		double rz = Math.sin(Math.toRadians(s.yaw()));
+		double newW = 3.0;
+		double newH = newW / s.shape().aspect();
+		double dw = (newW - s.width()) / 2;
+		double offX = s.offX() + rx * dw;
+		double offZ = s.offZ() + rz * dw;
+		double offY = s.offY() - (newH - s.height()) / 2;
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.ResizeHologram(abs, newW)), "resize applied");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.MoveHologram(abs, offX, offY, offZ, s.yaw())), "move applied");
+		HologramSpec after = be.spec();
+		h.assertValueEqual(after.width(), newW, "width");
+		// top-left = centre - right * w/2 + up * h/2
+		double dx = (after.offX() - rx * after.width() / 2) - (s.offX() - rx * s.width() / 2);
+		double dz = (after.offZ() - rz * after.width() / 2) - (s.offZ() - rz * s.width() / 2);
+		double dy = (after.offY() + after.height() / 2) - (s.offY() + s.height() / 2);
+		h.assertTrue(Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6 && Math.abs(dz) < 1e-6,
+				"top-left fixed: " + dx + ", " + dy + ", " + dz);
 		h.succeed();
 	}
 
@@ -256,6 +288,7 @@ public class HologramGameTests {
 				net.minecraft.util.ProblemReporter.DISCARDING, h.getLevel().registryAccess(), tag));
 		h.assertValueEqual(copy.spec(), be.spec(), "spec round-trips");
 		h.assertValueEqual(copy.hologramId(), be.hologramId(), "id round-trips");
+		h.assertValueEqual(copy.ownerName(), be.ownerName(), "owner name round-trips");
 		h.assertTrue(tag.getCompound("spec").isPresent() && tag.getCompound("spec").get().contains("windowKey"),
 				"stored under toMap() keys");
 		h.succeed();

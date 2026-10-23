@@ -47,6 +47,8 @@ public class HologramBlockEntity extends BlockEntity {
 	private UUID hologramId = UUID.randomUUID();
 	private @Nullable HologramSpec spec;
 	private boolean ownerOnline;
+	/** Owner's name when placed (for "Owned by …", "Private" and "Offline" panels); empty if unknown. */
+	private String ownerName = "";
 
 	public HologramBlockEntity(final BlockPos pos, final BlockState state) {
 		super(OfficeBlocks.HOLOGRAM_BE, pos, state);
@@ -64,6 +66,11 @@ public class HologramBlockEntity extends BlockEntity {
 		return ownerOnline;
 	}
 
+	/** The owner's name as recorded at placement; empty for emitters placed before names were recorded. */
+	public String ownerName() {
+		return ownerName;
+	}
+
 	public boolean isOwner(final UUID player) {
 		return spec != null && spec.owner().equals(player);
 	}
@@ -74,9 +81,10 @@ public class HologramBlockEntity extends BlockEntity {
 	}
 
 	/** Server: fresh identity and spec for a newly placed emitter (discards any data copied onto the item). */
-	void initPlaced(final HologramSpec newSpec, final boolean online) {
+	void initPlaced(final HologramSpec newSpec, final String name, final boolean online) {
 		this.hologramId = UUID.randomUUID();
 		this.spec = newSpec;
+		this.ownerName = name == null ? "" : name;
 		this.ownerOnline = online;
 		changed();
 	}
@@ -137,6 +145,9 @@ public class HologramBlockEntity extends BlockEntity {
 	protected void saveAdditional(final ValueOutput output) {
 		super.saveAdditional(output);
 		output.store("hologramId", UUIDUtil.CODEC, hologramId);
+		if (!ownerName.isEmpty()) {
+			output.putString("ownerName", ownerName);
+		}
 		if (spec != null) {
 			writeSpec(output.child("spec"), spec);
 		}
@@ -147,6 +158,7 @@ public class HologramBlockEntity extends BlockEntity {
 		super.loadAdditional(input);
 		hologramId = input.read("hologramId", UUIDUtil.CODEC).orElse(hologramId);
 		spec = input.child("spec").map(HologramBlockEntity::readSpec).orElse(null);
+		ownerName = input.getStringOr("ownerName", "");
 		ownerOnline = input.getBooleanOr("ownerOnline", false);
 	}
 

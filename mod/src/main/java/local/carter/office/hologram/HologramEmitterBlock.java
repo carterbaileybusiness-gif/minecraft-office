@@ -79,7 +79,7 @@ public class HologramEmitterBlock extends BaseEntityBlock {
 		float yaw = by.getDirection().getOpposite().toYRot();
 		boolean online = serverLevel.getServer().getPlayerList().getPlayer(owner) != null;
 		HologramIndex index = HologramIndex.get(serverLevel.getServer());
-		be.initPlaced(defaultSpec(owner, index.firstFreeSlot(owner), yaw), online);
+		be.initPlaced(defaultSpec(owner, index.firstFreeSlot(owner), yaw), by.getName().getString(), online);
 		index.put(be.hologramId(), owner, serverLevel.dimension(), pos);
 	}
 

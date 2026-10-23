@@ -10,7 +10,8 @@
 			"local.carter.office.HologramGameTests"
 		],
 		"fabric-client-gametest": [
-			"local.carter.office.gametest.OfficeClientGameTest"
+			"local.carter.office.gametest.OfficeClientGameTest",
+			"local.carter.office.client.HologramClientGameTests"
 		]
 	}
 }
