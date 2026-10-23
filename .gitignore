@@ -5,3 +5,4 @@ run/
 *.log
 .DS_Store
 .claude/
+logs/
