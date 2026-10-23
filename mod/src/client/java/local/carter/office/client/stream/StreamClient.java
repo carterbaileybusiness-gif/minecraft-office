@@ -89,6 +89,8 @@ public final class StreamClient {
 	private final StreamSender sender;
 	private final StreamReceiver receiver;
 	private volatile @Nullable UdpLink udp;
+	private volatile boolean tokenReceived;
+	private volatile int udpPort;
 
 	public StreamClient(final Payloads payloads, final UdpOpener opener, final Supplier<@Nullable InetAddress> serverHost,
 			final TileCodec.Jpeg sendJpeg, final TileCodec.Jpeg receiveJpeg, final Function<UUID, @Nullable Privacy> privacyOf,
@@ -117,11 +119,32 @@ public final class StreamClient {
 		return u != null && u.bound();
 	}
 
+	/**
+	 * Self-test view of the transport: whether this session's token arrived (the token itself is never exposed), the
+	 * relay's UDP port (0 = no UDP), whether a UDP link is open and bound, and its handshake counters (null: no link).
+	 */
+	public record UdpDiag(boolean tokenReceived, int udpPort, boolean linkOpen, boolean bound, UdpLink.@Nullable Stats stats) {}
+
+	public UdpDiag udpDiag() {
+		UdpLink u = udp;
+		return new UdpDiag(tokenReceived, udpPort, u != null, u != null && u.bound(), u == null ? null : u.stats());
+	}
+
+	/** Self-test: a fresh UDP handshake (no-op without a link). */
+	public void probeUdp() {
+		UdpLink u = udp;
+		if (u != null) {
+			u.probe();
+		}
+	}
+
 	// ---- payload handlers (client thread) ----
 
 	/** This session's relay token (on join, or again with {@code udpPort == 0} when the server lost UDP). */
 	public void connect(final StreamToken t) {
 		closeUdp();
+		tokenReceived = true;
+		udpPort = t.udpPort();
 		InetAddress host = t.udpPort() > 0 ? serverHost.get() : null;
 		if (host == null) {
 			if (t.udpPort() > 0) {
@@ -187,6 +210,8 @@ public final class StreamClient {
 	/** Left the server: stop sharing, drop friends' screens, close UDP. */
 	public void disconnect() {
 		closeUdp();
+		tokenReceived = false;
+		udpPort = 0;
 		sender.stopAll();
 		receiveExecutor.execute(() -> safely(receiver::clearAll));
 	}

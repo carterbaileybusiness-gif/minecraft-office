@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletionException;
 
 import org.jspecify.annotations.Nullable;
@@ -22,6 +23,7 @@ import local.carter.office.client.helper.MacHelper;
 import local.carter.office.client.interact.HologramSettingsScreen;
 import local.carter.office.client.interact.WindowListProvider;
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
+import local.carter.office.client.selftest.SelfTestScreen;
 import local.carter.office.core.HologramSpec;
 
 import net.minecraft.ChatFormatting;
@@ -82,6 +84,8 @@ public final class MacPlatform implements Platform {
 		helper.onStatusChange(this::statusChanged);
 		helper.onWindows(() -> {
 			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
+				s.refreshWindows();
+			} else if (Minecraft.getInstance().gui.screen() instanceof SelfTestScreen s) {
 				s.refreshWindows();
 			}
 		});
@@ -147,6 +151,57 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void onExitRequested(final Runnable r) {
 		helper.onExitZoom(r);
+	}
+
+	// ---------------------------------------------------------------- self-test (off the client thread)
+
+	/** Self-test: longest wait for an installed helper to connect before reporting its state. */
+	static final long SELF_TEST_HELPER_WAIT_MS = 3_000;
+
+	/** Installed? Connected? Screen Recording / Accessibility granted? Starts an installed helper; never installs one. */
+	@Override
+	public Readiness readiness() throws InterruptedException {
+		if (installer.installedApp().isEmpty()) {
+			return new Readiness(true, false, false, installer.usesOverride() ? "office.helperPath does not point to OfficeHelper.app"
+					: "screen helper not installed yet (Minecraft offers it when your first hologram needs it, or type /officescreens setup)");
+		}
+		ensureStarted();
+		long deadline = System.nanoTime() + SELF_TEST_HELPER_WAIT_MS * 1_000_000L;
+		while (helper.welcome() == null && System.nanoTime() < deadline) {
+			Thread.sleep(100);
+		}
+		Welcome w = helper.welcome();
+		MacHelper.Status st = helper.status();
+		if (w == null) {
+			return new Readiness(true, false, false, "screen helper installed but not connected after " + SELF_TEST_HELPER_WAIT_MS / 1000
+					+ " s (" + st.name().toLowerCase(Locale.ROOT).replace('_', ' ') + ")");
+		}
+		boolean recording = st == MacHelper.Status.READY;
+		boolean ok = recording && w.accessibility();
+		String detail = "helper connected (protocol " + w.version() + "), Screen Recording " + (recording ? "on" : "OFF")
+				+ ", Accessibility " + (w.accessibility() ? "on" : "OFF");
+		if (!ok) {
+			detail += ": switch it on in System Settings > Privacy & Security, then type /officescreens retry";
+		}
+		return new Readiness(true, ok, recording, detail);
+	}
+
+	@Override
+	public void prepareSelfTest() {
+		if (installer.installedApp().isEmpty()) {
+			return;
+		}
+		ensureStarted();
+		long deadline = System.nanoTime() + SELF_TEST_HELPER_WAIT_MS * 1_000_000L;
+		try {
+			while (!helper.isConnected() && System.nanoTime() < deadline) {
+				Thread.sleep(100);
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return;
+		}
+		helper.listWindows(); // the reply refreshes the self-test screen (onWindows)
 	}
 
 	@Override

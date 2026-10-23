@@ -54,6 +54,25 @@ public interface Platform {
 		return false;
 	}
 
+	/**
+	 * Self-test: whether own screens can work on this computer, in plain words without window titles.
+	 * {@code supported} false = this system has no own-screen support at all (the check is skipped); {@code ok} = all
+	 * set; {@code canCapture} = a window can be captured now (Mac: Screen Recording granted, even if Accessibility isn't).
+	 */
+	record Readiness(boolean supported, boolean ok, boolean canCapture, String detail) {}
+
+	/** Checks {@link Readiness}; off the client thread, may wait a few seconds (Mac: for the helper to connect). */
+	default Readiness readiness() throws InterruptedException {
+		return new Readiness(false, false, false, "no own-screen support on " + System.getProperty("os.name", "this system")
+				+ " (friends' screens still show)");
+	}
+
+	/**
+	 * Self-test screen opened (off the client thread, may block briefly): get the window list ready. Mac: starts an
+	 * already installed helper and asks it for windows; never installs anything.
+	 */
+	default void prepareSelfTest() {}
+
 	/** Hooks events, commands and providers; called once from the client initializer. */
 	default void register() {}
 

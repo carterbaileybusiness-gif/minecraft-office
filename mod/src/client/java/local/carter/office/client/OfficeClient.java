@@ -7,6 +7,7 @@ import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.render.HologramRenderer;
+import local.carter.office.client.selftest.SelfTestScreen;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.hologram.OfficeBlocks;
 
@@ -39,5 +40,7 @@ public class OfficeClient implements ClientModInitializer {
 		StreamClient.register();
 		// Debug: /hologramtest (dev environment or -Doffice.testPattern=true only).
 		HologramTestCommand.register();
+		// "Screen self-test": Esc-menu button + /officeselftest (plain-text report for Carter, no pixels or titles).
+		SelfTestScreen.register();
 	}
 }
