@@ -18,7 +18,8 @@ import local.carter.office.client.render.HologramLook;
 import local.carter.office.core.Mode;
 
 /**
- * One own hologram's screen from the Mac helper. EXTEND: makes sure the hologram's virtual display (its slot, at its
+ * One own hologram's screen from the Mac helper. MIRROR: captures the main display with Minecraft left out (CAPTURE
+ * "main", no virtual display). EXTEND: makes sure the hologram's virtual display (its slot, at its
  * shape's resolution) exists, then captures it; WINDOW: captures the chosen window. Every CAPTURE gets a new surface id,
  * so late frames of an older capture are ignored. Each FRAME / PATCH is passed to the sink and acknowledged with READY
  * (the helper keeps one frame in flight per surface).
@@ -34,6 +35,8 @@ import local.carter.office.core.Mode;
 public final class MacHelperSource implements CaptureSource {
 	/** A capture this long after the last display re-request counts as stable (the re-request backoff resets). */
 	private static final long STABLE_NANOS = 60_000_000_000L;
+	/** Mirror captures are at most this wide (the shape's pixel size is for virtual displays; the real screen keeps its own). */
+	public static final int MIRROR_MAX_W = 1920;
 	private final MacHelper helper;
 	private final Runnable onStart;
 	private final Object lock = new Object();
@@ -124,10 +127,17 @@ public final class MacHelperSource implements CaptureSource {
 		}
 	}
 
+	/**
+	 * After an ENDED: "window closed" shows Window closed; any other end (a capture failure, a Mirror that can't
+	 * exclude Minecraft, ...) shows "Screens unavailable" with {@link #statusDetail()}, never an endless "Connecting…".
+	 */
 	@Override
 	public HologramLook.OwnSource status() {
 		if (ended && "window closed".equals(endedReason)) {
 			return HologramLook.OwnSource.WINDOW_CLOSED;
+		}
+		if (ended) {
+			return HologramLook.OwnSource.UNAVAILABLE;
 		}
 		MacHelper.Status st = helper.status();
 		if (noPermission || st == MacHelper.Status.NOT_SET_UP || st == MacHelper.Status.NO_PERMISSION) {
@@ -153,6 +163,25 @@ public final class MacHelperSource implements CaptureSource {
 		return endedReason;
 	}
 
+	@Override
+	public @Nullable String statusDetail() {
+		String r = endedReason;
+		return ended && r != null && !"window closed".equals(r) ? detailFor(r) : null;
+	}
+
+	/** The helper's ENDED reason in words for the owner's panel ("capture failed: x" → "X"). Pure. */
+	public static String detailFor(final String reason) {
+		if (reason.contains("can't be excluded")) {
+			return "Can't hide Minecraft from the mirror";
+		}
+		String r = reason.startsWith("capture failed: ") ? reason.substring("capture failed: ".length()) : reason;
+		r = r.strip();
+		if (r.isEmpty()) {
+			return "Capture failed";
+		}
+		return Character.toUpperCase(r.charAt(0)) + r.substring(1);
+	}
+
 	/** (Re)issues CAPTURE when wanted: connected, rate above 0, and (EXTEND) the display online. */
 	private void update(final boolean restart) {
 		int stopSurface = 0;
@@ -171,7 +200,13 @@ public final class MacHelperSource implements CaptureSource {
 			} else if (surface == 0 || restart) {
 				Target t = target;
 				boolean extend = t.mode() == Mode.EXTEND;
-				if (!extend && (t.windowKey() == null || WindowKey.parse(t.windowKey()) == null)) {
+				boolean mirror = t.mode() == Mode.MIRROR;
+				if (mirror) {
+					stopSurface = surface;
+					surface = helper.newSurface(this);
+					generation = -1;
+					capture = new Capture(surface, CaptureKind.MAIN, null, null, MIRROR_MAX_W, fps);
+				} else if (!extend && (t.windowKey() == null || WindowKey.parse(t.windowKey()) == null)) {
 					stopSurface = surface; // no window picked yet: the look says "Pick a window"
 					surface = 0;
 				} else if (extend && !helper.ensureDisplay(t.displaySlot(), t.shape().pxW(), t.shape().pxH())) {

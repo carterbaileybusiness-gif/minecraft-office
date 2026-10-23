@@ -29,6 +29,48 @@ struct ExitChordDetector {
     }
 }
 
+/// What zooming into a surface does, by what it shows. Mirror: Minecraft steps aside (hidden) so the player uses the
+/// real desktop natively, no cursor clamp, and Minecraft becoming active again (Dock, Cmd-Tab, a click) ends the zoom.
+/// Extend: the cursor moves onto the virtual display and is clamped there. Window: the window is placed over Minecraft.
+enum ZoomStyle: Equatable {
+    case mirror, display, window
+
+    init(kind: CaptureKind) {
+        switch kind {
+        case .main: self = .mirror
+        case .display: self = .display
+        case .window: self = .window
+        }
+    }
+
+    var hidesMinecraft: Bool { self == .mirror }
+    var clampsCursor: Bool { self == .display }
+    var placesWindow: Bool { self == .window }
+    var exitsWhenMinecraftActivates: Bool { self == .mirror }
+}
+
+/// Mirror captures are built only once Minecraft's app is in ScreenCaptureKit's shareable content, so it can be
+/// excluded: retried with backoff (about 5 s in all), then the capture fails rather than show Minecraft inside itself.
+enum MirrorExclusion {
+    enum Decision: Equatable { case capture, retry(after: TimeInterval), fail }
+    static let delays: [TimeInterval] = [0.25, 0.5, 1, 1.5, 2]
+
+    /// `attempt` counts from 0; `found` = Minecraft's app is in the shareable content.
+    static func decide(found: Bool, attempt: Int) -> Decision {
+        if found { return .capture }
+        return attempt < delays.count ? .retry(after: delays[attempt]) : .fail
+    }
+}
+
+/// Remembers whether the helper hid Minecraft, so every way out of a Mirror zoom (exit gesture, ZOOM_OUT, the surface
+/// ending, the mod disconnecting, the helper quitting) unhides it exactly once and Minecraft is never left hidden.
+struct MinecraftHideGuard {
+    private(set) var isHidden = false
+    mutating func hid() { isHidden = true }
+    mutating func unhid() { isHidden = false }
+    var shouldUnhide: Bool { isHidden }
+}
+
 enum CursorClamp {
     /// The point moved inside `bounds` (max edges exclusive), or nil when it is already inside.
     static func clamp(_ point: CGPoint, to bounds: CGRect) -> CGPoint? {

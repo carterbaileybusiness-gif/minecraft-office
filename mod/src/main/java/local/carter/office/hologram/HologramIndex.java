@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -13,6 +14,8 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.OfficeMod;
+import local.carter.office.core.Mode;
+import local.carter.office.core.PlacementPlan;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
@@ -28,11 +31,34 @@ import net.minecraft.world.level.saveddata.SavedDataType;
  * limit and {@code /emitter} work for holograms in unloaded chunks. Also remembers who already got the starter kit.
  */
 public class HologramIndex extends SavedData {
-	public record Entry(UUID owner, ResourceKey<Level> dimension, BlockPos pos) {
+	/**
+	 * {@code mode} / {@code displaySlot}: what the hologram last showed (null / 0 for entries written before they were
+	 * recorded), so placement defaults know about holograms in unloaded chunks.
+	 */
+	public record Entry(UUID owner, ResourceKey<Level> dimension, BlockPos pos, @Nullable Mode mode, int displaySlot) {
+		public Entry(final UUID owner, final ResourceKey<Level> dimension, final BlockPos pos) {
+			this(owner, dimension, pos, null, 0);
+		}
+
 		static final Codec<Entry> CODEC = RecordCodecBuilder.create(i -> i.group(
 				UUIDUtil.STRING_CODEC.fieldOf("owner").forGetter(Entry::owner),
 				Level.RESOURCE_KEY_CODEC.fieldOf("dimension").forGetter(Entry::dimension),
-				BlockPos.CODEC.fieldOf("pos").forGetter(Entry::pos)).apply(i, Entry::new));
+				BlockPos.CODEC.fieldOf("pos").forGetter(Entry::pos),
+				Codec.STRING.optionalFieldOf("mode").forGetter(e -> Optional.ofNullable(e.mode()).map(Mode::name)),
+				Codec.INT.optionalFieldOf("displaySlot", 0).forGetter(Entry::displaySlot)).apply(i, Entry::decoded));
+
+		private static Entry decoded(final UUID owner, final ResourceKey<Level> dimension, final BlockPos pos,
+				final Optional<String> mode, final int slot) {
+			Mode m = null;
+			if (mode.isPresent()) {
+				try {
+					m = Mode.valueOf(mode.get());
+				} catch (IllegalArgumentException e) {
+					m = null; // a mode from a newer version: unknown here
+				}
+			}
+			return new Entry(owner, dimension, pos, m, slot);
+		}
 	}
 
 	private static final Codec<HologramIndex> CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -62,7 +88,13 @@ public class HologramIndex extends SavedData {
 	}
 
 	public void put(final UUID hologramId, final UUID owner, final ResourceKey<Level> dimension, final BlockPos pos) {
-		Entry e = new Entry(owner, dimension, pos.immutable());
+		put(hologramId, owner, dimension, pos, null, 0);
+	}
+
+	/** Records (or refreshes) a hologram together with what it shows. */
+	public void put(final UUID hologramId, final UUID owner, final ResourceKey<Level> dimension, final BlockPos pos,
+			final @Nullable Mode mode, final int displaySlot) {
+		Entry e = new Entry(owner, dimension, pos.immutable(), mode, displaySlot);
 		if (!e.equals(holograms.put(hologramId, e))) {
 			setDirty();
 		}
@@ -97,25 +129,22 @@ public class HologramIndex extends SavedData {
 		return entriesOwnedBy(owner).size();
 	}
 
-	/** First display slot 1-4 not used by the owner's other holograms (1 if all are taken). */
-	public int firstFreeSlot(final UUID owner) {
-		if (server == null) {
-			return 1;
-		}
-		Set<Integer> used = new HashSet<>();
+	/**
+	 * What the owner's next hologram should show ({@link PlacementPlan}): Extend on the next free display. Loaded holograms are read live; unloaded ones from their recorded mode and slot
+	 * (entries from before modes were recorded are left out).
+	 */
+	public PlacementPlan.Choice placementFor(final UUID owner) {
+		List<PlacementPlan.Existing> existing = new ArrayList<>();
 		for (Entry e : entriesOwnedBy(owner)) {
-			ServerLevel level = server.getLevel(e.dimension());
+			ServerLevel level = server == null ? null : server.getLevel(e.dimension());
 			if (level != null && level.isLoaded(e.pos()) && level.getBlockEntity(e.pos()) instanceof HologramBlockEntity be
 					&& be.spec() != null) {
-				used.add(be.spec().displaySlot());
+				existing.add(new PlacementPlan.Existing(be.spec().mode(), be.spec().displaySlot()));
+			} else if (e.mode() != null) {
+				existing.add(new PlacementPlan.Existing(e.mode(), e.displaySlot()));
 			}
 		}
-		for (int slot = 1; slot <= 4; slot++) {
-			if (!used.contains(slot)) {
-				return slot;
-			}
-		}
-		return 1;
+		return PlacementPlan.next(existing);
 	}
 
 	private boolean isStale(final UUID hologramId, final Entry e) {

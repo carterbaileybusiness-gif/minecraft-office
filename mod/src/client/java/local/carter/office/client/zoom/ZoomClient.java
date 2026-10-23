@@ -20,6 +20,7 @@ import local.carter.office.client.zoom.ZoomController.Candidate;
 import local.carter.office.client.zoom.ZoomController.State;
 import local.carter.office.client.zoom.ZoomPose.Pose;
 import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Mode;
 import local.carter.office.core.Vec3d;
 import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.net.OfficePayloads.SetWorking;
@@ -46,8 +47,9 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
  * to the app on the virtual display / the placed window), and a {@link WorkScreen} is open. The screen releases the
  * mouse (the helper moves the real cursor), blocks game input, swallows a single Esc, and while WORKING in EXTEND mode
  * draws the hologram's 30-fps local capture over the whole window, letterboxed.</li>
- * <li>Arriving: {@link Platform#zoomIn} (Mac EXTEND: cursor onto the virtual display, clamped; WINDOW: the real
- * window placed over Minecraft and focused) and {@code SetWorking(true)}. Leaving: {@link Platform#zoomOut} (focus
+ * <li>Arriving: {@link Platform#zoomIn} (MIRROR: Minecraft steps aside, hidden on Mac / minimized on Windows, so the
+ * player is on their real desktop; Mac EXTEND: cursor onto the virtual display, clamped; WINDOW: the real window placed
+ * over Minecraft and focused) and {@code SetWorking(true)}. Leaving: {@link Platform#zoomOut} (focus
  * back to Minecraft) and {@code SetWorking(false)}.</li>
  * <li>Leaves on: double-Esc in Minecraft, the platform's exit hotkey, capture ended / window closed, the hologram
  * removed, unloaded, given away or retargeted, the helper going away, another screen replacing ours. World change or
@@ -119,7 +121,7 @@ public final class ZoomClient implements ZoomController.Env {
 		boolean active = mc.isWindowActive();
 		if (active != lastActive) {
 			lastActive = active;
-			controller.focusChanged(); // an Esc release may have gone to the other app
+			controller.focusChanged(active); // an Esc release may have gone to the other app; Mirror: back in Minecraft = exit
 			if (!active && controller.state() == State.WORKING) {
 				focusLeft = true;
 			}
@@ -452,8 +454,21 @@ public final class ZoomClient implements ZoomController.Env {
 	 */
 	public static boolean overlayCoversWindow() {
 		ZoomClient z = INSTANCE;
-		return z.overlayDrawn && z.controller.state() == State.WORKING && workingForMs() >= WorkScreen.BAR_FADE_MS
-				&& !Boolean.getBoolean("office.zoomKeepWorld");
+		if (Boolean.getBoolean("office.zoomKeepWorld") || z.controller.state() != State.WORKING) {
+			return false;
+		}
+		if (mirrorStepAside()) {
+			return true; // Minecraft is hidden / minimized: nobody sees the world, don't spend the GPU on it
+		}
+		return z.overlayDrawn && workingForMs() >= WorkScreen.BAR_FADE_MS;
+	}
+
+	/** WORKING on a MIRROR hologram and Minecraft's window has stepped aside (no focus): the real desktop is in front. */
+	static boolean mirrorStepAside() {
+		ZoomClient z = INSTANCE;
+		Candidate t = z.controller.target();
+		return z.controller.state() == State.WORKING && t != null && t.spec().mode() == Mode.MIRROR
+				&& !Minecraft.getInstance().isWindowActive();
 	}
 
 	/** EXTEND: the player hasn't clicked into the virtual display yet, so keys still go to Minecraft. */

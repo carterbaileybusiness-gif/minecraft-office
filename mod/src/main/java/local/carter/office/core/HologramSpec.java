@@ -8,7 +8,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * A placed hologram monitor. {@code windowKey} may be null/empty (EXTEND mode).
+ * A placed hologram monitor. {@code windowKey} may be null/empty (MIRROR / EXTEND mode).
  * Offsets are relative to the owning block; width is clamped to [{@link #MIN_WIDTH}, {@link #MAX_WIDTH}].
  */
 public record HologramSpec(UUID owner, Shape shape, Mode mode, Privacy privacy, int displaySlot, String windowKey,
@@ -36,6 +36,10 @@ public record HologramSpec(UUID owner, Shape shape, Mode mode, Privacy privacy, 
 
     public HologramSpec withWidth(double w) {
         return new HologramSpec(owner, shape, mode, privacy, displaySlot, windowKey, w, offX, offY, offZ, yaw);
+    }
+
+    public HologramSpec withMode(Mode m) {
+        return new HologramSpec(owner, shape, m, privacy, displaySlot, windowKey, width, offX, offY, offZ, yaw);
     }
 
     /** Plain-types codec (strings, numbers, lists) that the caller maps onto NBT. */

@@ -29,6 +29,25 @@ class HologramSpecTest {
     }
 
     @Test
+    void roundTripMirror() {
+        HologramSpec s = sample(Shape.WIDE_16_9, Mode.MIRROR, Privacy.PUBLIC, null);
+        Map<String, Object> m = s.toMap();
+        assertEquals("MIRROR", m.get("mode"));
+        assertEquals(s, HologramSpec.fromMap(m));
+    }
+
+    @Test
+    void mirrorIsAppendedSoOldOrdinalsKeepTheirMeaningAndLegacyNamesStillLoad() {
+        // Wire (readEnum) uses ordinals: a jar without MIRROR must never read EXTEND as MIRROR or the other way round.
+        assertEquals(List.of(Mode.EXTEND, Mode.WINDOW, Mode.MIRROR), List.of(Mode.values()));
+        HologramSpec ext = sample(Shape.WIDE_16_9, Mode.EXTEND, Privacy.PUBLIC, null);
+        Map<String, Object> m = new java.util.HashMap<>(ext.toMap());
+        assertEquals(Mode.EXTEND, HologramSpec.fromMap(m).mode()); // a stored "EXTEND" stays Extend
+        m.put("mode", "WINDOW");
+        assertEquals(Mode.WINDOW, HologramSpec.fromMap(m).mode());
+    }
+
+    @Test
     void roundTripEmptyKey() {
         HologramSpec s = sample(Shape.TALL_9_16, Mode.EXTEND, Privacy.PRIVATE, "");
         assertEquals(s, HologramSpec.fromMap(s.toMap()));

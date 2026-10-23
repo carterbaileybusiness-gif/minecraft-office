@@ -341,6 +341,66 @@ class JavaDesktopSourceWindowsTest {
 		}
 	}
 
+	/**
+	 * Mirror on Windows: a window of this process (standing in for Minecraft's) is excluded from capture with
+	 * WDA_EXCLUDEFROMCAPTURE, the primary monitor is captured (I420 -> RGBA natively, like windows), and minimizing /
+	 * restoring that window (Minecraft stepping aside while working) works.
+	 */
+	@Test
+	void mirrorExcludesOurWindowCapturesThePrimaryScreenAndStepsAside() throws Exception {
+		Win32 w32 = Win32.get();
+		if (!w32.hasInputDesktop()) {
+			skip("no interactive desktop on this runner (OpenInputDesktop failed), so the screen can't be captured");
+		}
+		int build = Win32.windowsBuild();
+		System.out.println("[win-test] windows build=" + build + " primaryDisplayIndex=" + w32.primaryDisplayIndex());
+		if (!Win32.supportsExcludeFromCapture(build)) {
+			skip("Windows build " + build + " has no WDA_EXCLUDEFROMCAPTURE (needs 19041+)");
+		}
+		com.sun.jna.platform.win32.User32 u = com.sun.jna.platform.win32.User32.INSTANCE;
+		com.sun.jna.platform.win32.WinDef.HWND own = u.CreateWindowEx(0, "STATIC", "office-mirror-test",
+				0x00CF0000 /* WS_OVERLAPPEDWINDOW */ | 0x10000000 /* WS_VISIBLE */, 100, 100, 400, 300, null, null, null, null);
+		assertNotNull(own, "CreateWindowEx(STATIC) failed: " + com.sun.jna.platform.win32.Kernel32.INSTANCE.GetLastError());
+		long hwnd = Pointer.nativeValue(own.getPointer());
+		JavaDesktopSource source = new JavaDesktopSource();
+		try {
+			assertTrue(w32.excludeFromCapture(hwnd), "SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) on our own window");
+			assertEquals(Win32.WDA_EXCLUDEFROMCAPTURE, w32.displayAffinity(hwnd), "affinity reads back");
+
+			Recorder rec = new Recorder();
+			source.start(new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9), 30, rec);
+			waitUntil(() -> rec.fulls.get() > 0 || !rec.ended.isEmpty(), 15_000);
+			System.out.println("[win-test] mirror frames=" + rec.fulls.get() + " size=" + rec.w + "x" + rec.h + " litSamples="
+					+ rec.litPixels + " ended=" + rec.ended);
+			assertEquals(List.of(), rec.ended, "screen capture ended early");
+			assertTrue(rec.fulls.get() > 0, "no frame of the primary screen within 15 s");
+			assertTrue(rec.w > 0 && rec.h > 0, "frame size " + rec.w + "x" + rec.h);
+			assertEquals(1, rec.alphaOk, "every pixel must be opaque");
+			assertTrue(source.isLive());
+
+			// A second Mirror hologram shares the same screen capture.
+			Recorder rec2 = new Recorder();
+			JavaDesktopSource second = new JavaDesktopSource();
+			second.start(new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9), 30, rec2);
+			try {
+				assertEquals(2, JavaDesktopSource.mirrorSubscribers(), "one shared capture, two holograms");
+				int before = rec.fulls.get();
+				assertTrue(waitUntil(() -> rec2.fulls.get() > 0 && rec.fulls.get() > before, 5_000), "both keep getting frames");
+			} finally {
+				second.stop();
+			}
+			assertEquals(1, JavaDesktopSource.mirrorSubscribers());
+
+			assertTrue(w32.minimize(hwnd) || w32.isMinimized(hwnd), "minimize (Minecraft stepping aside)");
+			assertTrue(waitUntil(() -> w32.isMinimized(hwnd), 3_000), "window not minimized");
+			w32.focus(hwnd); // zoomOut's way back: restores a minimized window first
+			assertTrue(waitUntil(() -> !w32.isMinimized(hwnd), 3_000), "window not restored");
+		} finally {
+			source.stop();
+			u.DestroyWindow(own);
+		}
+	}
+
 	private static void tapEsc() throws InterruptedException {
 		Keys.INSTANCE.keybd_event((byte) 0x1B, (byte) 0, 0, null);
 		Thread.sleep(20);

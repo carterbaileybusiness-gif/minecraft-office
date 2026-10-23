@@ -141,6 +141,12 @@ public final class OwnScreens {
 		return f == null ? HologramLook.OwnSource.READY : f.source.status();
 	}
 
+	/** The source's reason under "Screens unavailable" (owner only), or null. */
+	public static @Nullable String ownDetail(final UUID hologramId) {
+		Feed f = FEEDS.get(hologramId);
+		return f == null ? null : f.source.statusDetail();
+	}
+
 	static void tick(final Minecraft mc) {
 		if (!enabled || mc.player == null || mc.level == null) {
 			if (!FEEDS.isEmpty()) {

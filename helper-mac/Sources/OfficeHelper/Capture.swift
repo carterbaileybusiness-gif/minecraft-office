@@ -57,8 +57,10 @@ private final class CaptureReceiver: NSObject, SCStreamOutput, SCStreamDelegate 
 
 enum CaptureError: Error, CustomStringConvertible {
     case noDisplay(CGDirectDisplayID), wrongDisplay(expected: CGDirectDisplayID, got: CGDirectDisplayID), noWindow(String)
+    case minecraftNotListed(pid_t)
     var description: String {
         switch self {
+        case .minecraftNotListed(let pid): return "Minecraft (pid \(pid)) can't be excluded from the mirror"
         case .noDisplay(let id): return "display \(id) is not capturable"
         case .wrongDisplay(let e, let g): return "matched display \(g), expected \(e)"
         case .noWindow(let key): return "window \(key) not found"
@@ -66,9 +68,10 @@ enum CaptureError: Error, CustomStringConvertible {
     }
 }
 
-/// One captured surface: a virtual display (cursor shown) or one app window.
+/// One captured surface: a virtual display (cursor shown), one app window, or the main display minus Minecraft (Mirror).
 @MainActor final class SurfaceCapture {
-    enum Source: Equatable { case display(CGDirectDisplayID), window(WindowKey) }
+    /// `main(excluding:)`: the main display with every window of that app (Minecraft, HELLO's mcPid) left out.
+    enum Source: Equatable { case display(CGDirectDisplayID), window(WindowKey), main(excluding: pid_t?) }
 
     let surface: Int
     let source: Source
@@ -97,8 +100,28 @@ enum CaptureError: Error, CustomStringConvertible {
         let ticket = generations.begin()
         detachStream()
         self.generation = generation
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        var content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard generations.accepts(ticket) else { return }
+        if case .main(let excludedPid) = source {
+            // Never mirror without Minecraft excluded: wait (backoff, ~5 s) for its app to be listed, else fail.
+            var attempt = 0
+            while true {
+                let found = excludedPid.map { pid in content.applications.contains { $0.processID == pid } } ?? false
+                switch MirrorExclusion.decide(found: found, attempt: attempt) {
+                case .capture: break
+                case .fail: throw CaptureError.minecraftNotListed(excludedPid ?? -1)
+                case .retry(let delay):
+                    Log.write("mirror: Minecraft (pid \(excludedPid ?? -1)) not in shareable content yet; retry in \(delay) s")
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard generations.accepts(ticket) else { return }
+                    content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                    guard generations.accepts(ticket) else { return }
+                    attempt += 1
+                    continue
+                }
+                break
+            }
+        }
         let configuration = SCStreamConfiguration()
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(zoomed ? Self.zoomedFPS : requestedFPS))
         configuration.queueDepth = 3
@@ -118,6 +141,19 @@ enum CaptureError: Error, CustomStringConvertible {
             configuration.height = max(1, Int((Double(pixelsHigh) * Double(width) / Double(pixelsWide)).rounded()))
             configuration.showsCursor = true
             filter = SCContentFilter(display: display, excludingWindows: [])
+            capturedWindowSize = nil
+        case .main(let excludedPid):
+            // Mirror: "it should just be my screen", minus Minecraft so there is no Minecraft-inside-Minecraft.
+            let id = CGMainDisplayID()
+            guard let display = content.displays.first(where: { $0.displayID == id }) else { throw CaptureError.noDisplay(id) }
+            let pixelsWide = max(1, CGDisplayPixelsWide(id)), pixelsHigh = max(1, CGDisplayPixelsHigh(id))
+            let width = min(pixelsWide, maxWidth)
+            configuration.width = width
+            configuration.height = max(1, Int((Double(pixelsHigh) * Double(width) / Double(pixelsWide)).rounded()))
+            configuration.showsCursor = true
+            let minecraft = content.applications.filter { excludedPid != nil && $0.processID == excludedPid! }
+            guard !minecraft.isEmpty else { throw CaptureError.minecraftNotListed(excludedPid ?? -1) } // checked above
+            filter = SCContentFilter(display: display, excludingApplications: minecraft, exceptingWindows: [])
             capturedWindowSize = nil
         case .window(let key):
             guard let window = content.windows.first(where: { $0.windowID == key.windowID }),

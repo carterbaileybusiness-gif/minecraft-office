@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
+import local.carter.office.core.PlacementPlan;
 import local.carter.office.core.Mount;
 import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
@@ -170,11 +171,17 @@ public class HologramEmitterBlock extends BaseEntityBlock {
 		float yaw = facingYaw(state);
 		boolean online = serverLevel.getServer().getPlayerList().getPlayer(owner) != null;
 		HologramIndex index = HologramIndex.get(serverLevel.getServer());
-		be.initPlaced(defaultSpec(owner, index.firstFreeSlot(owner), mount(state), yaw), by.getName().getString(), online);
-		index.put(be.hologramId(), owner, serverLevel.dimension(), pos);
+		// Every hologram is a new virtual display on the next free slot (Windows clients switch theirs to Mirror).
+		PlacementPlan.Choice choice = index.placementFor(owner);
+		HologramSpec spec = defaultSpec(owner, choice.displaySlot(), mount(state), yaw).withMode(choice.mode());
+		be.initPlaced(spec, by.getName().getString(), online);
+		index.put(be.hologramId(), owner, serverLevel.dimension(), pos, spec.mode(), spec.displaySlot());
 	}
 
-	/** Default floor hologram: 16:9, Extend, Public, width 2, centred above the emitter, bottom edge 0.6 above its centre. */
+	/**
+	 * Default floor hologram: 16:9, Extend, Public, width 2, centred above the emitter, bottom edge 0.6 above its centre.
+	 * Placement then picks the display slot with {@link HologramIndex#placementFor}.
+	 */
 	public static HologramSpec defaultSpec(final UUID owner, final int displaySlot, final float yaw) {
 		return defaultSpec(owner, displaySlot, Mount.FLOOR, yaw);
 	}

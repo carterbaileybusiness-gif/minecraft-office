@@ -4,6 +4,38 @@ enum HotkeyLogicTests {
     static let esc: UInt16 = 53
 
     static func runAll() {
+        run("zoom style follows what the surface shows") {
+            let mirror = ZoomStyle(kind: .main), display = ZoomStyle(kind: .display), window = ZoomStyle(kind: .window)
+            expect(mirror.hidesMinecraft && !mirror.clampsCursor && !mirror.placesWindow, "Mirror: Minecraft steps aside, no clamp")
+            expect(mirror.exitsWhenMinecraftActivates, "Mirror: clicking back into Minecraft exits")
+            expect(display.clampsCursor && !display.hidesMinecraft && !display.exitsWhenMinecraftActivates, "Extend: cursor clamp only")
+            expect(window.placesWindow && !window.hidesMinecraft && !window.clampsCursor, "Window: placement only")
+        }
+
+        run("Mirror never captures without Minecraft excluded") {
+            expectEqual(MirrorExclusion.decide(found: true, attempt: 0), .capture)
+            expectEqual(MirrorExclusion.decide(found: false, attempt: 0), .retry(after: MirrorExclusion.delays[0]))
+            let last = MirrorExclusion.delays.count
+            expectEqual(MirrorExclusion.decide(found: false, attempt: last), .fail, "gives up instead of showing Minecraft in itself")
+            expectEqual(MirrorExclusion.decide(found: true, attempt: last), .capture, "found on the last try")
+            let total = MirrorExclusion.delays.reduce(0, +)
+            expect(total >= 4 && total <= 6, "about 5 s in all, got \(total)")
+            expect(zip(MirrorExclusion.delays, MirrorExclusion.delays.dropFirst()).allSatisfy { $0 <= $1 }, "backs off")
+        }
+
+        run("Minecraft is never left hidden") {
+            var guardState = MinecraftHideGuard()
+            expect(!guardState.shouldUnhide, "nothing hidden yet")
+            guardState.hid()
+            expect(guardState.isHidden, "hidden while zoomed into Mirror")
+            expect(guardState.shouldUnhide, "every way out (exit, disconnect, error, quit) must unhide")
+            guardState.unhid()
+            expect(!guardState.shouldUnhide, "unhidden once")
+            guardState.hid(); guardState.hid()
+            guardState.unhid()
+            expect(!guardState.isHidden, "a second hide is still one unhide")
+        }
+
         run("double Esc within 350 ms exits") {
             var d = ExitChordDetector()
             expect(!d.keyDown(keyCode: esc, modifiers: [], time: 10.0, isRepeat: false), "first Esc alone does nothing")

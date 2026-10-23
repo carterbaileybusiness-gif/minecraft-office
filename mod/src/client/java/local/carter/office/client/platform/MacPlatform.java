@@ -14,6 +14,8 @@ import org.slf4j.LoggerFactory;
 import local.carter.office.client.OfficeClient;
 import local.carter.office.client.capture.CaptureSource;
 import local.carter.office.client.capture.MacHelperSource;
+import local.carter.office.client.capture.OwnScreens;
+import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.capture.Target;
 import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperInstaller;
@@ -26,6 +28,7 @@ import local.carter.office.client.interact.WindowListProvider;
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
 import local.carter.office.client.selftest.SelfTestScreen;
 import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Mode;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -40,8 +43,9 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
 /**
- * macOS: the player's own screens come from OfficeHelper.app (virtual displays, ScreenCaptureKit, window placement,
- * cursor focus, exit hotkey) over {@link HelperConnection}.
+ * macOS: the player's own screens come from OfficeHelper.app (Mirror = the main display minus Minecraft, virtual
+ * displays, ScreenCaptureKit, window placement, cursor focus, hiding Minecraft while working on a Mirror, exit hotkey)
+ * over {@link HelperConnection}.
  *
  * <p>Setup UX: the first time an own hologram needs the helper and it isn't installed, an in-game confirm screen asks
  * before anything is downloaded ("Set up your screens?", Yes / Not now). Until the helper runs with Screen Recording,
@@ -64,6 +68,8 @@ public final class MacPlatform implements Platform {
 	private boolean permissionNotified;
 	// zoom (client thread)
 	private boolean zoomed;
+	/** The current zoom is into a Mirror hologram (the helper hides Minecraft). */
+	private boolean mirrorZoom;
 	private @Nullable String zoomFailure;
 
 	MacPlatform() {
@@ -84,6 +90,7 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void register() {
 		helper.onStatusChange(this::statusChanged);
+		HologramLook.setOwnDetailProvider(OwnScreens::ownDetail); // why a capture ended, under "Screens unavailable"
 		helper.onError(this::helperError);
 		helper.onWindows(() -> {
 			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
@@ -148,6 +155,7 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void zoomIn(final HologramSpec spec, final Rect mcWindow) {
 		zoomed = true;
+		mirrorZoom = spec.mode() == Mode.MIRROR;
 		zoomFailure = null;
 		int surface = helper.surfaceFor(Target.of(spec));
 		boolean sent = helper.zoomIn(surface, new WindowRect(mcWindow.x(), mcWindow.y(), mcWindow.w(), mcWindow.h()));
@@ -157,11 +165,17 @@ public final class MacPlatform implements Platform {
 		}
 	}
 
+	/** ZOOM_OUT (the helper unhides Minecraft after a Mirror zoom); if the helper is gone, Minecraft unhides itself. */
 	@Override
 	public void zoomOut() {
+		boolean wasMirror = mirrorZoom;
 		zoomed = false;
+		mirrorZoom = false;
 		zoomFailure = null;
 		helper.zoomOut();
+		if (wasMirror) {
+			MacApp.unhideIfHidden(); // never leave Minecraft hidden, even if the helper died mid-zoom
+		}
 	}
 
 	/** An ERROR from the helper while zoomed that means the zoom didn't happen (client thread). */
