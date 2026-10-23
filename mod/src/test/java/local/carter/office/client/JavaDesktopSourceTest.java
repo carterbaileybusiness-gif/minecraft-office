@@ -10,6 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import local.carter.office.client.capture.FrameSink;
 import local.carter.office.client.capture.JavaDesktopSource;
 import local.carter.office.client.capture.Target;
+import local.carter.office.client.render.HologramLook;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Shape;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,20 @@ class JavaDesktopSourceTest {
 		s.start(new Target(Mode.WINDOW, 1, "notepad.exe|10", Shape.WIDE_16_9), 30, r);
 		assertEquals(List.of(JavaDesktopSource.REASON_NOT_WINDOWS), r.ended);
 		assertFalse(s.isLive());
+	}
+
+	/** OwnScreens' look provider reads source.status(): the ended reason maps to Task 11's looks. */
+	@Test
+	@DisabledOnOs(OS.WINDOWS)
+	void statusFollowsTheEndedReason() {
+		JavaDesktopSource s = new JavaDesktopSource();
+		assertEquals(HologramLook.OwnSource.READY, s.status());
+		s.start(new Target(Mode.EXTEND, 1, null, Shape.WIDE_16_9), 30, new Recorder());
+		assertEquals(HologramLook.OwnSource.PICK_WINDOW, s.status());
+		s.start(new Target(Mode.WINDOW, 1, "mac:42", Shape.WIDE_16_9), 30, new Recorder());
+		assertEquals(HologramLook.OwnSource.WINDOW_CLOSED, s.status());
+		s.start(new Target(Mode.WINDOW, 1, "notepad.exe|10", Shape.WIDE_16_9), 30, new Recorder());
+		assertEquals(HologramLook.OwnSource.UNAVAILABLE, s.status());
 	}
 
 	@Test

@@ -18,6 +18,8 @@ import dev.onvoid.webrtc.media.video.desktop.WindowCapturer;
 
 import local.carter.office.client.platform.Win32;
 import local.carter.office.client.platform.WindowKey;
+import local.carter.office.client.platform.WindowsPlatform;
+import local.carter.office.client.render.HologramLook;
 import local.carter.office.core.Mode;
 
 /**
@@ -46,6 +48,8 @@ public final class JavaDesktopSource implements CaptureSource {
 
 	private final Object lock = new Object();
 	private @Nullable Run current;
+	/** Why the current session ended (null while running or not started), for {@link #status()}. */
+	private volatile @Nullable String endedReason;
 
 	/** The window the player is zoomed into (captured faster), or null. Set by the Windows platform on zoom in/out. */
 	public static void setWorkingKey(final @Nullable String windowKey) {
@@ -61,18 +65,22 @@ public final class JavaDesktopSource implements CaptureSource {
 	@Override
 	public void start(final Target t, final int maxFps, final FrameSink sink) {
 		stop();
+		endedReason = null;
 		if (t.mode() != Mode.WINDOW) {
+			endedReason = REASON_EXTEND;
 			sink.ended(REASON_EXTEND);
 			return;
 		}
 		WindowKey key = WindowKey.parse(t.windowKey());
 		if (key == null) {
+			endedReason = REASON_WINDOW_CLOSED;
 			sink.ended(REASON_WINDOW_CLOSED);
 			return;
 		}
 		if (!WebRtcNatives.supported()) {
 			String why = WebRtcNatives.isWindows() ? REASON_ARM : REASON_NOT_WINDOWS;
 			LOGGER.info("Windows capture unavailable: {} ({})", why, System.getProperty("os.arch"));
+			endedReason = why;
 			sink.ended(why);
 			return;
 		}
@@ -102,6 +110,12 @@ public final class JavaDesktopSource implements CaptureSource {
 			run = current;
 		}
 		return run != null && run.live;
+	}
+
+	/** The owner's look for this source: "Window closed", "Pick a window" (Extend) or "Screens unavailable". */
+	@Override
+	public HologramLook.OwnSource status() {
+		return WindowsPlatform.ownSourceFor(endedReason);
 	}
 
 	/**
@@ -261,6 +275,7 @@ public final class JavaDesktopSource implements CaptureSource {
 		private void end(final String reason) {
 			live = false;
 			if (running && endedSent.compareAndSet(false, true)) {
+				endedReason = reason;
 				LOGGER.info("Windows capture of {} ended: {}", key.exe(), reason);
 				sink.ended(reason);
 			}

@@ -1,11 +1,11 @@
 package local.carter.office.client.capture;
 
+import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
-import java.nio.ByteBuffer;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -42,14 +42,16 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * when the hologram's {@link Target} changes and stopped when it unloads,
  * changes owner, or the player disconnects. Client thread only.
  *
- * <p>Default source: this computer's own capture ({@link Platform#newOwnSource}, the Mac helper) with an adaptive rate
- * ({@link CaptureRate}: 5 fps while the hologram's front is on screen, 0 when not, 30 while zoomed in). With
+ * <p>Default source: this computer's own capture ({@link Platform#newOwnSource}: the Mac helper with an adaptive rate,
+ * {@link CaptureRate}: 5 fps while the hologram's front is on screen, 0 when not, 30 while zoomed in; or Windows'
+ * {@link JavaDesktopSource}, which paces itself under {@link #MAX_FPS}). With
  * {@code -Doffice.testPattern=true} (dev override) every own hologram shows a {@link TestPatternSource} at 30 fps
  * instead. Without either, own holograms are not fed.
  *
  * <p>Sharing (Task 14): every source (Mac helper, Windows desktop capture, test pattern) feeds a {@link FanOutSink}:
  * the hologram's texture first, then the share tap ({@link #setShareTaps}) while friends are watching. A watched
- * hologram is captured at least {@link #SHARE_FPS} even when its owner isn't looking at it.
+ * hologram is captured at least {@link #SHARE_FPS} even when its owner isn't looking at it (adaptive-rate sources only;
+ * a source that paces itself is left alone).
  */
 public final class OwnScreens {
 	public static final String TEST_PATTERN_PROPERTY = "office.testPattern";
@@ -89,7 +91,8 @@ public final class OwnScreens {
 			enabled = true;
 		} else if (Platform.current().newOwnSource() != null) {
 			factory = () -> Platform.current().newOwnSource();
-			adaptiveRate = true;
+			// Mac helper: 5 / 0 / 30 fps from visibility. Windows' JavaDesktopSource paces itself under the MAX_FPS cap.
+			adaptiveRate = !Platform.current().ownSourcePacesItself();
 			enabled = true;
 		}
 		HologramLook.setOwnSourceProvider(OwnScreens::ownSource);
@@ -165,7 +168,8 @@ public final class OwnScreens {
 					? CaptureRate.fps(visibility.update(visible(camera, be.getBlockPos(), spec), System.nanoTime() / 1_000_000L),
 							HologramRenderer.isZoomed(id))
 					: MAX_FPS;
-			if (shared(id)) {
+			if (adaptiveRate && shared(id)) {
+				// a source that paces itself (Windows: 10 fps, 30 while working) already runs fast enough to share
 				fps = Math.max(fps, SHARE_FPS);
 			}
 			if (feed != null && feed.target.equals(target)) {

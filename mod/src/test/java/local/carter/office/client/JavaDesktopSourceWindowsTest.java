@@ -172,7 +172,7 @@ class JavaDesktopSourceWindowsTest {
 
 	private static WindowChoice findChoice(final WindowsPlatform p, final long hwnd) throws InterruptedException {
 		for (int i = 0; i < 50; i++) {
-			for (WindowChoice c : p.windows()) {
+			for (WindowChoice c : p.windowChoices()) {
 				WindowKey k = WindowKey.parse(c.key());
 				if (k != null && k.hwnd() == hwnd) {
 					return c;
@@ -232,7 +232,7 @@ class JavaDesktopSourceWindowsTest {
 		JavaDesktopSource source = new JavaDesktopSource();
 		try {
 			WindowChoice choice = findChoice(new WindowsPlatform(), hwnd);
-			assertNotNull(choice, "Notepad (hwnd " + Long.toHexString(hwnd) + ") missing from windows(): " + new WindowsPlatform().windows());
+			assertNotNull(choice, "Notepad (hwnd " + Long.toHexString(hwnd) + ") missing from windowChoices(): " + new WindowsPlatform().windowChoices());
 			assertEquals("notepad", choice.title().toLowerCase(java.util.Locale.ROOT), "title must be the app name only");
 			assertTrue(choice.key().toLowerCase(java.util.Locale.ROOT).startsWith("notepad.exe|"), choice.key());
 
