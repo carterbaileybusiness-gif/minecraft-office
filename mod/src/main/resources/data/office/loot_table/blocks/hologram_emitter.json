@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "office:hologram_emitter"
+        }
+      ],
+      "rolls": 1
+    }
+  ],
+  "random_sequence": "office:blocks/hologram_emitter"
+}
