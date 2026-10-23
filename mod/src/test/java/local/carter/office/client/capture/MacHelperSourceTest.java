@@ -155,6 +155,25 @@ class MacHelperSourceTest {
 	}
 
 	@Test
+	void mirrorCapturesTheMainDisplayWithoutCreatingOne() {
+		welcome(true);
+		MacHelperSource s = source();
+		s.start(new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9), 5, sink);
+		assertEquals(1, sent.size(), "no CREATE_DISPLAY: Mirror shows the real screen");
+		Capture c = last(Capture.class);
+		assertEquals(CaptureKind.MAIN, c.kind());
+		assertEquals(null, c.slot());
+		assertEquals(null, c.windowKey());
+		assertEquals(MacHelperSource.MIRROR_MAX_W, c.maxW());
+		assertTrue(s.isLive());
+		assertEquals(c.surface(), helper.surfaceFor(Target.of(new HologramSpec(ME, Shape.WIDE_16_9, Mode.MIRROR, Privacy.PUBLIC, 3, null, 2, 0, 1, 0, 0))),
+				"zoom finds the surface whatever the stored display slot");
+
+		helper.message(new Ended(c.surface(), "no permission"));
+		assertEquals(HologramLook.OwnSource.NEEDS_HELPER, s.status(), "Mirror needs Screen Recording too");
+	}
+
+	@Test
 	void framesAndPatchesReachTheSinkAndAreAcknowledged() {
 		welcome(true);
 		MacHelperSource s = source();

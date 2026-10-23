@@ -113,7 +113,7 @@ downloads the small helper (OfficeHelper, a few MB, from this project's GitHub p
    - macOS 15 and macOS 26: **System Settings, Privacy & Security, Screen & System Audio Recording**.
    - macOS 14: **System Settings, Privacy & Security, Screen Recording**.
 2. **Accessibility.** The next time you use a hologram, macOS asks again. Switch **OfficeHelper** on in
-   **System Settings, Privacy & Security, Accessibility**. This lets your mouse and keyboard work inside a hologram.
+   **System Settings, Privacy & Security, Accessibility**. This lets double-tap Esc bring you back from your screen.
 3. Normally nothing else shows up. But if macOS ever says OfficeHelper cannot be opened because it is from an
    unidentified developer, open **System Settings, Privacy & Security**, scroll to the Security section, and click
    **Open Anyway** next to OfficeHelper. (We do not pay Apple for signing.)
@@ -135,15 +135,18 @@ downloads the small helper (OfficeHelper, a few MB, from this project's GitHub p
   `tccutil reset Accessibility local.carter.office-helper`
 
 Good to know on a Mac:
-- **Extend** mode gives a hologram its own brand new virtual screen. It shows up as "Office Display 1" in System
-  Settings, Displays, and goes away when you quit Minecraft. **Window** mode shows one app window instead.
+- **Mirror** (your first hologram) shows your Mac's screen, everything except Minecraft itself.
+- **Extend** (every extra hologram) gives it its own brand new virtual screen, like plugging in another monitor. It
+  shows up as "Office Display 1" (2, 3...) in System Settings, Displays, and goes away when you quit Minecraft.
+  **Window** mode shows one app window instead.
 - Protected video (Netflix and similar) shows black, and password boxes may not accept typing.
 
 <a id="windows"></a>
 ### Windows (beta)
 
-- **Nothing to install.** Windows holograms work in **Window mode only** for now: a hologram shows one app window
-  you pick. Extend (a separate virtual screen) comes later.
+- **Nothing to install.** Windows holograms show your screen (**Mirror**, everything except Minecraft; needs
+  Windows 10 version 2004 or newer) or one app window you pick (**Window**). Extend (a separate virtual screen)
+  comes later, so every new hologram mirrors.
 - If Windows **SmartScreen** shows a blue "Windows protected your PC" box for anything, click **More info**, then
   **Run anyway**.
 - It is a beta. After you first join, please run the [self-test](#10-something-wrong) and send Carter the report,
@@ -157,19 +160,25 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
 
 1. **Get emitters.** Your first-join starter kit has 4. Need more? Type `/emitter` in chat (limit: 8 holograms each).
 2. **Place it** like a block, on the floor, a desk, anywhere. The hologram appears above it. It can float mid-air.
+   Your **first** hologram is your screen (**Mirror**): exactly what you see on your computer, minus Minecraft, like
+   plugging your laptop into a monitor. **Each extra** hologram is a new empty screen (**Extend**, Mac), like adding
+   monitor #2, #3: drag windows onto it, or open apps while zoomed into it.
 3. **Resize.** Hold the emitter, point at a corner of the hologram, then **hold right-click and drag**. A cyan outline
    shows the new size. Let go to set it. Anything from tiny to wall-sized.
 4. **Settings.** Right-click the emitter itself:
    - **Shape:** widescreen 16:9, ultrawide 21:9, or tall 9:16.
-   - **Mode:** **Extend** (a new virtual screen, Mac only for now) or **Window** (shows one app window you pick).
-   - **Display:** which of your virtual displays this hologram is.
+   - **Shows:** **Mirror** (your screen, minus Minecraft), **Extend** (a new virtual screen, Mac only for now) or
+     **Window** (one app window you pick). Switch any hologram any time.
+   - **Display** (Extend only): which of your virtual displays this hologram is.
    - **Privacy:** **Public** (anyone nearby sees it, view-only), **Private** (only you; everyone else sees a frosted
      "Private" panel), or **Show to...** (pick specific players).
    - **Remove** to pick it back up.
 5. **Move it.** Hold **Shift**, then right-click the hologram and drag. **Scroll** while dragging to rotate it.
 6. **Work on it.** **Click your hologram.** The camera zooms in until it fills your view, and your real mouse and
-   keyboard now control your real computer.
-7. **Come back.** **Double-tap Esc.** If that does not work, use the backup:
+   keyboard now control your real computer. On a **Mirror** hologram, Minecraft then steps aside (hidden on Mac,
+   minimized on Windows) and you are simply on your normal desktop.
+7. **Come back.** **Double-tap Esc**, or just click back into Minecraft (Dock, Cmd-Tab, taskbar). If that does not
+   work, use the backup:
    - Mac: **Ctrl + Option + Cmd + Esc**
    - Windows: **Ctrl + Alt + Shift + Esc**
 
@@ -177,6 +186,8 @@ Good to know:
 - Only **you** can resize, change, or remove your holograms. Emitters survive explosions.
 - Friends see your public holograms live but a bit smaller and slower (about 10 frames a second). You always see
   your own at full speed. When you are offline your holograms show a dim "offline" glow.
+- **A Public Mirror shows friends nearby your whole screen** (the settings say so too). Make it **Private** or
+  **Show to...** when you have something personal open.
 - **Privacy promise:** a Private screen never leaves your computer. It is not hidden after being sent. It is never
   sent at all.
 - Screens only stream to players close by (about 48 blocks), so an empty office costs nothing.

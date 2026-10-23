@@ -28,6 +28,7 @@ Swift change alters them without the fixtures being committed.
 | `remove_display.bin` | REMOVE_DISPLAY = 4 | `{"slot":1}` |
 | `capture_display.bin` | CAPTURE = 5 | `{"fps":5,"kind":"display","maxW":1280,"slot":1,"surface":7}` |
 | `capture_window.bin` | CAPTURE = 5 | `{"fps":5,"kind":"window","maxW":1280,"surface":8,"windowKey":"com.apple.Notes\|4321"}` |
+| `capture_main.bin` | CAPTURE = 5 | `{"fps":5,"kind":"main","maxW":1920,"surface":9}` (Mirror: no `slot`, no `windowKey`) |
 | `stop.bin` | STOP = 6 | `{"surface":7}` |
 | `ready.bin` | READY = 7 | `{"surface":7}` |
 | `zoom_in.bin` | ZOOM_IN = 8 | `{"mcWindowFrame":{"h":875,"w":1440,"x":0,"y":25},"surface":7}` |
@@ -56,6 +57,13 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   different first message → the socket is closed with no reply. Wrong version → `ERROR {"code":"version"}`, then closed.
   A second authenticated client while one is connected → `ERROR {"code":"busy"}`, then closed (the first stays).
 - CAPTURE lets the first frame go without READY; after that each FRAME/PATCH waits for `READY {surface}`.
+- CAPTURE kinds: `display` (a virtual display, needs `slot`), `window` (needs `windowKey`), `main` (Mirror: the main
+  display, `CGMainDisplayID()`, captured with `SCContentFilter(display:excludingApplications:[the app whose pid is
+  HELLO's mcPid], exceptingWindows:[])`, cursor shown; needs neither).
+- ZOOM_IN on a `main` surface hides the Minecraft app (`NSRunningApplication.hide()`), no cursor clamp, exit hotkey
+  armed. Minecraft is unhidden on every way out: ZOOM_OUT, the exit hotkey (then EXIT_ZOOM), the surface ending, the mod
+  disconnecting, the helper quitting. Minecraft becoming the active app again while zoomed (Dock, Cmd-Tab, a click)
+  ends the zoom too (EXIT_ZOOM).
 - ENDED reasons: `"window closed"`, `"display removed"`, `"no display"`, `"no permission"` (Screen Recording missing),
   `"capture failed: <detail>"`.
 - ERROR codes: `bad_slot`, `bad_size`, `display_failed`, `not_found`, `no_accessibility`, `bad_request`, `version`,

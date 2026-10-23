@@ -66,9 +66,10 @@ enum CaptureError: Error, CustomStringConvertible {
     }
 }
 
-/// One captured surface: a virtual display (cursor shown) or one app window.
+/// One captured surface: a virtual display (cursor shown), one app window, or the main display minus Minecraft (Mirror).
 @MainActor final class SurfaceCapture {
-    enum Source: Equatable { case display(CGDirectDisplayID), window(WindowKey) }
+    /// `main(excluding:)`: the main display with every window of that app (Minecraft, HELLO's mcPid) left out.
+    enum Source: Equatable { case display(CGDirectDisplayID), window(WindowKey), main(excluding: pid_t?) }
 
     let surface: Int
     let source: Source
@@ -118,6 +119,19 @@ enum CaptureError: Error, CustomStringConvertible {
             configuration.height = max(1, Int((Double(pixelsHigh) * Double(width) / Double(pixelsWide)).rounded()))
             configuration.showsCursor = true
             filter = SCContentFilter(display: display, excludingWindows: [])
+            capturedWindowSize = nil
+        case .main(let excludedPid):
+            // Mirror: "it should just be my screen", minus Minecraft so there is no Minecraft-inside-Minecraft.
+            let id = CGMainDisplayID()
+            guard let display = content.displays.first(where: { $0.displayID == id }) else { throw CaptureError.noDisplay(id) }
+            let pixelsWide = max(1, CGDisplayPixelsWide(id)), pixelsHigh = max(1, CGDisplayPixelsHigh(id))
+            let width = min(pixelsWide, maxWidth)
+            configuration.width = width
+            configuration.height = max(1, Int((Double(pixelsHigh) * Double(width) / Double(pixelsWide)).rounded()))
+            configuration.showsCursor = true
+            let minecraft = content.applications.filter { excludedPid != nil && $0.processID == excludedPid! }
+            if excludedPid != nil, minecraft.isEmpty { Log.write("mirror: Minecraft (pid \(excludedPid!)) not in shareable content yet") }
+            filter = SCContentFilter(display: display, excludingApplications: minecraft, exceptingWindows: [])
             capturedWindowSize = nil
         case .window(let key):
             guard let window = content.windows.first(where: { $0.windowID == key.windowID }),

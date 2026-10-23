@@ -63,10 +63,31 @@ class WindowsLookTest {
 		assertFalse(HologramLook.forViewer(win, FRIEND, true, true, OwnSource.UNAVAILABLE) == State.UNAVAILABLE);
 	}
 
+	/** Affinity fallback: if Minecraft can't be kept out of the capture, the Mirror hologram says so instead. */
+	@Test
+	void mirrorThatCantHideMinecraftSaysWhyOnTheHologram() {
+		HologramSpec mirror = spec(Mode.MIRROR, null);
+		assertEquals(OwnSource.UNAVAILABLE, WindowsPlatform.ownSourceFor(JavaDesktopSource.REASON_MIRROR_EXCLUDE));
+		State s = HologramLook.forViewer(mirror, OWNER, true, false, OwnSource.UNAVAILABLE);
+		Label l = HologramLook.label(s, mirror, true, "Carter", JavaDesktopSource.REASON_MIRROR_EXCLUDE);
+		assertEquals("Screens unavailable", l.title());
+		assertEquals(JavaDesktopSource.REASON_MIRROR_EXCLUDE, l.subtitle(), "the whole note fits");
+	}
+
+	@Test
+	void publicMirrorWarnsThatFriendsSeeTheWholeScreen() {
+		assertEquals("Friends nearby can see your whole screen.", HologramLook.mirrorWarning(Mode.MIRROR, Privacy.Level.PUBLIC));
+		assertEquals(null, HologramLook.mirrorWarning(Mode.MIRROR, Privacy.Level.PRIVATE));
+		assertEquals(null, HologramLook.mirrorWarning(Mode.MIRROR, Privacy.Level.SHOW_TO));
+		assertEquals(null, HologramLook.mirrorWarning(Mode.EXTEND, Privacy.Level.PUBLIC));
+		assertEquals(null, HologramLook.mirrorWarning(Mode.WINDOW, Privacy.Level.PUBLIC));
+	}
+
 	@Test
 	void shortReasonsFitWithoutTrimming() {
 		for (String r : new String[] {JavaDesktopSource.REASON_NO_LIBRARY, JavaDesktopSource.REASON_CANT_CAPTURE,
-				JavaDesktopSource.REASON_FAILED, JavaDesktopSource.REASON_NOT_WINDOWS}) {
+				JavaDesktopSource.REASON_FAILED, JavaDesktopSource.REASON_NOT_WINDOWS, JavaDesktopSource.REASON_NO_SCREEN,
+				JavaDesktopSource.REASON_SCREEN_FAILED, JavaDesktopSource.REASON_MIRROR_EXCLUDE}) {
 			assertEquals(r, HologramLook.label(State.UNAVAILABLE, spec(Mode.WINDOW, "a.exe|1"), true, "", r).subtitle());
 		}
 	}

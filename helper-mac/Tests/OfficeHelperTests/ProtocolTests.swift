@@ -12,6 +12,7 @@ enum ProtocolTests {
         ("remove_display", .removeDisplay(SlotPayload(slot: 1))),
         ("capture_display", .capture(CapturePayload(surface: 7, kind: .display, slot: 1, windowKey: nil, maxW: 1280, fps: 5))),
         ("capture_window", .capture(CapturePayload(surface: 8, kind: .window, slot: nil, windowKey: "com.apple.Notes|4321", maxW: 1280, fps: 5))),
+        ("capture_main", .capture(CapturePayload(surface: 9, kind: .main, slot: nil, windowKey: nil, maxW: 1920, fps: 5))),
         ("stop", .stop(SurfacePayload(surface: 7))),
         ("ready", .ready(SurfacePayload(surface: 7))),
         ("zoom_in", .zoomIn(ZoomInPayload(surface: 7, mcWindowFrame: WindowRect(x: 0, y: 25, w: 1440, h: 875)))),
@@ -117,6 +118,9 @@ enum ProtocolTests {
             expectThrows("window capture without windowKey") {
                 _ = try Message.decode(type: .capture, payload: Data(#"{"surface":1,"kind":"window","maxW":1,"fps":1}"#.utf8))
             }
+            // Mirror ("main"): the main display minus Minecraft; needs neither slot nor windowKey.
+            let main = try Message.decode(type: .capture, payload: Data(#"{"surface":1,"kind":"main","maxW":1920,"fps":5}"#.utf8))
+            expectEqual(main, .capture(CapturePayload(surface: 1, kind: .main, slot: nil, windowKey: nil, maxW: 1920, fps: 5)), "main capture")
             expectThrows("unknown capture kind") {
                 _ = try Message.decode(type: .capture, payload: Data(#"{"surface":1,"kind":"mirror","slot":1,"maxW":1,"fps":1}"#.utf8))
             }

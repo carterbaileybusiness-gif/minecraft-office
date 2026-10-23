@@ -66,6 +66,7 @@ final class WorkScreen extends Screen {
 	public void extractRenderState(final GuiGraphicsExtractor graphics, final int mouseX, final int mouseY, final float a) {
 		Candidate t = controller.target();
 		long working = ZoomClient.workingForMs();
+		// MIRROR and WINDOW draw nothing: Minecraft has stepped aside / the real window is on top.
 		if (t == null || controller.state() != State.WORKING || working < 0 || t.spec().mode() != Mode.EXTEND) {
 			ZoomClient.overlayDrawn(false);
 			return;

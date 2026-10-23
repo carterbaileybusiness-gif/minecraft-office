@@ -15,6 +15,10 @@ import ScreenCaptureKit
     private var pollTimer: Timer?
     private var askedScreenRecording = false
     private var askedAccessibility = false
+    /// Mirror zoom: Minecraft hidden by us (unhidden on every way out), and the observer that ends the zoom when the
+    /// player brings Minecraft back (Dock, Cmd-Tab, clicking its window).
+    private var hideGuard = MinecraftHideGuard()
+    private var activationObserver: NSObjectProtocol?
     /// Called when the mod disconnects: the helper quits and its displays vanish with it.
     var onFinished: (() -> Void)?
 
@@ -146,6 +150,8 @@ import ScreenCaptureKit
                 return
             }
             source = .window(key)
+        case .main:
+            source = .main(excluding: minecraftPid)
         }
         let capture = SurfaceCapture(surface: p.surface, source: source, maxWidth: p.maxW, fps: p.fps)
         captures[p.surface] = capture
@@ -217,6 +223,8 @@ import ScreenCaptureKit
                 }
             case .display(let id):
                 if !VirtualDisplays.isOnline(id) { end(surface: surface, reason: "display removed") }
+            case .main:
+                break
             }
         }
     }
@@ -239,18 +247,54 @@ import ScreenCaptureKit
         case .window(let key):
             let f = p.mcWindowFrame
             placement.place(windowID: key.windowID, at: CGRect(x: f.x, y: f.y, width: f.w, height: f.h), minecraftPid: minecraftPid)
+        case .main:
+            hideMinecraft() // the player is on their real desktop now; no cursor clamp
         }
         Log.write("zoom in surface \(p.surface)")
     }
 
-    /// Leaves the zoom: hotkey off, cursor released, placed window restored, Minecraft in front again.
+    // MARK: Mirror: Minecraft steps aside
+
+    private func hideMinecraft() {
+        guard let pid = minecraftPid, let minecraft = NSRunningApplication(processIdentifier: pid) else {
+            Log.write("mirror: Minecraft's process is unknown; not hiding")
+            return
+        }
+        hideGuard.hid() // before hide(): even a half-done hide is undone on the way out
+        if !minecraft.hide() { Log.write("mirror: macOS refused to hide Minecraft") }
+        let center = NSWorkspace.shared.notificationCenter
+        if let activationObserver { center.removeObserver(activationObserver) }
+        activationObserver = center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.processIdentifier == pid else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.hideGuard.isHidden else { return }
+                Log.write("mirror: Minecraft is active again; leaving the zoom")
+                self.endZoom(notifyMod: true)
+            }
+        }
+    }
+
+    /// Never leave Minecraft hidden: called on every way out of a zoom.
+    private func unhideMinecraft() {
+        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
+        activationObserver = nil
+        guard hideGuard.shouldUnhide else { return }
+        hideGuard.unhid()
+        if let pid = minecraftPid, let minecraft = NSRunningApplication(processIdentifier: pid), minecraft.isHidden {
+            if !minecraft.unhide() { Log.write("mirror: macOS refused to unhide Minecraft") }
+        }
+    }
+
+    /// Leaves the zoom: hotkey off, cursor released, placed window restored, Minecraft unhidden (Mirror) and in front again.
     func endZoom(notifyMod: Bool, activateMinecraft: Bool = true) {
         hotkey.disarm()
-        let wasZoomed = zoomedSurface != nil || cursor.isActive || placement.placed != nil
+        let wasZoomed = zoomedSurface != nil || cursor.isActive || placement.placed != nil || hideGuard.isHidden
         if let surface = zoomedSurface { captures[surface]?.setZoomed(false) }
         zoomedSurface = nil
         cursor.release(restore: true)
         placement.restore()
+        unhideMinecraft()
         if activateMinecraft, wasZoomed { activateMinecraftApp() }
         if notifyMod { server.send(.exitZoom) }
         if wasZoomed { Log.write("zoom out (notify mod: \(notifyMod))") }
