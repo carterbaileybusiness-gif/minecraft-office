@@ -1,6 +1,11 @@
 hash-format = "sha256"
 
 [[files]]
+file = "config/sodium-options.json"
+hash = "50c84084e980ce9792e78b97c3c7a88cdf3dce11e888839e6630eb43025b23fc"
+preserve = true
+
+[[files]]
 file = "config/voicechat/voicechat-server.properties"
 hash = "f70606ffed5c2b2b2f561b675693c991d8b7835b8f2ece5802ed7e209a621759"
 

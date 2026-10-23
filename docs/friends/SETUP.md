@@ -240,5 +240,8 @@ Quick fixes:
 - Hologram says it needs the helper (Mac): redo the [Mac permissions](#mac) and restart Minecraft.
 - Game feels slow: close other apps, and keep Iris and Distant Horizons off.
 - Cannot join: check you sent Carter your username and that the server address has no typos.
+- Fullscreen: use **Options → Video Settings → Fullscreen Mode: Borderless**, never "Exclusive" (on a Mac it can't be
+  left with F11). If you ever get stuck: **⌘Q** quits (Alt+F4 on Windows). If it starts stuck again, open the instance
+  folder (Prism: **Folder**) and set `exclusiveFullscreen:false` and `fullscreen:false` in `minecraft/options.txt`.
 
 <!-- screenshot: Esc menu with the Screen self-test button -->
