@@ -15,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import local.carter.office.client.helper.HelperChannel;
+import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperProtocol.Capture;
 import local.carter.office.client.helper.HelperProtocol.CaptureKind;
 import local.carter.office.client.helper.HelperProtocol.CreateDisplay;
@@ -44,26 +45,35 @@ class MacHelperSourceTest {
 	private boolean channelOpen;
 	private MacHelper helper;
 	private final RecordingSink sink = new RecordingSink();
+	private final List<Long> delays = new ArrayList<>();
+	private final List<Runnable> scheduled = new ArrayList<>();
+	private final List<HelperConnection.Listener> listeners = new ArrayList<>();
 
 	@BeforeEach
 	void setUp() {
-		helper = new MacHelper(listener -> new HelperChannel() {
-			@Override
-			public void start() {
-				channelOpen = true;
-			}
+		helper = new MacHelper(listener -> {
+			listeners.add(listener);
+			return new HelperChannel() {
+				@Override
+				public void start() {
+					channelOpen = true;
+				}
 
-			@Override
-			public boolean send(final Message m) {
-				sent.add(m);
-				return true;
-			}
+				@Override
+				public boolean send(final Message m) {
+					sent.add(m);
+					return true;
+				}
 
-			@Override
-			public void close() {
-				channelOpen = false;
-			}
-		}, Runnable::run);
+				@Override
+				public void close() {
+					channelOpen = false;
+				}
+			};
+		}, Runnable::run, (task, delayMs) -> {
+			delays.add(delayMs);
+			scheduled.add(task);
+		});
 		helper.setSetUp(true);
 		helper.start();
 	}
@@ -290,6 +300,57 @@ class MacHelperSourceTest {
 		s.setMaxFps(30);
 		assertTrue(sent.isEmpty(), "no CAPTURE without a window key");
 		assertTrue(s.isLive());
+	}
+
+	@Test
+	void aDisplayRemovedUnderUsIsRequestedAgainWithBackoff() {
+		welcome(true);
+		MacHelperSource s = source();
+		s.start(display(1, Shape.WIDE_16_9), 5, sink);
+		helper.message(new Display(1, 5, 1920, 1080));
+		int first = last(Capture.class).surface();
+
+		sent.clear();
+		helper.message(new Ended(first, "display removed"));
+		assertTrue(sent.isEmpty(), "not re-created on the spot");
+		assertEquals(List.of(500L), delays);
+		assertTrue(sink.ended.isEmpty() && s.isLive(), "not the end of the source");
+
+		scheduled.remove(0).run();
+		assertEquals(List.of(new CreateDisplay(1, 1920, 1080)), sent, "asked for again");
+		// The helper never answers (display_failed): it keeps asking, backing off.
+		assertEquals(List.of(500L, 1000L), delays);
+		scheduled.remove(0).run();
+		assertEquals(new CreateDisplay(1, 1920, 1080), sent.get(sent.size() - 1));
+		assertEquals(2000L, delays.get(delays.size() - 1));
+
+		helper.message(new Display(1, 6, 1920, 1080));
+		int second = last(Capture.class).surface();
+		assertTrue(second != first);
+		sent.clear();
+		scheduled.remove(scheduled.size() - 1).run(); // a retry that fires after the capture is back does nothing
+		assertTrue(sent.isEmpty());
+
+		// "no display" (the helper lost it) is retried the same way, from the current backoff.
+		helper.message(new Ended(second, "no display"));
+		assertEquals(4000L, delays.get(delays.size() - 1));
+		scheduled.remove(scheduled.size() - 1).run();
+		assertEquals(new CreateDisplay(1, 1920, 1080), last(CreateDisplay.class));
+	}
+
+	@Test
+	void callbacksFromAClosedConnectionAreIgnored() {
+		welcome(true);
+		HelperConnection.Listener old = listeners.get(0);
+		helper.restart();
+		HelperConnection.Listener fresh = listeners.get(1);
+		fresh.connected(new Welcome(1, true, true));
+		assertTrue(helper.isConnected());
+		old.disconnected(); // the old connection's thread reports its end late
+		assertTrue(helper.isConnected(), "stale disconnect ignored");
+		assertEquals(MacHelper.Status.READY, helper.status());
+		fresh.disconnected();
+		assertFalse(helper.isConnected());
 	}
 
 	@Test

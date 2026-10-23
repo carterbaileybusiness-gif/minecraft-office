@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 import org.jspecify.annotations.Nullable;
@@ -37,6 +38,10 @@ public final class HelperConnection implements HelperChannel {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 	public static final long RELAUNCH_INTERVAL_MS = 10_000;
 	private static final int READ_BUFFER = 256 * 1024;
+	/** Outgoing messages waiting for the writer thread (they are tiny control messages). */
+	public static final int MAX_QUEUED = 1024;
+	/** How long {@link #close} lets queued messages drain before cutting the socket (in the background). */
+	public static final long CLOSE_GRACE_MS = 2_000;
 
 	/** Receives the helper's messages; all calls come from the connection's thread. */
 	public interface Listener {
@@ -83,14 +88,64 @@ public final class HelperConnection implements HelperChannel {
 	private final @Nullable Launcher launcher;
 	private final Listener listener;
 	private final Sleeper sleeper;
-	private final Object writeLock = new Object();
 
 	private volatile boolean running;
 	private volatile boolean connected;
+	/** The socket of the current attempt (also during the handshake), so {@link #close} can break a blocking read. */
 	private volatile @Nullable SocketChannel channel;
+	/** The connected session's writer; null outside a WELCOMEd connection. */
+	private volatile @Nullable Writer writer;
 	private @Nullable Thread thread;
 	private long lastLaunchNanos;
 	private boolean launched;
+
+	/**
+	 * Writes one connection's outgoing messages on its own thread, so {@link #send} never blocks the caller (the game's
+	 * client thread) on a helper that stopped reading. When the queue overflows the connection is closed instead.
+	 */
+	private static final class Writer implements Runnable {
+		private static final byte[] DRAIN_AND_CLOSE = new byte[0];
+		private static final byte[] QUIT = new byte[0];
+		final SocketChannel ch;
+		final ArrayBlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(MAX_QUEUED + 1);
+		final Thread thread;
+
+		Writer(final SocketChannel ch) {
+			this.ch = ch;
+			this.thread = new Thread(this, "office-helper-writer");
+			thread.setDaemon(true);
+		}
+
+		@Override
+		public void run() {
+			try {
+				while (true) {
+					byte[] b = queue.take();
+					if (b == QUIT) {
+						return;
+					}
+					if (b == DRAIN_AND_CLOSE) {
+						closeQuietly(ch);
+						return;
+					}
+					writeAll(ch, b);
+				}
+			} catch (IOException | InterruptedException e) {
+				closeQuietly(ch); // the reader notices and reconnects
+			}
+		}
+
+		/** Queues a message; false when {@link #MAX_QUEUED} are already waiting. */
+		boolean offer(final byte[] b) {
+			return queue.size() < MAX_QUEUED && queue.offer(b);
+		}
+
+		/** Ends the writer; queued messages are dropped (the connection is gone anyway). */
+		void quit() {
+			queue.clear();
+			queue.offer(QUIT);
+		}
+	}
 
 	public HelperConnection(final Path supportDir, final int mcPid, final @Nullable Launcher launcher, final Listener listener) {
 		this(supportDir, mcPid, launcher, listener, Thread::sleep);
@@ -122,10 +177,11 @@ public final class HelperConnection implements HelperChannel {
 		return connected;
 	}
 
+	/** Queues one message for the writer thread; never blocks. False when not connected, malformed, or the queue was full. */
 	@Override
 	public boolean send(final Message message) {
-		SocketChannel ch = channel;
-		if (ch == null || !connected) {
+		Writer w = writer;
+		if (w == null || !connected) {
 			return false;
 		}
 		byte[] bytes;
@@ -135,16 +191,19 @@ public final class HelperConnection implements HelperChannel {
 			LOGGER.warn("Office helper: not sending a malformed {}: {}", message.getClass().getSimpleName(), e.getMessage());
 			return false;
 		}
-		try {
-			write(ch, bytes);
+		if (w.offer(bytes)) {
 			return true;
-		} catch (IOException e) {
-			LOGGER.debug("Office helper: write failed: {}", e.toString());
-			closeQuietly(ch); // the reader notices and reconnects
-			return false;
 		}
+		LOGGER.warn("Office helper is not reading ({} messages queued); reconnecting", MAX_QUEUED);
+		closeQuietly(w.ch); // the reader notices and reconnects
+		return false;
 	}
 
+	/**
+	 * Disconnects for good without blocking the caller: messages already queued (e.g. REMOVE_DISPLAY) are still written,
+	 * then the socket closes; a helper that doesn't take them within {@link #CLOSE_GRACE_MS} is cut off by a background
+	 * closer thread.
+	 */
 	@Override
 	public void close() {
 		Thread t;
@@ -153,19 +212,29 @@ public final class HelperConnection implements HelperChannel {
 			t = thread;
 			thread = null;
 		}
+		Writer w = writer;
+		if (w != null && w.queue.offer(Writer.DRAIN_AND_CLOSE)) {
+			Thread closer = new Thread(() -> {
+				try {
+					w.thread.join(CLOSE_GRACE_MS);
+				} catch (InterruptedException ignored) {
+					// closing anyway
+				}
+				closeQuietly(w.ch);
+				if (t != null) {
+					t.interrupt();
+				}
+			}, "office-helper-close");
+			closer.setDaemon(true);
+			closer.start();
+			return;
+		}
 		SocketChannel ch = channel;
 		if (ch != null) {
 			closeQuietly(ch);
 		}
 		if (t != null) {
 			t.interrupt();
-			if (t != Thread.currentThread()) {
-				try {
-					t.join(2_000);
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-				}
-			}
 		}
 	}
 
@@ -205,16 +274,21 @@ public final class HelperConnection implements HelperChannel {
 			channel = null;
 			return;
 		}
+		Writer w = null;
 		try {
-			write(ch, new Hello(readToken(tokenFile), HelperProtocol.VERSION, mcPid));
+			// The handshake is written here, on the connection thread (never the client thread).
+			writeAll(ch, HelperProtocol.encode(new Hello(readToken(tokenFile), HelperProtocol.VERSION, mcPid)));
 			FrameReader reader = FrameReader.forHelperMessages();
 			ByteBuffer buf = ByteBuffer.allocate(READ_BUFFER);
 			Message first = read(ch, reader, buf);
-			if (first instanceof Welcome w) {
+			if (first instanceof Welcome welcome) {
+				w = new Writer(ch);
+				w.thread.start();
+				writer = w;
 				connected = true;
 				backoff.reset();
-				LOGGER.info("Office helper connected (screen recording {}, accessibility {})", w.screenRecording(), w.accessibility());
-				listener.connected(w);
+				LOGGER.info("Office helper connected (screen recording {}, accessibility {})", welcome.screenRecording(), welcome.accessibility());
+				listener.connected(welcome);
 				Message m;
 				while ((m = read(ch, reader, buf)) != null) {
 					listener.message(m);
@@ -234,7 +308,17 @@ public final class HelperConnection implements HelperChannel {
 			}
 		} finally {
 			channel = null;
-			closeQuietly(ch);
+			if (w != null) {
+				writer = null;
+				if (running) {
+					w.quit();
+					closeQuietly(ch);
+				} else if (!w.queue.offer(Writer.DRAIN_AND_CLOSE)) {
+					closeQuietly(ch);
+				} // else the writer drains what close() left queued, then closes the socket
+			} else {
+				closeQuietly(ch);
+			}
 			if (connected) {
 				connected = false;
 				LOGGER.info("Office helper disconnected");
@@ -290,16 +374,10 @@ public final class HelperConnection implements HelperChannel {
 		}
 	}
 
-	private void write(final SocketChannel ch, final Message m) throws IOException {
-		write(ch, HelperProtocol.encode(m));
-	}
-
-	private void write(final SocketChannel ch, final byte[] bytes) throws IOException {
+	private static void writeAll(final SocketChannel ch, final byte[] bytes) throws IOException {
 		ByteBuffer out = ByteBuffer.wrap(bytes);
-		synchronized (writeLock) {
-			while (out.hasRemaining()) {
-				ch.write(out);
-			}
+		while (out.hasRemaining()) {
+			ch.write(out);
 		}
 	}
 

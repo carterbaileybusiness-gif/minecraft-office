@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletionException;
 
 import org.jspecify.annotations.Nullable;
@@ -54,15 +53,13 @@ public final class MacPlatform implements Platform {
 	public static final String ACCESSIBILITY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 	private static final String COMMAND = "officescreens";
 
-	private enum Setup { UNKNOWN, ASKING, INSTALLING, DECLINED, FAILED, READY }
-
 	private final HelperInstaller installer;
 	private final MacHelper helper;
 	private volatile @Nullable Path app;
 	// client thread
-	private Setup setup = Setup.UNKNOWN;
+	private final HelperSetup setup = new HelperSetup();
 	private HelperInstaller.@Nullable Asset pendingAsk;
-	private int session;
+	private int pendingSession;
 	private boolean permissionNotified;
 
 	MacPlatform() {
@@ -166,40 +163,42 @@ public final class MacPlatform implements Platform {
 			mc.execute(this::ensureStarted);
 			return;
 		}
-		switch (setup) {
-			case READY -> helper.start();
-			case UNKNOWN -> {
-				Optional<Path> installed = installer.installedApp();
-				if (installed.isPresent()) {
-					use(installed.get());
-				} else if (installer.usesOverride()) {
-					setup = Setup.FAILED;
-					chat(Component.literal("office.helperPath does not point to OfficeHelper.app.").withStyle(ChatFormatting.RED));
-				} else {
-					ask();
-				}
+		act(setup.ensure(installer.installedApp(), installer.usesOverride()), null);
+	}
+
+	private void act(final HelperSetup.Action action, final @Nullable Throwable failure) {
+		app = setup.app(); // for the connection's (re)launcher, even when the helper isn't started now
+		if (setup.state() == HelperSetup.State.READY) {
+			helper.setSetUp(true);
+		}
+		switch (action) {
+			case START -> {
+				helper.setSetUp(true);
+				helper.start();
 			}
-			default -> {
-				// asking, installing, declined or failed this session: holograms show "Set up screens"
+			case ASK -> ask();
+			case BAD_OVERRIDE -> chat(Component.literal("office.helperPath does not point to OfficeHelper.app.").withStyle(ChatFormatting.RED));
+			case REPORT_FAILURE -> chat(Component.literal("Screen helper setup failed: " + (failure == null ? "unknown error" : cause(failure).getMessage()) + " ")
+					.withStyle(ChatFormatting.RED).append(link("Try again", "setup", "Download again")));
+			case NONE -> {
+				// waiting for an answer or a download, or "Not now" this session
 			}
 		}
 	}
 
 	private void ask() {
-		setup = Setup.ASKING;
-		int mySession = session;
+		int asked = setup.session();
 		installer.fetchHelperInfo().whenComplete((asset, err) -> Minecraft.getInstance().execute(() -> {
-			if (session != mySession || setup != Setup.ASKING) {
+			if (!setup.manifestRead(asked, err == null)) {
+				if (err != null && asked == setup.session()) {
+					LOGGER.warn("Office helper: release manifest unavailable: {}", cause(err).toString());
+					chat(Component.literal("Couldn't reach GitHub to set up your screens (" + cause(err).getMessage() + "). ")
+							.append(link("Try again", "setup", "Ask again")));
+				}
 				return;
 			}
-			if (err != null) {
-				setup = Setup.FAILED;
-				LOGGER.warn("Office helper: release manifest unavailable: {}", cause(err).toString());
-				chat(Component.literal("Couldn't reach GitHub to set up your screens (" + cause(err).getMessage() + "). ")
-						.append(link("Try again", "setup", "Ask again")));
-			} else {
-				pendingAsk = asset;
-			}
+			pendingAsk = asset;
+			pendingSession = asked;
 		}));
 	}
 
@@ -209,62 +208,51 @@ public final class MacPlatform implements Platform {
 			return;
 		}
 		pendingAsk = null;
-		int mySession = session;
+		int asked = pendingSession;
+		if (asked != setup.session()) {
+			return;
+		}
 		mc.gui.setScreen(new ConfirmScreen(yes -> {
 			mc.gui.setScreen(null);
-			if (session == mySession) {
-				answered(yes);
-			}
+			answered(asked, yes);
 		}, Component.literal("Set up your screens?"),
 				Component.literal("This downloads the small Minecraft Office helper app (" + HelperInstaller.sizeLabel(asset.size())
 						+ ") from GitHub."),
 				Component.literal("Yes"), Component.literal("Not now")));
 	}
 
-	private void answered(final boolean yes) {
-		if (!yes) {
-			setup = Setup.DECLINED;
-			chat(Component.literal("Your screens stay off for now. ").append(link("Set up screens", "setup", "Download the helper app")));
+	private void answered(final int asked, final boolean yes) {
+		if (!setup.answered(asked, yes)) {
+			if (!yes && asked == setup.session()) {
+				chat(Component.literal("Your screens stay off for now. ").append(link("Set up screens", "setup", "Download the helper app")));
+			}
 			return;
 		}
-		setup = Setup.INSTALLING;
 		chat(Component.literal("Downloading the screen helper…"));
-		int mySession = session;
+		int started = setup.session();
 		installer.ensureInstalled().whenComplete((path, err) -> Minecraft.getInstance().execute(() -> {
-			if (session != mySession) {
-				return;
-			}
 			if (err != null) {
-				setup = Setup.FAILED;
 				LOGGER.warn("Office helper install failed", cause(err));
-				chat(Component.literal("Screen helper setup failed: " + cause(err).getMessage() + " ").withStyle(ChatFormatting.RED)
-						.append(link("Try again", "setup", "Download again")));
-			} else {
+			} else if (started == setup.session()) {
 				chat(Component.literal("Screen helper installed."));
-				use(path);
 			}
+			// Recorded even if the player left meanwhile (never stuck "installing"); only acts on the current world.
+			act(setup.installFinished(started, err == null ? path : null), err);
 		}));
-	}
-
-	private void use(final Path helperApp) {
-		app = helperApp;
-		setup = Setup.READY;
-		helper.setSetUp(true);
-		helper.start();
 	}
 
 	/** {@code /officescreens setup} (the chat link). */
 	private void setUpScreens() {
-		switch (setup) {
+		switch (setup.state()) {
 			case UNKNOWN, DECLINED, FAILED -> {
-				setup = Setup.UNKNOWN;
+				setup.retry();
 				ensureStarted();
 			}
 			case ASKING, INSTALLING -> chat(Component.literal("Setting up your screens…"));
 			case READY -> {
 				Welcome w = helper.welcome();
 				if (w == null) {
-					helper.start();
+					act(HelperSetup.Action.START, null);
 					chat(Component.literal("Starting the screen helper…"));
 				} else if (!w.screenRecording() || helper.status() == MacHelper.Status.NO_PERMISSION) {
 					openSetupPages(SCREEN_RECORDING_PANE);
@@ -279,7 +267,7 @@ public final class MacPlatform implements Platform {
 
 	/** {@code /officescreens retry}: restart the helper so permissions granted meanwhile apply. */
 	private void checkAgain() {
-		if (setup != Setup.READY) {
+		if (setup.state() != HelperSetup.State.READY) {
 			setUpScreens();
 			return;
 		}
@@ -318,13 +306,10 @@ public final class MacPlatform implements Platform {
 	}
 
 	private void leftWorld() {
-		session++;
+		setup.leftWorld();
 		helper.stop();
 		pendingAsk = null;
 		permissionNotified = false;
-		if (setup != Setup.READY && setup != Setup.INSTALLING) {
-			setup = Setup.UNKNOWN; // ask again next time
-		}
 	}
 
 	// ---------------------------------------------------------------- helpers

@@ -18,6 +18,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -130,6 +131,13 @@ public final class StreamRelayServer implements AutoCloseable {
 	private volatile @Nullable Channel channel;
 	private volatile boolean closing;
 	private volatile Runnable udpLost = () -> { };
+	private volatile Rebinder rebinder = Bootstrap::bind;
+
+	/** How the relay re-opens its socket after an unexpected close (injectable so tests can force a failure). */
+	@FunctionalInterface
+	interface Rebinder {
+		ChannelFuture bind(Bootstrap bootstrap, InetSocketAddress address);
+	}
 
 	public StreamRelayServer(final int maxKbpsPerStream) {
 		this(maxKbpsPerStream, System::nanoTime);
@@ -186,7 +194,7 @@ public final class StreamRelayServer implements AutoCloseable {
 			if (closing) {
 				return;
 			}
-			b.bind(addr).addListener((ChannelFutureListener) f -> {
+			rebinder.bind(b, addr).addListener((ChannelFutureListener) f -> {
 				if (closing) {
 					f.channel().close();
 				} else if (f.isSuccess()) {
@@ -199,6 +207,11 @@ public final class StreamRelayServer implements AutoCloseable {
 				}
 			});
 		}, REBIND_DELAY_MS, TimeUnit.MILLISECONDS);
+	}
+
+	/** Test hook: replaces the rebind attempt (e.g. with one that fails) without relying on OS port conflicts. */
+	void rebinderForTest(final Rebinder rebinder) {
+		this.rebinder = rebinder;
 	}
 
 	/** Test hook: the live socket (null when payload-only). */

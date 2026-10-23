@@ -33,7 +33,8 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
 /**
  * Feeds the local player's own loaded holograms from capture sources: one {@link CaptureSource} + {@link ScreenTexture}
- * per hologram, keyed by hologram id, restarted when the hologram's {@link Target} changes and stopped when it unloads,
+ * per hologram, keyed by hologram id (texture id {@code office:screen/<hologramUuid>}, kept across restarts), restarted
+ * when the hologram's {@link Target} changes and stopped when it unloads,
  * changes owner, or the player disconnects. Client thread only.
  *
  * <p>Default source: this computer's own capture ({@link Platform#newOwnSource}, the Mac helper) with an adaptive rate
@@ -56,6 +57,7 @@ public final class OwnScreens {
 		final CaptureSource source;
 		final ScreenTexture texture;
 		int fps;
+		CaptureRate.Visibility visibility = new CaptureRate.Visibility();
 
 		Feed(final Target target, final CaptureSource source, final ScreenTexture texture, final int fps) {
 			this.target = target;
@@ -127,9 +129,14 @@ public final class OwnScreens {
 			if (!seen.add(id)) {
 				continue;
 			}
-			int fps = adaptiveRate ? CaptureRate.fps(visible(camera, be.getBlockPos(), spec), HologramRenderer.isZoomed(id)) : MAX_FPS;
 			Target target = Target.of(spec);
 			Feed feed = FEEDS.get(id);
+			CaptureRate.Visibility visibility = feed != null ? feed.visibility : new CaptureRate.Visibility();
+			// Debounced (1 s) so sweeping the camera past a hologram doesn't STOP / CAPTURE the helper over and over.
+			int fps = adaptiveRate
+					? CaptureRate.fps(visibility.update(visible(camera, be.getBlockPos(), spec), System.nanoTime() / 1_000_000L),
+							HologramRenderer.isZoomed(id))
+					: MAX_FPS;
 			if (feed != null && feed.target.equals(target)) {
 				if (feed.fps != fps) {
 					feed.fps = fps;
@@ -137,8 +144,15 @@ public final class OwnScreens {
 				}
 				continue;
 			}
+			ScreenTexture texture;
 			if (feed != null) {
+				// same hologram, new target: keep the texture (stable id), drop the old picture until the new source's
+				// first frame arrives
 				feed.source.stop();
+				texture = feed.texture;
+				texture.clear();
+			} else {
+				texture = ScreenTexture.forHologram(id);
 			}
 			CaptureSource source = factory.get();
 			if (source == null) {
@@ -147,9 +161,10 @@ public final class OwnScreens {
 				}
 				continue;
 			}
-			ScreenTexture texture = ScreenTexture.create("own");
-			ScreenTextureRegistry.register(id, texture); // clears the old texture, if any
-			FEEDS.put(id, new Feed(target, source, texture, fps));
+			ScreenTextureRegistry.register(id, texture);
+			Feed fresh = new Feed(target, source, texture, fps);
+			fresh.visibility = visibility;
+			FEEDS.put(id, fresh);
 			source.start(target, fps, texture);
 		}
 		for (Iterator<Map.Entry<UUID, Feed>> it = FEEDS.entrySet().iterator(); it.hasNext();) {

@@ -1,6 +1,8 @@
 package local.carter.office.client.render;
 
 import java.nio.ByteBuffer;
+import java.util.HashMap;
+import java.util.Map;
 
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
@@ -21,11 +23,16 @@ import net.minecraft.resources.Identifier;
  *
  * <p>Uploads use {@code CommandEncoder.writeToTexture(texture, buffer, mipLevel, layer, x, y, w, h)}, which copies
  * synchronously (GL: {@code glTexSubImage2D}; Vulkan: into transient staging memory), so the caller may reuse the
- * buffer straight after. Render thread only.
+ * buffer straight after. Render thread only (except {@link #runOnRenderThread}).
+ *
+ * <p>Ids are stable per hologram, so successive instances can share one id: the texture-manager slot belongs to the
+ * instance that allocated last, and freeing an older instance never touches a newer one's texture.
  */
 final class ScreenGpuTexture extends AbstractTexture implements ScreenTexture.Gpu {
+	/** Which instance currently holds each id's texture-manager slot (render thread). */
+	private static final Map<Identifier, ScreenGpuTexture> SLOT_OWNERS = new HashMap<>();
+
 	private final Identifier id;
-	private boolean registered;
 
 	ScreenGpuTexture(final Identifier id) {
 		this.id = id;
@@ -41,9 +48,10 @@ final class ScreenGpuTexture extends AbstractTexture implements ScreenTexture.Gp
 		this.texture = device.createTexture(() -> "Office screen " + id, GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING,
 				GpuFormat.RGBA8_UNORM, width, height, 1, levels);
 		this.textureView = device.createTextureView(this.texture);
-		if (!registered) {
+		if (SLOT_OWNERS.get(id) != this) {
+			// replaces (and closes) an older instance with the same id, if any
 			Minecraft.getInstance().getTextureManager().register(id, this);
-			registered = true;
+			SLOT_OWNERS.put(id, this);
 		}
 	}
 
@@ -54,16 +62,21 @@ final class ScreenGpuTexture extends AbstractTexture implements ScreenTexture.Gp
 
 	@Override
 	public void free() {
-		if (registered) {
-			registered = false;
-			Minecraft.getInstance().getTextureManager().release(id); // closes this -> releaseTextures()
-		} else {
-			releaseTextures();
+		RenderSystem.assertOnRenderThread();
+		releaseTextures();
+		if (SLOT_OWNERS.get(id) == this) {
+			SLOT_OWNERS.remove(id);
+			Minecraft.getInstance().getTextureManager().release(id); // closes this again: a no-op now
 		}
 	}
 
 	@Override
 	public boolean canFreeNow() {
 		return RenderSystem.isOnRenderThread();
+	}
+
+	@Override
+	public void runOnRenderThread(final Runnable task) {
+		Minecraft.getInstance().execute(task);
 	}
 }

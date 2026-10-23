@@ -29,6 +29,7 @@ import java.util.function.Function;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import local.carter.office.client.helper.HelperProtocol.CreateDisplay;
 import local.carter.office.client.helper.HelperProtocol.Display;
@@ -157,6 +158,38 @@ class HelperConnectionTest {
 	}
 
 	@Test
+	@Timeout(10)
+	void sendAndCloseNeverBlockOnAHelperThatStoppedReading() throws Exception {
+		writeToken();
+		helper = new FakeHelper(dir, n -> new Welcome(1, true, true));
+		helper.stall = true;
+		connect(null);
+		assertNotNull(events.connected.poll(5, TimeUnit.SECONDS));
+
+		long t0 = System.nanoTime();
+		boolean refused = false;
+		int sent = 0;
+		while (!refused && sent < 500_000) {
+			refused = !connection.send(new CreateDisplay(1, 1920, 1080));
+			sent++;
+		}
+		long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
+		assertTrue(refused, "a full queue refuses instead of blocking");
+		assertTrue(ms < 2_000, "sends returned at once (" + ms + " ms for " + sent + ")");
+		assertTrue(waitFor(() -> events.disconnects.get() >= 1), "the stuck connection is dropped (and retried)");
+		assertNotNull(events.connected.poll(5, TimeUnit.SECONDS), "reconnected");
+
+		// Fill the new connection's queue again, then close: close() must not wait for the stuck helper.
+		for (int i = 0; i < HelperConnection.MAX_QUEUED / 2; i++) {
+			connection.send(new CreateDisplay(1, 1920, 1080));
+		}
+		long t1 = System.nanoTime();
+		connection.close();
+		assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t1) < 200, "close() returns at once");
+		assertTrue(waitFor(() -> !connection.isConnected()), "and the socket is cut in the background");
+	}
+
+	@Test
 	void backoffDoublesFromHalfASecondToEightAndResets() {
 		HelperConnection.Backoff b = new HelperConnection.Backoff();
 		assertEquals(List.of(500L, 1000L, 2000L, 4000L, 8000L, 8000L), List.of(b.next(), b.next(), b.next(), b.next(), b.next(), b.next()));
@@ -220,6 +253,7 @@ class HelperConnectionTest {
 	/** Accepts clients, checks HELLO, answers with {@code reply.apply(clientIndex)} (ERROR replies close the client). */
 	static final class FakeHelper implements AutoCloseable {
 		final List<Hello> hellos = new CopyOnWriteArrayList<>();
+		volatile boolean stall;
 		final BlockingQueue<Message> received = new LinkedBlockingQueue<>();
 		private final ServerSocketChannel server;
 		private final List<SocketChannel> clients = new CopyOnWriteArrayList<>();
@@ -265,6 +299,13 @@ class HelperConnectionTest {
 				Message m;
 				while ((m = read(c, reader, buf)) != null) {
 					received.add(m);
+					while (stall && c.isOpen()) {
+						try {
+							Thread.sleep(10); // a hung helper: stops reading, its socket buffer fills
+						} catch (InterruptedException e) {
+							return;
+						}
+					}
 				}
 			} catch (IOException e) {
 				// client went away

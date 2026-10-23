@@ -59,15 +59,122 @@ class HelperInstallerTest {
 		}
 	}
 
+	private final List<Long> fetchLimits = new ArrayList<>();
+	private final List<Path> verified = new ArrayList<>();
+	/** Stands in for codesign (the test bundles are unsigned); a test can make it refuse. */
+	private boolean signatureOk = true;
+
 	private HelperInstaller installer(final String base, final String helperPathOverride) {
-		return new HelperInstaller(dir, VERSION, URI.create(base), helperPathOverride, uri -> {
+		return new HelperInstaller(dir, VERSION, URI.create(base), helperPathOverride, (uri, max) -> {
 			fetched.add(uri);
+			fetchLimits.add(max);
 			byte[] b = served.get(uri.toString());
 			if (b == null) {
 				throw new IOException("404 " + uri);
 			}
 			return b;
-		}, launched::add);
+		}, launched::add, app -> {
+			verified.add(app);
+			if (!signatureOk) {
+				throw new InstallException("the downloaded helper's signature does not verify; not installing it");
+			}
+		});
+	}
+
+	private void assertNothingInstalled() throws IOException {
+		assertFalse(Files.exists(dir.resolve(HelperInstaller.APP_NAME)), "nothing installed");
+		assertTrue(launched.isEmpty(), "nothing launched");
+		try (Stream<Path> s = Files.list(dir)) {
+			assertTrue(s.noneMatch(p -> p.getFileName().toString().startsWith("install-")), "staging removed");
+		}
+	}
+
+	private static byte[] zipOf(final String... namesAndContents) throws IOException {
+		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+		try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
+			for (int i = 0; i < namesAndContents.length; i += 2) {
+				zip.putNextEntry(new ZipEntry(namesAndContents[i]));
+				zip.write(namesAndContents[i + 1].getBytes(StandardCharsets.UTF_8));
+				zip.closeEntry();
+			}
+		}
+		return bytes.toByteArray();
+	}
+
+	private void serveZip(final byte[] zip) throws Exception {
+		served.put(ZIP_URL, zip);
+		serveManifest(ZIP_URL, sha256(zip), zip.length);
+	}
+
+	@Test
+	void zipSlipIsRefusedBeforeUnpacking() throws Exception {
+		Path outside = dir.getParent().resolve("evil.txt");
+		for (String bad : new String[] {"OfficeHelper.app/../../evil.txt", "../evil.txt", "/tmp/evil.txt", "Other.app/x"}) {
+			served.clear();
+			serveZip(zipOf("OfficeHelper.app/Contents/Info.plist", "<plist/>", bad, "pwned"));
+			Throwable t = failure(installer(BASE, null).ensureInstalled());
+			assertInstanceOf(InstallException.class, t, bad);
+			assertNothingInstalled();
+			assertFalse(Files.exists(outside), "nothing written outside: " + bad);
+		}
+		assertTrue(verified.isEmpty(), "never got as far as the signature check");
+	}
+
+	@Test
+	void symlinkOutOfTheBundleIsRefused() throws Exception {
+		assumeTrue(Files.isExecutable(Path.of("/usr/bin/ditto")), "needs macOS ditto");
+		// Build a bundle with a link to /etc and zip it the way release-helper.sh does (ditto keeps links).
+		Path src = Files.createDirectories(dir.getParent().resolve("src/OfficeHelper.app/Contents"));
+		Files.writeString(src.resolve("Info.plist"), "<plist/>");
+		Files.createSymbolicLink(src.resolve("Resources"), Path.of("/etc"));
+		Path zipFile = dir.getParent().resolve("evil.zip");
+		Process p = new ProcessBuilder("/usr/bin/ditto", "-c", "-k", "--keepParent", src.getParent().toString(), zipFile.toString())
+				.redirectErrorStream(true).start();
+		assertEquals(0, p.waitFor());
+		serveZip(Files.readAllBytes(zipFile));
+
+		Throwable t = failure(installer(BASE, null).ensureInstalled());
+		assertInstanceOf(InstallException.class, t);
+		assertTrue(t.getMessage().contains("links outside"), t.getMessage());
+		assertNothingInstalled();
+
+		// The post-unpack check catches the same thing on its own.
+		Path unpacked = Files.createDirectories(dir.getParent().resolve("check/OfficeHelper.app/Contents"));
+		Files.createSymbolicLink(unpacked.resolve("Frameworks"), Path.of("../../../outside"));
+		assertThrows(InstallException.class, () -> HelperInstaller.checkLinksStayInside(unpacked.getParent()));
+		Files.delete(unpacked.resolve("Frameworks"));
+		Files.createSymbolicLink(unpacked.resolve("Current"), Path.of("Resources")); // inside: fine
+		HelperInstaller.checkLinksStayInside(unpacked.getParent());
+	}
+
+	@Test
+	void badSignatureRefusesTheInstall() throws Exception {
+		assumeTrue(Files.isExecutable(Path.of("/usr/bin/ditto")), "needs macOS ditto");
+		serveZip(fakeAppZip());
+		signatureOk = false;
+		Throwable t = failure(installer(BASE, null).ensureInstalled());
+		assertInstanceOf(InstallException.class, t);
+		assertTrue(t.getMessage().contains("signature"), t.getMessage());
+		assertEquals(1, verified.size(), "checked the staged app");
+		assertNothingInstalled();
+	}
+
+	@Test
+	void realCodesignRejectsAnUnsignedBundle() throws Exception {
+		assumeTrue(Files.isExecutable(Path.of("/usr/bin/codesign")), "needs macOS codesign");
+		Path app = Files.createDirectories(dir.getParent().resolve("unsigned/OfficeHelper.app/Contents"));
+		Files.writeString(app.resolve("Info.plist"), "<plist/>");
+		assertThrows(InstallException.class, () -> HelperInstaller.codesignVerify(app.getParent()));
+	}
+
+	@Test
+	void downloadIsCappedAtTheManifestSizeAndTheBaseGetsASlash() throws Exception {
+		assumeTrue(Files.isExecutable(Path.of("/usr/bin/ditto")), "needs macOS ditto");
+		byte[] zip = fakeAppZip();
+		serveZip(zip);
+		installer(BASE.substring(0, BASE.length() - 1), null).ensureInstalled().get(20, TimeUnit.SECONDS);
+		assertEquals(List.of(URI.create(BASE + "manifest.json"), URI.create(ZIP_URL)), fetched, "base without '/' still finds manifest.json");
+		assertEquals(zip.length + 1L, fetchLimits.get(1), "zip buffer capped at size + 1");
 	}
 
 	private void serveManifest(final String url, final String sha256, final long size) {
@@ -171,7 +278,7 @@ class HelperInstallerTest {
 		assertTrue(fetched.isEmpty(), "an installed helper of this version is not downloaded again");
 
 		// A different mod version needs a fresh helper.
-		HelperInstaller newer = new HelperInstaller(dir, "0.2.0", URI.create(BASE), null, uri -> new byte[0], p -> {});
+		HelperInstaller newer = new HelperInstaller(dir, "0.2.0", URI.create(BASE), null, (uri, max) -> new byte[0], p -> {});
 		assertEquals(Optional.empty(), newer.installedApp());
 	}
 

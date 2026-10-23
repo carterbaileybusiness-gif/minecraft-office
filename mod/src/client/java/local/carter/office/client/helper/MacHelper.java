@@ -8,6 +8,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
@@ -61,6 +64,7 @@ public final class MacHelper implements HelperConnection.Listener {
 
 	private final Function<HelperConnection.Listener, HelperChannel> channelFactory;
 	private final Executor clientThread;
+	private final Scheduler scheduler;
 	private final AtomicInteger nextSurface = new AtomicInteger(1);
 	private final Set<MacHelperSource> attached = new CopyOnWriteArraySet<>();
 	private final Map<Integer, MacHelperSource> bySurface = new ConcurrentHashMap<>();
@@ -84,8 +88,73 @@ public final class MacHelper implements HelperConnection.Listener {
 	 * @param clientThread runs window-list, exit-zoom and status callbacks (the Minecraft client thread in the game)
 	 */
 	public MacHelper(final Function<HelperConnection.Listener, HelperChannel> channelFactory, final Executor clientThread) {
+		this(channelFactory, clientThread, DEFAULT_SCHEDULER);
+	}
+
+	/** @param scheduler runs delayed retries (display re-requests); a manual one in tests */
+	public MacHelper(final Function<HelperConnection.Listener, HelperChannel> channelFactory, final Executor clientThread,
+			final Scheduler scheduler) {
 		this.channelFactory = channelFactory;
 		this.clientThread = clientThread;
+		this.scheduler = scheduler;
+	}
+
+	/** Runs {@code task} after {@code delayMs} on some background thread. */
+	@FunctionalInterface
+	public interface Scheduler {
+		void schedule(Runnable task, long delayMs);
+	}
+
+	private static final Scheduler DEFAULT_SCHEDULER = new Scheduler() {
+		private final ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
+			Thread t = new Thread(r, "office-helper-retry");
+			t.setDaemon(true);
+			return t;
+		});
+
+		@Override
+		public void schedule(final Runnable task, final long delayMs) {
+			exec.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+		}
+	};
+
+	public void schedule(final Runnable task, final long delayMs) {
+		scheduler.schedule(task, delayMs);
+	}
+
+	/**
+	 * Forwards one channel's callbacks, and only while that channel is the current one: a closed connection's thread
+	 * may still report its own end after a restart has already connected again.
+	 */
+	private final class Link implements HelperConnection.Listener {
+		private @Nullable HelperChannel ch;
+
+		private boolean current() {
+			synchronized (MacHelper.this) {
+				return ch != null && channel == ch;
+			}
+		}
+
+		@Override
+		public void connected(final Welcome w) {
+			if (current()) {
+				MacHelper.this.connected(w);
+			}
+		}
+
+		@Override
+		public void message(final Message m) {
+			if (current()) {
+				MacHelper.this.message(m);
+			}
+		}
+
+		@Override
+		public void disconnected() {
+			if (current()) {
+				MacHelper.this.disconnected();
+			}
+		}
 	}
 
 	// ---------------------------------------------------------------- lifecycle
@@ -106,7 +175,9 @@ public final class MacHelper implements HelperConnection.Listener {
 			if (channel != null) {
 				return;
 			}
-			ch = channelFactory.apply(this);
+			Link link = new Link();
+			ch = channelFactory.apply(link);
+			link.ch = ch;
 			channel = ch;
 		}
 		ch.start();
@@ -234,9 +305,13 @@ public final class MacHelper implements HelperConnection.Listener {
 		return false;
 	}
 
-	/** The helper said a display is gone ("display removed" / "no display"). */
+	/**
+	 * The helper said a display is gone ("display removed" / "no display"): forget it, so the next
+	 * {@link #ensureDisplay} for that slot asks for it again.
+	 */
 	public synchronized void displayOffline(final int slot) {
 		online.remove(slot);
+		wanted.remove(slot);
 	}
 
 	/** Surface currently capturing {@code target}, or 0. */
