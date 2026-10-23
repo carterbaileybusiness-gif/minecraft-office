@@ -8,8 +8,9 @@ import java.util.Optional;
  * u grows along {@code right}, v grows downward (v=0 is the top edge).
  */
 public final class HologramGeometry {
-    /** A grab handle counts when the hit is within this many blocks of a corner. */
-    public static final double CORNER_RADIUS = 0.25;
+    /** Smallest and largest corner grab radius (blocks); see {@link #grabRadius(double, double)}. */
+    public static final double MIN_GRAB_RADIUS = 0.2;
+    public static final double MAX_GRAB_RADIUS = 0.5;
 
     private static final double EPS = 1e-9;
 
@@ -20,7 +21,7 @@ public final class HologramGeometry {
     public record Frame(Vec3d center, Vec3d right, Vec3d up, double w, double h) {}
 
     /**
-     * {@code corner} is null unless the hit is within {@link #CORNER_RADIUS} of a corner.
+     * {@code corner} is null unless the hit is within {@link #grabRadius} of a corner.
      * {@code frontFacing} is true when the ray hit the side the normal {@code right x up} faces.
      */
     public record Hit(double u, double v, double distance, Corner corner, boolean frontFacing) {
@@ -47,6 +48,15 @@ public final class HologramGeometry {
 
     /** Two-sided ray test; {@code dir} need not be normalised. Empty on miss, parallel, or hit behind origin. */
     public static Optional<Hit> hit(Vec3d origin, Vec3d dir, Frame f) {
+        return reach(origin, dir, f).filter(h -> h.u() >= 0 && h.u() <= 1 && h.v() >= 0 && h.v() <= 1);
+    }
+
+    /**
+     * Like {@link #hit} but also accepts points slightly <em>outside</em> the quad when they are within
+     * {@link #grabRadius} of a corner (so a corner can be grabbed from just beyond the edge). u/v may then lie outside
+     * [0, 1]; {@code corner} is set for those.
+     */
+    public static Optional<Hit> reach(Vec3d origin, Vec3d dir, Frame f) {
         Optional<Double> maybeT = planeT(origin, dir, f);
         if (maybeT.isEmpty()) {
             return Optional.empty();
@@ -57,23 +67,41 @@ public final class HologramGeometry {
         double y = rel.dot(f.up());
         double u = x / f.w() + 0.5;
         double v = 0.5 - y / f.h();
-        if (u < 0 || u > 1 || v < 0 || v > 1) {
+        boolean inside = u >= 0 && u <= 1 && v >= 0 && v <= 1;
+        Corner corner = cornerAt(x, y, f);
+        if (!inside && corner == null) {
             return Optional.empty();
         }
         boolean front = dir.dot(f.right().cross(f.up())) < 0;
-        return Optional.of(new Hit(u, v, t * dir.length(), cornerAt(x, y, f), front));
+        return Optional.of(new Hit(u, v, t * dir.length(), corner, front));
     }
 
+    /**
+     * Corner grab radius for a w x h hologram: 20 % of the shorter side, clamped to [0.2, 0.5] blocks — easy to hit on a
+     * small screen, not swallowing the middle of a big one.
+     */
+    public static double grabRadius(double w, double h) {
+        return Math.max(MIN_GRAB_RADIUS, Math.min(MAX_GRAB_RADIUS, 0.2 * Math.min(w, h)));
+    }
+
+    /** Position of corner {@code c} in the frame's plane. */
+    public static Vec3d cornerPoint(Frame f, Corner c) {
+        double sx = c == Corner.TOP_RIGHT || c == Corner.BOTTOM_RIGHT ? 1 : -1;
+        double sy = c == Corner.TOP_LEFT || c == Corner.TOP_RIGHT ? 1 : -1;
+        return f.center().add(f.right().scale(sx * f.w() / 2)).add(f.up().scale(sy * f.h() / 2));
+    }
+
+    /** The nearest corner to the in-plane point (x, y), or null if it is farther than the grab radius. */
     private static Corner cornerAt(double x, double y, Frame f) {
         double hw = f.w() / 2;
         double hh = f.h() / 2;
-        double dx = hw - Math.abs(x);
-        double dy = hh - Math.abs(y);
-        if (Math.sqrt(dx * dx + dy * dy) >= CORNER_RADIUS) {
-            return null;
-        }
         boolean top = y >= 0;
         boolean left = x < 0;
+        double dx = Math.abs(x) - hw;
+        double dy = Math.abs(y) - hh;
+        if (Math.sqrt(dx * dx + dy * dy) > grabRadius(f.w(), f.h())) {
+            return null;
+        }
         if (top) {
             return left ? Corner.TOP_LEFT : Corner.TOP_RIGHT;
         }

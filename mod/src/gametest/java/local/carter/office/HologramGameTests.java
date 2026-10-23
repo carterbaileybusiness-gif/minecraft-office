@@ -2,9 +2,11 @@ package local.carter.office;
 
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
+import local.carter.office.core.Mount;
 import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
 import local.carter.office.hologram.HologramBlockEntity;
+import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.HologramIndex;
 import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.hologram.StarterKit;
@@ -14,7 +16,12 @@ import local.carter.office.net.OfficePayloads;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.NbtUtils;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityTypes;
@@ -24,8 +31,12 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.WrittenBookContent;
+import net.minecraft.world.item.context.UseOnContext;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.AttachFace;
 import net.minecraft.world.phys.Vec3;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
@@ -309,6 +320,134 @@ public class HologramGameTests {
 		h.assertBlockNotPresent(OfficeBlocks.HOLOGRAM_EMITTER, rel);
 		h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), before + 1, "emitter returned to owner");
 		h.assertItemEntityNotPresent(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, rel, 3.0);
+		h.succeed();
+	}
+
+	/** Places an emitter by clicking face {@code face} of the block at {@code clicked} (relative); returns its BE. */
+	private static HologramBlockEntity placeOnFace(GameTestHelper h, ServerPlayer player, BlockPos clicked, Direction face) {
+		// Like a real click on that face (GameTestHelper.placeAt clicks the air block in front, i.e. a "replace").
+		BlockPos abs = h.absolutePos(clicked);
+		Vec3 onFace = Vec3.atCenterOf(abs).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
+		player.getMainHandItem().useOn(new UseOnContext(player, InteractionHand.MAIN_HAND, new BlockHitResult(onFace, face, abs, false)));
+		BlockPos rel = clicked.relative(face);
+		h.assertBlockPresent(OfficeBlocks.HOLOGRAM_EMITTER, rel);
+		return h.getBlockEntity(rel, HologramBlockEntity.class);
+	}
+
+	/** Where the content plane is along the wall normal, in absolute world coordinates. */
+	private static double planeCoordinate(HologramBlockEntity be, Direction facing) {
+		BlockPos p = be.getBlockPos();
+		HologramSpec s = be.spec();
+		return switch (facing.getAxis()) {
+			case X -> p.getX() + 0.5 + s.offX();
+			case Z -> p.getZ() + 0.5 + s.offZ();
+			default -> throw new IllegalArgumentException();
+		};
+	}
+
+	@GameTest
+	public void wallPlacementIsFlushAndFacesOut(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(2, 0, 6));
+		for (Direction face : new Direction[] {Direction.SOUTH, Direction.EAST, Direction.NORTH, Direction.WEST}) {
+			BlockPos wall = new BlockPos(2, 2, 2);
+			h.setBlock(wall, Blocks.STONE);
+			HologramBlockEntity be = placeOnFace(h, a, wall, face);
+			BlockState state = be.getBlockState();
+			h.assertValueEqual(state.getValue(HologramEmitterBlock.FACE), AttachFace.WALL, face + " attaches to the wall");
+			h.assertValueEqual(state.getValue(HologramEmitterBlock.FACING), face, face + " faces out of the wall");
+			h.assertValueEqual(HologramEmitterBlock.mount(state), Mount.WALL, "mount");
+			HologramSpec s = be.spec();
+			h.assertValueEqual(s.width(), 2.0, "default width");
+			h.assertTrue(Math.abs(s.yaw() - face.toYRot()) < 1e-4, face + ": hologram faces out, yaw " + s.yaw());
+			// Flush: content plane 0.03 off the clicked wall face, on the outside.
+			BlockPos wallAbs = h.absolutePos(wall);
+			double wallSurface = face.getAxis() == Direction.Axis.X ? wallAbs.getX() + 0.5 + 0.5 * face.getStepX()
+					: wallAbs.getZ() + 0.5 + 0.5 * face.getStepZ();
+			double outward = (planeCoordinate(be, face) - wallSurface) * (face.getAxisDirection() == Direction.AxisDirection.POSITIVE ? 1 : -1);
+			h.assertTrue(Math.abs(outward - Mount.WALL_GAP) < 1e-9, face + ": plane " + outward + " off the wall");
+			// Centred on the clicked face: no sideways or vertical offset.
+			double sideways = face.getAxis() == Direction.Axis.X ? s.offZ() : s.offX();
+			h.assertTrue(Math.abs(sideways) < 1e-9 && Math.abs(s.offY()) < 1e-9, face + ": centred on the clicked face");
+			// The thin mount sits against the wall, behind the content plane (never pokes through it).
+			var bounds = state.getShape(h.getLevel(), be.getBlockPos()).bounds();
+			double mountFront = face.getAxisDirection() == Direction.AxisDirection.POSITIVE ? bounds.max(face.getAxis())
+					: 1.0 - bounds.min(face.getAxis());
+			h.assertTrue(mountFront > 0 && mountFront < Mount.WALL_GAP, face + ": mount front " + mountFront + " is behind the hologram");
+			h.destroyBlock(wall.relative(face));
+			h.setBlock(wall, Blocks.AIR);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	public void ceilingPlacementHangsBelow(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		BlockPos ceiling = new BlockPos(1, 4, 1);
+		h.setBlock(ceiling, Blocks.STONE);
+		HologramBlockEntity be = placeOnFace(h, a, ceiling, Direction.DOWN);
+		h.assertValueEqual(be.getBlockState().getValue(HologramEmitterBlock.FACE), AttachFace.CEILING, "ceiling mount");
+		HologramSpec s = be.spec();
+		double top = s.offY() + s.height() / 2;
+		h.assertTrue(top < 0.5 - 1.0 / 16.0, "top edge " + top + " below the mount");
+		h.assertTrue(s.offY() < 0, "hangs below the emitter centre");
+		h.succeed();
+	}
+
+	@GameTest
+	public void floorPlacementKeepsTheProjector(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
+		h.assertValueEqual(be.getBlockState().getValue(HologramEmitterBlock.FACE), AttachFace.FLOOR, "floor");
+		h.assertValueEqual(be.spec().offY(), 0.5 + be.spec().height() / 2 + 0.1, "floats above as before");
+		h.succeed();
+	}
+
+	/** Resize and move on a wall hologram: it never leaves the wall plane (server-enforced). */
+	@GameTest
+	public void wallResizeStaysOnPlane(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(2, 0, 6));
+		BlockPos wall = new BlockPos(2, 2, 2);
+		h.setBlock(wall, Blocks.STONE);
+		HologramBlockEntity be = placeOnFace(h, a, wall, Direction.SOUTH);
+		BlockPos abs = be.getBlockPos();
+		double plane = planeCoordinate(be, Direction.SOUTH);
+		float yaw = be.spec().yaw();
+
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.ResizeHologram(abs, 5.0)), "resize applied");
+		h.assertValueEqual(be.spec().width(), 5.0, "width");
+		h.assertTrue(Math.abs(planeCoordinate(be, Direction.SOUTH) - plane) < 1e-9, "resize stays on the wall plane");
+		// A corner drag's recentre (in-plane) is kept; an off-plane offset or a turn is pulled back.
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.MoveHologram(abs, 1.25, -0.75, 2.0, 90f)), "move applied");
+		HologramSpec s = be.spec();
+		h.assertTrue(Math.abs(planeCoordinate(be, Direction.SOUTH) - plane) < 1e-9, "move can't pull it off the wall: " + s.offZ());
+		h.assertTrue(Math.abs(s.offX() - 1.25) < 1e-9 && Math.abs(s.offY() + 0.75) < 1e-9, "slides along the wall");
+		h.assertTrue(Math.abs(s.yaw() - yaw) < 1e-4, "still faces out of the wall");
+		// Shape change (keeps the bottom edge) also stays on the plane.
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(abs, Shape.TALL_9_16, Mode.EXTEND, Privacy.PUBLIC, 1, null)),
+				"update applied");
+		h.assertTrue(Math.abs(planeCoordinate(be, Direction.SOUTH) - plane) < 1e-9, "shape change stays on the plane");
+		h.succeed();
+	}
+
+	/** Emitters saved before the attachment property existed load as FLOOR (default state). */
+	@GameTest
+	public void legacyEmitterStateDefaultsToFloor(GameTestHelper h) {
+		BlockState def = OfficeBlocks.HOLOGRAM_EMITTER.defaultBlockState();
+		h.assertValueEqual(def.getValue(HologramEmitterBlock.FACE), AttachFace.FLOOR, "default state");
+		// The old chunk palette stored the property-less state as just its id.
+		BlockState fromName = BlockState.CODEC.parse(NbtOps.INSTANCE, StringTag.valueOf("office:hologram_emitter")).getOrThrow();
+		h.assertValueEqual(fromName.getValue(HologramEmitterBlock.FACE), AttachFace.FLOOR, "id-only state");
+		CompoundTag idOnly = new CompoundTag();
+		idOnly.putString("id", "office:hologram_emitter");
+		BlockState fromTag = BlockState.CODEC.parse(NbtOps.INSTANCE, idOnly).getOrThrow();
+		h.assertValueEqual(fromTag.getValue(HologramEmitterBlock.FACE), AttachFace.FLOOR, "{id} state");
+		h.assertValueEqual(NbtUtils.readBlockState(h.getLevel().holderLookup(Registries.BLOCK), idOnly), def, "NbtUtils");
+		h.assertValueEqual(HologramEmitterBlock.mount(fromTag), Mount.FLOOR, "mount");
+		// A legacy hologram (spec placed by Task 6, any yaw/offset) is untouched by the server's mount rule.
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.MoveHologram(be.getBlockPos(), 0.5, 2.0, -1.5, 45f)), "move");
+		h.assertValueEqual(be.spec().offZ(), -1.5, "floor holograms move freely");
 		h.succeed();
 	}
 

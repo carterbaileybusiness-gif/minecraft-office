@@ -7,8 +7,11 @@ import java.util.UUID;
 
 import javax.imageio.ImageIO;
 
+import com.mojang.blaze3d.platform.InputConstants;
+
 import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.capture.TestPatternSource;
+import local.carter.office.client.interact.HologramSettingsScreen;
 import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.render.HologramPlacement;
 import local.carter.office.client.render.ScreenTexture;
@@ -41,7 +44,11 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContex
  */
 @SuppressWarnings("UnstableApiUsage")
 public class HologramClientGameTests implements FabricClientGameTest {
-	private static final int MOUSE_RIGHT = 1; // GLFW_MOUSE_BUTTON_RIGHT
+	/**
+	 * 26.3 uses SDL3 button numbers: 1 = left, 2 = middle, 3 = right ({@code Options.keyUse} is MOUSE 3). Task 6 used
+	 * GLFW's 1, which is the LEFT button here: the old corner-drag test was attacking, never right-clicking.
+	 */
+	private static final int MOUSE_RIGHT = InputConstants.MOUSE_BUTTON_RIGHT;
 
 	/** Where the test stands (feet), set up on the server. */
 	private BlockPos stand;
@@ -55,6 +62,8 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			placedHologramVisible(context, sp);
 			cornerDragResizes(context, sp);
 			liveTextureUpdates(context, sp);
+			scrollResizes(context, sp);
+			wallMount(context, sp);
 			offlineLook(context, sp);
 		}
 	}
@@ -116,8 +125,27 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		context.waitTicks(5);
 		HologramSpec start = context.computeOnClient(mc -> clientHologram(mc).spec());
 		Frame f = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), start);
-		// Just inside the bottom-right corner (within the 0.25 grab radius).
+		// Just inside the bottom-right corner (within the grab radius).
 		Vec3d grab = f.center().add(f.right().scale(f.w() / 2 - 0.08)).add(f.up().scale(-(f.h() / 2 - 0.08)));
+		look(context, grab);
+		context.waitTicks(3);
+		context.takeScreenshot("hologram-handles"); // four corner handles, the hovered one big and bright
+
+		// A quick tap on a corner is a click (settings), never a resize.
+		context.getInput().pressMouse(MOUSE_RIGHT);
+		context.waitTicks(2);
+		boolean settings = context.computeOnClient(mc -> mc.gui.screen() instanceof HologramSettingsScreen);
+		if (!settings) {
+			throw new AssertionError("a quick tap on a corner should open settings");
+		}
+		context.runOnClient(mc -> mc.gui.setScreen(null));
+		context.waitTicks(3);
+		sp.getConnection().waitForServerboundPackets();
+		double afterTap = serverWidth(sp);
+		if (Math.abs(afterTap - start.width()) > 1e-6) {
+			throw new AssertionError("a tap resized the hologram: " + start.width() + " -> " + afterTap);
+		}
+
 		look(context, grab);
 		context.waitTicks(3);
 		context.getInput().holdMouse(MOUSE_RIGHT);
@@ -146,6 +174,14 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			throw new AssertionError("horizontal inward drag did not shrink: width " + grown + " -> " + shrunk);
 		}
 
+		// Grabbing from just OUTSIDE the corner works too, and the corner doesn't jump to the aim.
+		double before = shrunk;
+		double outside = dragBottomRightBy(context, sp, 0.6, 0.0, -0.1);
+		if (outside < before + 0.4 || outside > before + 0.8) {
+			throw new AssertionError("outside-corner drag by 0.6 should grow by ~0.6: " + before + " -> " + outside);
+		}
+		shrunk = outside;
+
 		// Off-hand emitter must not take main-hand right-clicks (e.g. a Wizards staff): nothing changes.
 		sp.getServer().runOnServer(server -> {
 			ServerPlayer p = player(server);
@@ -168,9 +204,20 @@ public class HologramClientGameTests implements FabricClientGameTest {
 	/** Holds right-click on the bottom-right corner, moves the aim by (right, up) blocks, releases; returns server width. */
 	private double dragBottomRightBy(final ClientGameTestContext context, final TestSingleplayerContext sp, final double right,
 			final double up) {
-		HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
-		Frame f = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), spec);
-		Vec3d grab = f.center().add(f.right().scale(f.w() / 2 - 0.08)).add(f.up().scale(-(f.h() / 2 - 0.08)));
+		return dragBottomRightBy(context, sp, right, up, 0.08);
+	}
+
+	/** Same, grabbing {@code inset} blocks inside the corner on both axes (negative = outside the quad). */
+	private double dragBottomRightBy(final ClientGameTestContext context, final TestSingleplayerContext sp, final double right,
+			final double up, final double inset) {
+		return dragCornerBy(context, sp, emitter, right, up, inset);
+	}
+
+	private double dragCornerBy(final ClientGameTestContext context, final TestSingleplayerContext sp, final BlockPos at, final double right,
+			final double up, final double inset) {
+		HologramSpec spec = context.computeOnClient(mc -> ((HologramBlockEntity) mc.level.getBlockEntity(at)).spec());
+		Frame f = HologramPlacement.frame(at.getX(), at.getY(), at.getZ(), spec);
+		Vec3d grab = f.center().add(f.right().scale(f.w() / 2 - inset)).add(f.up().scale(-(f.h() / 2 - inset)));
 		look(context, grab);
 		context.waitTicks(3);
 		context.getInput().holdMouse(MOUSE_RIGHT);
@@ -181,10 +228,104 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		context.waitTicks(5);
 		sp.getConnection().waitForServerboundPackets();
 		context.waitTicks(5);
-		return sp.getServer().computeOnServer(server -> {
-			HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
-			return be.spec().width();
+		return serverSpec(sp, at).width();
+	}
+
+	private double serverWidth(final TestSingleplayerContext sp) {
+		return serverSpec(sp, emitter).width();
+	}
+
+	private static HologramSpec serverSpec(final TestSingleplayerContext sp, final BlockPos at) {
+		return sp.getServer().computeOnServer(server -> ((HologramBlockEntity) player(server).level().getBlockEntity(at)).spec());
+	}
+
+	/** Mouse-wheel over your own hologram (emitter in hand): ×1.1 per notch, bottom edge fixed, hotbar slot unchanged. */
+	private void scrollResizes(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		HologramSpec start = serverSpec(sp, emitter);
+		look(context, hologramCenter(start));
+		context.waitTicks(3);
+		int slot = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		context.getInput().scroll(1.0);
+		context.waitTicks(6);
+		sp.getConnection().waitForServerboundPackets();
+		context.waitTicks(2);
+		HologramSpec up = serverSpec(sp, emitter);
+		if (Math.abs(up.width() - start.width() * 1.1) > 1e-6) {
+			throw new AssertionError("one notch up should be x1.1: " + start.width() + " -> " + up.width());
+		}
+		double bottom0 = start.offY() - start.height() / 2;
+		if (Math.abs(up.offY() - up.height() / 2 - bottom0) > 1e-6) {
+			throw new AssertionError("scroll moved the bottom edge: " + bottom0 + " -> " + (up.offY() - up.height() / 2));
+		}
+		int slotAfter = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		if (slotAfter != slot) {
+			throw new AssertionError("scrolling over a hologram changed the hotbar slot " + slot + " -> " + slotAfter);
+		}
+		// Two quick notches down: throttled, but the final value always reaches the server.
+		context.getInput().scroll(-1.0);
+		context.getInput().scroll(-1.0);
+		context.waitTicks(8);
+		sp.getConnection().waitForServerboundPackets();
+		context.waitTicks(2);
+		HologramSpec down = serverSpec(sp, emitter);
+		if (Math.abs(down.width() - up.width() / 1.21) > 1e-6) {
+			throw new AssertionError("two notches down should be /1.21: " + up.width() + " -> " + down.width());
+		}
+		// Off the hologram the wheel changes the hotbar as usual.
+		look(context, hologramCenter(down).add(new Vec3d(0, 4, 0)));
+		context.waitTicks(3);
+		context.getInput().scroll(-1.0);
+		context.waitTicks(2);
+		int slotOff = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		if (slotOff == slot) {
+			throw new AssertionError("scrolling away from holograms should still change the hotbar slot");
+		}
+		context.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(slot));
+		context.waitTicks(3);
+	}
+
+	/**
+	 * Right-clicking a wall face with an emitter mounts it on the wall: hologram flush with the wall, facing out; a
+	 * corner drag resizes it within the wall plane.
+	 */
+	private void wallMount(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		BlockPos wallBlock = stand.offset(-3, 2, -8);
+		BlockPos mount = wallBlock.south();
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.teleportTo(stand.getX() - 2.5, stand.getY(), stand.getZ() - 4.5);
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 4));
 		});
+		context.waitTicks(10);
+		look(context, new Vec3d(wallBlock.getX() + 0.5, wallBlock.getY() + 0.5, wallBlock.getZ() + 1.0));
+		context.waitTicks(3);
+		context.getInput().pressMouse(MOUSE_RIGHT);
+		context.waitFor(mc -> mc.level.getBlockEntity(mount) instanceof HologramBlockEntity be && be.spec() != null, 100);
+		HologramSpec placed = serverSpec(sp, mount);
+		String face = sp.getServer().computeOnServer(server -> player(server).level().getBlockState(mount)
+				.getValue(HologramEmitterBlock.FACE).getSerializedName());
+		if (!"wall".equals(face)) {
+			throw new AssertionError("clicking a wall should wall-mount the emitter, got face=" + face);
+		}
+		double plane = mount.getZ() + 0.5 + placed.offZ();
+		if (Math.abs(plane - (wallBlock.getZ() + 1 + 0.03)) > 1e-6 || Math.abs(placed.yaw()) > 1e-4) {
+			throw new AssertionError("wall hologram should sit 0.03 off the wall facing south: plane z " + plane + ", yaw " + placed.yaw());
+		}
+		context.waitTicks(10);
+		context.takeScreenshot("hologram-wall");
+
+		double grown = dragCornerBy(context, sp, mount, 0.8, -0.3, 0.08);
+		HologramSpec after = serverSpec(sp, mount);
+		if (grown < placed.width() + 0.5) {
+			throw new AssertionError("wall corner drag did not resize: " + placed.width() + " -> " + grown);
+		}
+		if (Math.abs(mount.getZ() + 0.5 + after.offZ() - plane) > 1e-6) {
+			throw new AssertionError("wall resize left the wall plane: " + plane + " -> " + (mount.getZ() + 0.5 + after.offZ()));
+		}
+		context.waitTicks(5);
+		context.takeScreenshot("hologram-wall-resized");
+		sp.getServer().runOnServer(server -> player(server).teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() + 0.5));
+		context.waitTicks(10);
 	}
 
 	/**

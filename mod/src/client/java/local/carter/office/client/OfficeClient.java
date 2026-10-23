@@ -6,6 +6,7 @@ import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.platform.Platform;
+import local.carter.office.client.platform.WindowsPlatform;
 import local.carter.office.client.render.HologramRenderer;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.hologram.OfficeBlocks;
@@ -28,10 +29,12 @@ public class OfficeClient implements ClientModInitializer {
 		BlockEntityRendererRegistry.register(OfficeBlocks.HOLOGRAM_BE, HologramRenderer::new);
 		HologramTracker.register();
 		HologramInteractions.register();
-		// This computer's own-screen support (Mac: the helper app; otherwise none until Task 11).
+		// This computer's own-screen support (Mac: the helper app; Windows: WindowsPlatform.install below).
 		Platform.current().register();
 		// Own holograms' live screens: platform capture (Mac helper), or the test pattern with -Doffice.testPattern=true.
 		OwnScreens.register();
+		// Windows (beta, Task 11): window capture + zoom without a helper. Does nothing on other systems.
+		WindowsPlatform.install();
 		// Shared screens: send own (non-private) screens to nearby friends, show theirs (Task 14).
 		StreamClient.register();
 		// Debug: /hologramtest (dev environment or -Doffice.testPattern=true only).

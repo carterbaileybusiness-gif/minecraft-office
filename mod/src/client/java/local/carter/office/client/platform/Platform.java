@@ -10,8 +10,9 @@ import local.carter.office.core.HologramSpec;
 
 /**
  * What this computer can do for the player's own screens: virtual displays (EXTEND), the window list (WINDOW), and
- * working on a screen (zoom: cursor onto the display, exit hotkey). {@link MacPlatform} does it through the helper app;
- * {@link NoPlatform} (Linux, dev, and Windows until Task 11) can't.
+ * working on a screen (zoom: cursor onto the display, exit hotkey). {@link MacPlatform} does it through the helper app,
+ * {@link WindowsPlatform} (beta) with Java window capture; {@link NoPlatform} (Linux, dev) can't. The settings screen
+ * gets its window list from {@link local.carter.office.client.interact.WindowListProvider}, which each platform installs.
  */
 public interface Platform {
 	/** Global screen rectangle in points, top-left origin (macOS Quartz coordinates). */
@@ -25,9 +26,6 @@ public interface Platform {
 
 	/** Whether holograms can be whole virtual displays (EXTEND). */
 	boolean supportsExtend();
-
-	/** The windows last reported by the OS (refreshed by {@link #refreshWindows}). */
-	List<WindowInfo> windows();
 
 	/** Asks for a fresh window list; it arrives later in {@link #windows}. */
 	default void refreshWindows() {}
@@ -56,8 +54,12 @@ public interface Platform {
 		return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("mac");
 	}
 
+	static boolean isWindows() {
+		return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
+	}
+
 	final class Holder {
-		private static final Platform INSTANCE = isMac() ? new MacPlatform() : new NoPlatform();
+		private static final Platform INSTANCE = isMac() ? new MacPlatform() : isWindows() ? new WindowsPlatform() : new NoPlatform();
 
 		private Holder() {}
 	}

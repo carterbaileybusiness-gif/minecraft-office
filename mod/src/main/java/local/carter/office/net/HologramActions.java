@@ -9,6 +9,7 @@ import java.util.function.UnaryOperator;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Privacy;
 import local.carter.office.hologram.HologramBlockEntity;
+import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.hologram.StarterKit;
 import local.carter.office.net.OfficePayloads.MoveHologram;
@@ -137,7 +138,8 @@ public final class HologramActions {
 		if (next == null) {
 			return false;
 		}
-		be.setSpec(next);
+		// A wall-mounted hologram never leaves its wall plane (resizes keep the centre; moves slide along the wall).
+		be.setSpec(HologramEmitterBlock.constrain(be.getBlockState(), next));
 		StreamRouter.rerouteNow(); // privacy/position may change who views it: reroute before returning
 		return true;
 	}

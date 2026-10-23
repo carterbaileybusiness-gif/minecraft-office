@@ -120,7 +120,7 @@ public final class MacPlatform implements Platform {
 		return true;
 	}
 
-	@Override
+	/** The windows last reported by the helper (refreshed by {@link #refreshWindows}). */
 	public List<WindowInfo> windows() {
 		List<WindowInfo> out = new ArrayList<>();
 		for (var w : helper.windows()) {

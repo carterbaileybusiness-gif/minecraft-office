@@ -41,6 +41,18 @@ chunky start
 - Disk: radius 1000 (16,129 chunks) made a 142 MB world folder (about 9 KB per chunk). So radius 2000 is about 550 MB
   and radius 3000 about 1.2 GB.
 
+## Staged pregeneration (verified 2026-10-23, 8 GB Mac, `-Xmx4G`)
+
+A single `chunky radius 2000` run on a 4 GB heap ran out of memory (`OutOfMemoryError: Java heap space`) at about 40%:
+the world stayed almost empty on disk (chunks were not being flushed), the heap sat near 3 GB and the server crawled.
+What worked: raise the radius in stages and restart the server between stages, so each run only generates about 12,000
+new chunks and everything is flushed to disk on `stop`. Existing chunks are skipped, so each stage is cheap.
+
+Stages used: radius 800, 1200, 1500, 1750, 2000. For each: start the server, run
+`chunky world minecraft:overworld`, `chunky center 0 0`, `chunky shape square`, `chunky radius <R>`, `chunky start`,
+wait for `Task finished`, run `save-all flush`, then `stop`. Each stage took 3 to 4 minutes (about 130 chunks/s when the
+heap is healthy). Radius 2000 finished as a 620 MB world folder (63,001 chunks).
+
 ## After pregen
 
 - Stop the server, back up the world folder, start again.
