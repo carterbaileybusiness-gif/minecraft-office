@@ -1,0 +1,88 @@
+package local.carter.office.core;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * A placed hologram monitor. {@code windowKey} may be null/empty (EXTEND mode).
+ * Offsets are relative to the owning block; width is clamped to [{@link #MIN_WIDTH}, {@link #MAX_WIDTH}].
+ */
+public record HologramSpec(UUID owner, Shape shape, Mode mode, Privacy privacy, int displaySlot, String windowKey,
+                           double width, double offX, double offY, double offZ, float yaw) {
+    public static final double MIN_WIDTH = 0.5;
+    public static final double MAX_WIDTH = 12.0;
+
+    public HologramSpec {
+        if (privacy == null) {
+            privacy = Privacy.PUBLIC;
+        }
+        width = clampWidth(width);
+    }
+
+    public static double clampWidth(double w) {
+        if (Double.isNaN(w)) {
+            return MIN_WIDTH;
+        }
+        return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, w));
+    }
+
+    public double height() {
+        return width / shape.aspect();
+    }
+
+    public HologramSpec withWidth(double w) {
+        return new HologramSpec(owner, shape, mode, privacy, displaySlot, windowKey, w, offX, offY, offZ, yaw);
+    }
+
+    /** Plain-types codec (strings, numbers, lists) that the caller maps onto NBT. */
+    public Map<String, Object> toMap() {
+        Map<String, Object> m = new HashMap<>();
+        m.put("owner", owner.toString());
+        m.put("shape", shape.name());
+        m.put("mode", mode.name());
+        m.put("privacy", privacy.level().name());
+        List<String> allowed = new ArrayList<>();
+        for (UUID u : privacy.allowed()) {
+            allowed.add(u.toString());
+        }
+        allowed.sort(null);
+        m.put("allowed", allowed);
+        m.put("displaySlot", displaySlot);
+        if (windowKey != null) {
+            m.put("windowKey", windowKey);
+        }
+        m.put("width", width);
+        m.put("offX", offX);
+        m.put("offY", offY);
+        m.put("offZ", offZ);
+        m.put("yaw", yaw);
+        return m;
+    }
+
+    public static HologramSpec fromMap(Map<String, Object> m) {
+        Set<UUID> allowed = new java.util.HashSet<>();
+        Object raw = m.get("allowed");
+        if (raw instanceof Iterable<?> it) {
+            for (Object o : it) {
+                allowed.add(UUID.fromString(o.toString()));
+            }
+        }
+        Object key = m.get("windowKey");
+        return new HologramSpec(
+                UUID.fromString((String) m.get("owner")),
+                Shape.valueOf((String) m.get("shape")),
+                Mode.valueOf((String) m.get("mode")),
+                new Privacy(Privacy.Level.valueOf((String) m.get("privacy")), allowed),
+                ((Number) m.get("displaySlot")).intValue(),
+                key == null ? null : key.toString(),
+                ((Number) m.get("width")).doubleValue(),
+                ((Number) m.get("offX")).doubleValue(),
+                ((Number) m.get("offY")).doubleValue(),
+                ((Number) m.get("offZ")).doubleValue(),
+                ((Number) m.get("yaw")).floatValue());
+    }
+}
