@@ -16,6 +16,7 @@ import local.carter.office.net.OfficePayloads.RemoveHologram;
 import local.carter.office.net.OfficePayloads.ResizeHologram;
 import local.carter.office.net.OfficePayloads.SetWorking;
 import local.carter.office.net.OfficePayloads.UpdateHologram;
+import local.carter.office.stream.StreamRouter;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -137,6 +138,7 @@ public final class HologramActions {
 			return false;
 		}
 		be.setSpec(next);
+		StreamRouter.signalChange(); // privacy/position may change who views it: reroute on the next tick
 		return true;
 	}
 
@@ -148,6 +150,7 @@ public final class HologramActions {
 			return false;
 		}
 		StarterKit.give(player, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM));
+		StreamRouter.signalChange();
 		return true;
 	}
 }

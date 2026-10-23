@@ -19,10 +19,15 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 
-/** Client-to-server hologram payloads. The server applies them in {@link HologramActions} (owner-only). */
+/**
+ * Hologram and screen-stream payloads. Client-to-server hologram edits are applied in {@link HologramActions}
+ * (owner-only); the stream payloads are handled by {@code stream.StreamService}.
+ */
 public final class OfficePayloads {
 	public static final int MAX_WINDOW_KEY = 512;
 	public static final int MAX_ALLOWED = 64;
+	/** Max bytes of a stream datagram carried in a fallback payload (either direction). */
+	public static final int MAX_FALLBACK_DATAGRAM = 30 * 1024;
 
 	private OfficePayloads() {}
 
@@ -107,6 +112,115 @@ public final class OfficePayloads {
 		}
 	}
 
+	// ---- Screen streams (Task 13). Datagram format: core.StreamHeader + body; see stream.StreamRelayServer. ----
+
+	/**
+	 * S2C on join: this session's relay token (append to every UDP datagram; HELLO = header(HELLO) + token) and the
+	 * relay's UDP port on the game server's host. {@code udpPort == 0}: no UDP, use the fallback payloads.
+	 */
+	public record StreamToken(long token, int udpPort) implements CustomPacketPayload {
+		public static final Type<StreamToken> TYPE = new Type<>(OfficeMod.id("stream_token"));
+		public static final StreamCodec<FriendlyByteBuf, StreamToken> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeLong(p.token);
+					buf.writeVarInt(p.udpPort);
+				},
+				buf -> new StreamToken(buf.readLong(), buf.readVarInt()));
+
+		@Override
+		public Type<StreamToken> type() {
+			return TYPE;
+		}
+	}
+
+	/** S2C to an owner: start ({@code wanted}) or stop sending hologram {@code hologramId} as stream {@code streamId}. */
+	public record StreamDemand(UUID hologramId, int streamId, boolean wanted) implements CustomPacketPayload {
+		public static final Type<StreamDemand> TYPE = new Type<>(OfficeMod.id("stream_demand"));
+		public static final StreamCodec<FriendlyByteBuf, StreamDemand> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeUUID(p.hologramId);
+					buf.writeVarInt(p.streamId);
+					buf.writeBoolean(p.wanted);
+				},
+				buf -> new StreamDemand(buf.readUUID(), buf.readVarInt(), buf.readBoolean()));
+
+		@Override
+		public Type<StreamDemand> type() {
+			return TYPE;
+		}
+	}
+
+	/** S2C to a viewer: datagrams with {@code streamId} carry hologram {@code hologramId}'s screen. */
+	public record StreamStart(int streamId, UUID hologramId) implements CustomPacketPayload {
+		public static final Type<StreamStart> TYPE = new Type<>(OfficeMod.id("stream_start"));
+		public static final StreamCodec<FriendlyByteBuf, StreamStart> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeVarInt(p.streamId);
+					buf.writeUUID(p.hologramId);
+				},
+				buf -> new StreamStart(buf.readVarInt(), buf.readUUID()));
+
+		@Override
+		public Type<StreamStart> type() {
+			return TYPE;
+		}
+	}
+
+	/** S2C to a viewer: stream {@code streamId} stopped (private, out of range, owner offline, removed). Clear it. */
+	public record StreamEnded(int streamId) implements CustomPacketPayload {
+		public static final Type<StreamEnded> TYPE = new Type<>(OfficeMod.id("stream_ended"));
+		public static final StreamCodec<FriendlyByteBuf, StreamEnded> CODEC = StreamCodec.of(
+				(buf, p) -> buf.writeVarInt(p.streamId),
+				buf -> new StreamEnded(buf.readVarInt()));
+
+		@Override
+		public Type<StreamEnded> type() {
+			return TYPE;
+		}
+	}
+
+	/** S2C to a viewer without UDP: one relayed datagram (header + body, no token), exactly as UDP would carry it. */
+	public record StreamFallbackTile(int streamId, byte[] datagram) implements CustomPacketPayload {
+		public static final Type<StreamFallbackTile> TYPE = new Type<>(OfficeMod.id("stream_fallback_tile"));
+		public static final StreamCodec<FriendlyByteBuf, StreamFallbackTile> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeVarInt(p.streamId);
+					buf.writeByteArray(p.datagram);
+				},
+				buf -> new StreamFallbackTile(buf.readVarInt(), buf.readByteArray(MAX_FALLBACK_DATAGRAM)));
+
+		@Override
+		public Type<StreamFallbackTile> type() {
+			return TYPE;
+		}
+	}
+
+	/** C2S from an owner without UDP: one datagram (header + body, no token, at most 30 KiB). */
+	public record FallbackTile(byte[] datagram) implements CustomPacketPayload {
+		public static final Type<FallbackTile> TYPE = new Type<>(OfficeMod.id("fallback_tile"));
+		public static final StreamCodec<FriendlyByteBuf, FallbackTile> CODEC = StreamCodec.of(
+				(buf, p) -> buf.writeByteArray(p.datagram),
+				buf -> new FallbackTile(buf.readByteArray(MAX_FALLBACK_DATAGRAM)));
+
+		@Override
+		public Type<FallbackTile> type() {
+			return TYPE;
+		}
+	}
+
+	/** C2S: whether this client got a HELLO_ACK (false = none within 5 s: send it viewer datagrams as payloads). */
+	public record UdpStatus(boolean ok) implements CustomPacketPayload {
+		public static final Type<UdpStatus> TYPE = new Type<>(OfficeMod.id("udp_status"));
+		public static final StreamCodec<FriendlyByteBuf, UdpStatus> CODEC = StreamCodec.of(
+				(buf, p) -> buf.writeBoolean(p.ok),
+				buf -> new UdpStatus(buf.readBoolean()));
+
+		@Override
+		public Type<UdpStatus> type() {
+			return TYPE;
+		}
+	}
+
 	static void writePrivacy(final FriendlyByteBuf buf, final Privacy privacy) {
 		buf.writeEnum(privacy.level());
 		buf.writeVarInt(privacy.allowed().size());
@@ -128,9 +242,18 @@ public final class OfficePayloads {
 		return new Privacy(level, allowed);
 	}
 
-	/** Registers the C2S payload types (both sides). */
+	/** Registers the payload types (both sides). */
 	public static void register() {
+		var s2c = PayloadTypeRegistry.clientboundPlay();
+		s2c.register(StreamToken.TYPE, StreamToken.CODEC);
+		s2c.register(StreamDemand.TYPE, StreamDemand.CODEC);
+		s2c.register(StreamStart.TYPE, StreamStart.CODEC);
+		s2c.register(StreamEnded.TYPE, StreamEnded.CODEC);
+		s2c.register(StreamFallbackTile.TYPE, StreamFallbackTile.CODEC);
+
 		var c2s = PayloadTypeRegistry.serverboundPlay();
+		c2s.register(FallbackTile.TYPE, FallbackTile.CODEC);
+		c2s.register(UdpStatus.TYPE, UdpStatus.CODEC);
 		c2s.register(ResizeHologram.TYPE, ResizeHologram.CODEC);
 		c2s.register(UpdateHologram.TYPE, UpdateHologram.CODEC);
 		c2s.register(MoveHologram.TYPE, MoveHologram.CODEC);

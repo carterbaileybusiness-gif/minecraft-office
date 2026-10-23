@@ -7,7 +7,8 @@
 	"entrypoints": {
 		"fabric-gametest": [
 			"local.carter.office.gametest.OfficeGameTest",
-			"local.carter.office.HologramGameTests"
+			"local.carter.office.HologramGameTests",
+			"local.carter.office.StreamRoutingGameTests"
 		],
 		"fabric-client-gametest": [
 			"local.carter.office.gametest.OfficeClientGameTest"
