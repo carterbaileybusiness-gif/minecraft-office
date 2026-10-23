@@ -12,6 +12,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.sdl.SDLProperties;
@@ -27,16 +28,25 @@ import dev.onvoid.webrtc.media.video.desktop.WindowCapturer;
 import local.carter.office.client.capture.JavaDesktopSource;
 import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.capture.WebRtcNatives;
+import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.interact.WindowListProvider;
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
 import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.render.ScreenTexture;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
+import local.carter.office.hologram.HologramBlockEntity;
+import local.carter.office.hologram.OfficeBlocks;
+import local.carter.office.net.OfficePayloads;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.InteractionResult;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 
 /**
  * Windows, beta: Window mode only, with no helper install. Windows are listed and captured with webrtc-java
@@ -65,6 +75,8 @@ public final class WindowsPlatform implements Platform {
 	private @Nullable ScheduledFuture<?> watch;
 	/** Set once the current zoom asked to exit (atomic, not synchronized: the keyboard hook must never wait). */
 	private final AtomicBoolean exitSent = new AtomicBoolean();
+	/** Bumped by every zoomIn/zoomOut, so a late watchdog tick or hook event from an old zoom is ignored. */
+	private final AtomicLong generation = new AtomicLong();
 
 	/** Client start-up on Windows: own holograms capture with {@link JavaDesktopSource}, the settings screen lists windows. */
 	public static void install() {
@@ -78,6 +90,8 @@ public final class WindowsPlatform implements Platform {
 		}
 		OwnScreens.setEnabled(true);
 		HologramLook.setOwnSourceProvider(WindowsPlatform::ownSource);
+		HologramLook.setOwnDetailProvider(WindowsPlatform::ownDetail);
+		installPlacementDefault();
 		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> p.zoomOut());
 		Runtime.getRuntime().addShutdownHook(new Thread(p::zoomOut, "office-win-restore"));
 		LOGGER.info("Minecraft Office: Windows window capture (beta) enabled; webrtc natives {}",
@@ -87,14 +101,65 @@ public final class WindowsPlatform implements Platform {
 	/** How the owner's capture of one hologram is doing, for its placeholder panel. */
 	static HologramLook.OwnSource ownSource(final UUID hologramId) {
 		ScreenTexture t = OwnScreens.texture(hologramId);
+		return ownSourceFor(t == null ? null : t.endedReason());
+	}
+
+	/** The reason under "Screens unavailable", or null. */
+	static @Nullable String ownDetail(final UUID hologramId) {
+		ScreenTexture t = OwnScreens.texture(hologramId);
 		String reason = t == null ? null : t.endedReason();
-		if (JavaDesktopSource.REASON_WINDOW_CLOSED.equals(reason)) {
+		return ownSourceFor(reason) == HologramLook.OwnSource.UNAVAILABLE ? reason : null;
+	}
+
+	/**
+	 * Placeholder look for why the capture ended (null: still running or not started): window gone → "Window closed";
+	 * an Extend hologram → "Pick a window" (this computer shows one window); anything else → "Screens unavailable" with
+	 * the reason (the source logs it). Pure.
+	 */
+	public static HologramLook.OwnSource ownSourceFor(final @Nullable String endedReason) {
+		if (endedReason == null) {
+			return HologramLook.OwnSource.READY;
+		}
+		if (JavaDesktopSource.REASON_WINDOW_CLOSED.equals(endedReason)) {
 			return HologramLook.OwnSource.WINDOW_CLOSED;
 		}
-		if (JavaDesktopSource.REASON_EXTEND.equals(reason)) {
-			return HologramLook.OwnSource.NEEDS_HELPER; // "Set up screens": pick One window in settings
+		if (JavaDesktopSource.REASON_EXTEND.equals(endedReason)) {
+			return HologramLook.OwnSource.PICK_WINDOW;
 		}
-		return HologramLook.OwnSource.READY;
+		return HologramLook.OwnSource.UNAVAILABLE;
+	}
+
+	/**
+	 * New holograms are Extend by default, which Windows can't show: right after the local player places one, switch it
+	 * to Window mode (the owner then picks a window in settings).
+	 */
+	private static void installPlacementDefault() {
+		PlacementDefault placed = new PlacementDefault();
+		UseBlockCallback.EVENT.register((player, level, hand, hit) -> {
+			if (level.isClientSide() && player.getItemInHand(hand).is(OfficeBlocks.HOLOGRAM_EMITTER_ITEM)) {
+				BlockPos bp = hit.getBlockPos();
+				placed.used(bp.getX(), bp.getY(), bp.getZ(), System.nanoTime() / 1_000_000);
+			}
+			return InteractionResult.PASS;
+		});
+		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+			if (mc.player == null || mc.getConnection() == null) {
+				return;
+			}
+			UUID me = mc.player.getUUID();
+			long now = System.nanoTime() / 1_000_000;
+			for (HologramBlockEntity be : HologramTracker.loaded()) {
+				HologramSpec spec = be.spec();
+				if (spec == null) {
+					continue;
+				}
+				BlockPos pos = be.getBlockPos();
+				if (placed.shouldSwitch(be.hologramId(), spec, me.equals(spec.owner()), pos.getX(), pos.getY(), pos.getZ(), now)) {
+					LOGGER.info("New hologram at {}: Window mode (Windows can't show a whole display yet)", pos);
+					ClientPlayNetworking.send(new OfficePayloads.UpdateHologram(pos, spec.shape(), Mode.WINDOW, spec.privacy(), spec.displaySlot(), null));
+				}
+			}
+		});
 	}
 
 	/**
@@ -159,9 +224,10 @@ public final class WindowsPlatform implements Platform {
 	}
 
 	/**
-	 * Window mode: moves the hologram's window over Minecraft's client area (measured with Win32 when Minecraft's
-	 * window handle is known, else {@code mcWindow}) and focuses it, then hooks the keyboard for the exit gesture. If the
-	 * window is gone, asks to exit at once. Extend mode does nothing.
+	 * Window mode: moves the hologram's window over Minecraft's client area (measured with Win32, in physical pixels,
+	 * when Minecraft's window handle is known; else {@code mcWindow}, assumed physical pixels) and focuses it, then hooks
+	 * the keyboard for the exit gesture. If the window is gone or now belongs to another program, or anything fails, it
+	 * undoes what it did and asks to exit instead. Extend mode does nothing. Never throws, never blocks on the hook.
 	 */
 	@Override
 	public synchronized void zoomIn(final HologramSpec spec, final Rect mcWindow) {
@@ -171,39 +237,49 @@ public final class WindowsPlatform implements Platform {
 		if (zoom != null) {
 			zoomOut();
 		}
+		long gen = generation.incrementAndGet();
 		exitSent.set(false);
 		chord.reset();
-		WindowKey key = WindowKey.parse(spec.windowKey());
-		Win32 w32 = Win32.get();
-		if (key == null || !w32.isWindow(key.hwnd())) {
-			requestExit();
-			return;
-		}
-		long hwnd = key.hwnd();
-		long mc = minecraftHwnd();
-		Rect area = mc != 0 ? w32.clientRectOnScreen(mc) : null;
-		if (area == null || area.w() <= 0 || area.h() <= 0) {
-			area = mcWindow;
-		}
-		zoom = new Zoom(hwnd, key.format(), w32.placement(hwnd), mc);
-		JavaDesktopSource.setWorkingKey(spec.windowKey());
-		if (!w32.placeOver(hwnd, area)) {
-			LOGGER.warn("Couldn't move {} over Minecraft", key.exe());
-		}
-		if (!w32.focus(hwnd)) {
-			LOGGER.warn("Windows refused to focus {}", key.exe());
-		}
-		keyHook = w32.hookKeys(chord, this::requestExit);
-		watch = EXEC.scheduleWithFixedDelay(() -> {
-			if (!w32.isWindow(hwnd)) {
-				requestExit();
+		try {
+			WindowKey key = WindowKey.parse(spec.windowKey());
+			Win32 w32 = Win32.get();
+			String exe = key != null && w32.isWindow(key.hwnd()) ? w32.exeName(key.hwnd()) : null;
+			if (key == null || exe == null || !exe.equalsIgnoreCase(key.exe())) {
+				LOGGER.info("Zoom: window {} is gone or reused by {}; not moving anything", spec.windowKey(), exe);
+				requestExit(gen);
+				return;
 			}
-		}, 250, 250, TimeUnit.MILLISECONDS);
+			long hwnd = key.hwnd();
+			long mc = minecraftHwnd();
+			Rect area = mc != 0 ? w32.clientRectOnScreen(mc) : null;
+			if (area == null || area.w() <= 0 || area.h() <= 0) {
+				area = mcWindow;
+			}
+			zoom = new Zoom(hwnd, key.format(), w32.placement(hwnd), mc);
+			JavaDesktopSource.setWorkingKey(spec.windowKey());
+			if (!w32.placeOver(hwnd, area)) {
+				LOGGER.warn("Couldn't move {} over Minecraft", key.exe());
+			}
+			if (!w32.focus(hwnd)) {
+				LOGGER.warn("Windows refused to focus {}", key.exe());
+			}
+			keyHook = w32.hookKeys(chord, () -> requestExit(gen));
+			watch = EXEC.scheduleWithFixedDelay(() -> {
+				if (!w32.isWindow(hwnd)) {
+					requestExit(gen);
+				}
+			}, 250, 250, TimeUnit.MILLISECONDS);
+		} catch (Throwable e) {
+			LOGGER.warn("Zoom into {} failed", spec.windowKey(), e);
+			zoomOut();
+			requestExitAlways();
+		}
 	}
 
 	/** Unhooks the keyboard, puts the window back as it was and focuses Minecraft. Safe to call any time, repeatedly. */
 	@Override
 	public synchronized void zoomOut() {
+		generation.incrementAndGet();
 		if (watch != null) {
 			watch.cancel(false);
 			watch = null;
@@ -236,22 +312,34 @@ public final class WindowsPlatform implements Platform {
 		exitHandler = r;
 	}
 
-	/** True while the exit-gesture keyboard hook is installed (tests). */
+	/** True while the exit-gesture keyboard hook is installed and running (it starts asynchronously; tests). */
 	public synchronized boolean keyHookRunning() {
 		return keyHook != null && keyHook.running();
 	}
 
-	/** Exit gesture or window gone: tell the zoom controller once per zoom (off the hook thread, which must return fast). */
-	private void requestExit() {
-		if (!exitSent.compareAndSet(false, true)) {
+	/**
+	 * Exit gesture or window gone during zoom {@code gen}: tell the zoom controller once per zoom, off the hook thread
+	 * (which must return fast). Ignored if that zoom is already over.
+	 */
+	private void requestExit(final long gen) {
+		if (generation.get() != gen || !exitSent.compareAndSet(false, true)) {
 			return;
 		}
+		dispatchExit(gen);
+	}
+
+	/** After a failed zoomIn (already undone): the controller must still leave its zoom state. */
+	private void requestExitAlways() {
+		dispatchExit(-1);
+	}
+
+	private void dispatchExit(final long gen) {
 		Runnable r = exitHandler;
 		EXEC.execute(() -> {
 			try {
 				if (r != null) {
 					r.run();
-				} else {
+				} else if (gen < 0 || generation.get() == gen) {
 					zoomOut();
 				}
 			} catch (Throwable e) {

@@ -13,6 +13,8 @@ import local.carter.office.client.capture.Target;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Shape;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 /** The parts of Windows capture that run without Windows: target checks and frame pacing (never loads natives). */
 class JavaDesktopSourceTest {
@@ -55,6 +57,16 @@ class JavaDesktopSourceTest {
 			assertFalse(s.isLive());
 			assertEquals(0, r.fulls);
 		}
+	}
+
+	@Test
+	@DisabledOnOs(OS.WINDOWS)
+	void validKeyOffWindowsEndsWithAReasonWithoutNatives() {
+		Recorder r = new Recorder();
+		JavaDesktopSource s = new JavaDesktopSource();
+		s.start(new Target(Mode.WINDOW, 1, "notepad.exe|10", Shape.WIDE_16_9), 30, r);
+		assertEquals(List.of(JavaDesktopSource.REASON_NOT_WINDOWS), r.ended);
+		assertFalse(s.isLive());
 	}
 
 	@Test

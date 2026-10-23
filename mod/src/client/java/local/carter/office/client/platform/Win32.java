@@ -1,8 +1,5 @@
 package local.carter.office.client.platform;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -106,6 +103,9 @@ public final class Win32 {
 		Pointer OpenInputDesktop(int flags, boolean inherit, int access);
 
 		boolean CloseDesktop(Pointer desktop);
+
+		/** Windows 10 1607+; returns the previous context. */
+		Pointer SetThreadDpiAwarenessContext(Pointer context);
 	}
 
 	public interface Dwm extends StdCallLibrary {
@@ -206,22 +206,55 @@ public final class Win32 {
 		return true;
 	}
 
-	/** The window's outer rectangle (screen coordinates, including invisible resize borders), or null. */
-	public @Nullable Rect windowRect(final long hwnd) {
-		RECT r = new RECT();
-		if (!user32.GetWindowRect(hwnd(hwnd), r)) {
-			return null;
+	/*
+	 * Coordinates: every geometry call below runs with this thread switched to per-monitor DPI awareness (v2), so
+	 * GetWindowRect, GetClientRect/ClientToScreen, Get/SetWindowPlacement, SetWindowPos and DWM's extended frame bounds
+	 * (always physical) all speak the same physical-pixel screen coordinates, whatever DPI mode SDL put Minecraft in.
+	 * On Windows versions without SetThreadDpiAwarenessContext (before 10 1607) the process's own mode is used for all
+	 * of them except DWM, which can then disagree by the scale factor on a scaled monitor (beta limitation).
+	 */
+	/** DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (made lazily: touching JNA types loads JNA natives). */
+	static final long DPI_PER_MONITOR_AWARE_V2 = -4;
+
+	private <T> T physical(final java.util.function.Supplier<T> body) {
+		Pointer old = null;
+		try {
+			old = user32.SetThreadDpiAwarenessContext(new Pointer(DPI_PER_MONITOR_AWARE_V2));
+		} catch (Throwable e) {
+			// older Windows: keep the process's mode
 		}
+		try {
+			return body.get();
+		} finally {
+			if (old != null) {
+				try {
+					user32.SetThreadDpiAwarenessContext(old);
+				} catch (Throwable e) {
+					// ignore
+				}
+			}
+		}
+	}
+
+	private static Rect rect(final RECT r) {
 		return new Rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
 	}
 
-	/** The part of the window you can see (without Windows 10/11's invisible borders), or the window rect. */
+	/** The window's outer rectangle (physical screen pixels, including invisible resize borders), or null. */
+	public @Nullable Rect windowRect(final long hwnd) {
+		return physical(() -> {
+			RECT r = new RECT();
+			return user32.GetWindowRect(hwnd(hwnd), r) ? rect(r) : null;
+		});
+	}
+
+	/** The part of the window you can see (without Windows 10/11's invisible borders, physical pixels), or the window rect. */
 	public @Nullable Rect visibleFrame(final long hwnd) {
 		if (dwm != null) {
 			RECT r = new RECT();
 			try {
 				if (dwm.DwmGetWindowAttribute(hwnd(hwnd), DWMWA_EXTENDED_FRAME_BOUNDS, r, r.size()) == 0) {
-					return new Rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
+					return rect(r);
 				}
 			} catch (Throwable e) {
 				// fall through
@@ -230,56 +263,68 @@ public final class Win32 {
 		return windowRect(hwnd);
 	}
 
-	/** The client area in screen coordinates, or null. */
+	/** The client area in physical screen pixels, or null. */
 	public @Nullable Rect clientRectOnScreen(final long hwnd) {
-		RECT r = new RECT();
-		if (!user32.GetClientRect(hwnd(hwnd), r)) {
-			return null;
-		}
-		POINT p = new POINT(0, 0);
-		if (!user32.ClientToScreen(hwnd(hwnd), p)) {
-			return null;
-		}
-		return new Rect(p.x, p.y, r.right - r.left, r.bottom - r.top);
+		return physical(() -> {
+			RECT r = new RECT();
+			if (!user32.GetClientRect(hwnd(hwnd), r)) {
+				return null;
+			}
+			POINT p = new POINT(0, 0);
+			if (!user32.ClientToScreen(hwnd(hwnd), p)) {
+				return null;
+			}
+			return new Rect(p.x, p.y, r.right - r.left, r.bottom - r.top);
+		});
 	}
 
 	/** Saves size, position and minimized/maximized state; null if unavailable. */
 	public @Nullable WINDOWPLACEMENT placement(final long hwnd) {
-		WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
-		wp.length = wp.size();
-		return user32.GetWindowPlacement(hwnd(hwnd), wp) ? wp : null;
+		return physical(() -> {
+			WINDOWPLACEMENT wp = new WINDOWPLACEMENT();
+			wp.length = wp.size();
+			return user32.GetWindowPlacement(hwnd(hwnd), wp) ? wp : null;
+		});
 	}
 
 	public void restorePlacement(final long hwnd, final WINDOWPLACEMENT wp) {
-		wp.length = wp.size();
-		if (!user32.SetWindowPlacement(hwnd(hwnd), wp)) {
-			LOGGER.warn("SetWindowPlacement failed for {}", Long.toHexString(hwnd));
-		}
+		physical(() -> {
+			wp.length = wp.size();
+			if (!user32.SetWindowPlacement(hwnd(hwnd), wp)) {
+				LOGGER.warn("SetWindowPlacement failed for {}", Long.toHexString(hwnd));
+			}
+			return null;
+		});
 	}
 
 	/**
-	 * Un-minimizes / un-maximizes the window and moves it so its visible frame covers {@code area} exactly (screen
-	 * coordinates), on top of other normal windows.
+	 * The outer window rectangle that puts the window's visible frame exactly on {@code area}: the invisible border on
+	 * each side ({@code visible} inset within {@code outer}, never negative) is added back around {@code area}. Pure.
+	 */
+	public static Rect outerFor(final Rect area, final @Nullable Rect outer, final @Nullable Rect visible) {
+		if (outer == null || visible == null) {
+			return area;
+		}
+		int l = Math.max(0, visible.x() - outer.x());
+		int t = Math.max(0, visible.y() - outer.y());
+		int r = Math.max(0, outer.x() + outer.w() - (visible.x() + visible.w()));
+		int b = Math.max(0, outer.y() + outer.h() - (visible.y() + visible.h()));
+		return new Rect(area.x() - l, area.y() - t, area.w() + l + r, area.h() + t + b);
+	}
+
+	/**
+	 * Un-minimizes / un-maximizes the window and moves it so its visible frame covers {@code area} (physical screen
+	 * pixels) exactly, on top of other normal windows.
 	 */
 	public boolean placeOver(final long hwnd, final Rect area) {
-		HWND h = hwnd(hwnd);
-		if (user32.IsIconic(h) || user32.IsZoomed(h)) {
-			user32.ShowWindow(h, SW_RESTORE);
-		}
-		Rect outer = windowRect(hwnd);
-		Rect seen = visibleFrame(hwnd);
-		int l = 0;
-		int t = 0;
-		int r = 0;
-		int b = 0;
-		if (outer != null && seen != null) {
-			l = Math.max(0, seen.x() - outer.x());
-			t = Math.max(0, seen.y() - outer.y());
-			r = Math.max(0, outer.x() + outer.w() - (seen.x() + seen.w()));
-			b = Math.max(0, outer.y() + outer.h() - (seen.y() + seen.h()));
-		}
-		return user32.SetWindowPos(h, null /* HWND_TOP */, area.x() - l, area.y() - t, area.w() + l + r, area.h() + t + b,
-				SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+		return physical(() -> {
+			HWND h = hwnd(hwnd);
+			if (user32.IsIconic(h) || user32.IsZoomed(h)) {
+				user32.ShowWindow(h, SW_RESTORE);
+			}
+			Rect to = outerFor(area, windowRect(hwnd), visibleFrame(hwnd));
+			return user32.SetWindowPos(h, null /* HWND_TOP */, to.x(), to.y(), to.w(), to.h(), SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+		});
 	}
 
 	/**
@@ -313,17 +358,20 @@ public final class Win32 {
 		return (user32.GetAsyncKeyState(vk) & 0x8000) != 0;
 	}
 
-	/** Starts a low-level keyboard hook on its own message-loop thread, feeding {@code chord}; {@code onExit} must return fast. */
+	/**
+	 * Starts a low-level keyboard hook on its own message-loop thread, feeding {@code chord}; returns at once (see
+	 * {@link KeyHook#running()} for readiness). {@code onExit} must return fast.
+	 */
 	public KeyHook hookKeys(final ExitChord chord, final Runnable onExit) {
 		return new KeyHook(chord, onExit);
 	}
 
-	/** A running WH_KEYBOARD_LL hook. {@link #close()} unhooks it and ends its thread. */
+	/** A WH_KEYBOARD_LL hook on its own thread. {@link #close()} unhooks it and ends its thread. */
 	public final class KeyHook implements AutoCloseable {
 		private final Thread thread;
-		private final CountDownLatch ready = new CountDownLatch(1);
 		private volatile int threadId;
 		private volatile @Nullable HHOOK hook;
+		private volatile boolean closed;
 		private final LowLevelKeyboardProc proc; // strong reference: the native hook calls it
 
 		KeyHook(final ExitChord chord, final Runnable onExit) {
@@ -351,44 +399,39 @@ public final class Win32 {
 			};
 			thread = new Thread(this::loop, "office-win-keys");
 			thread.setDaemon(true);
-			thread.start();
-			try {
-				if (!ready.await(2, TimeUnit.SECONDS)) {
-					LOGGER.warn("Keyboard hook thread slow to start");
-				}
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-			}
+			thread.start(); // no waiting: zoomIn runs on the game thread
 		}
 
 		private void loop() {
 			threadId = kernel32.GetCurrentThreadId();
-			HHOOK h = null;
+			HHOOK h = user32.SetWindowsHookEx(WH_KEYBOARD_LL, proc, kernel32.GetModuleHandle(null), 0); // also creates this thread's queue
+			if (h == null) {
+				LOGGER.warn("Keyboard hook not installed (SetWindowsHookEx error {}); double-Esc won't leave the zoom", Native.getLastError());
+				return;
+			}
+			hook = h;
 			try {
-				h = user32.SetWindowsHookEx(WH_KEYBOARD_LL, proc, kernel32.GetModuleHandle(null), 0);
-				hook = h;
-				if (h == null) {
-					LOGGER.warn("SetWindowsHookEx failed: error {}", Native.getLastError());
-					return;
+				if (closed) {
+					return; // closed before we got here: don't wait for a WM_QUIT that may have been posted too early
+				}
+				MSG msg = new MSG();
+				while (user32.GetMessage(msg, null, 0, 0) > 0) {
+					// no windows on this thread: the hook is called from inside GetMessage
 				}
 			} finally {
-				ready.countDown();
+				user32.UnhookWindowsHookEx(h);
+				hook = null;
 			}
-			MSG msg = new MSG();
-			while (user32.GetMessage(msg, null, 0, 0) > 0) {
-				// no windows on this thread: the hook is called from inside GetMessage
-			}
-			user32.UnhookWindowsHookEx(h);
-			hook = null;
 		}
 
-		/** True while the hook is installed and its thread runs. */
+		/** True once the hook is installed, while its thread runs. */
 		public boolean running() {
 			return thread.isAlive() && hook != null;
 		}
 
 		@Override
 		public void close() {
+			closed = true;
 			for (int i = 0; i < 40 && thread.isAlive(); i++) {
 				if (threadId != 0) {
 					user32.PostThreadMessage(threadId, WM_QUIT, new WPARAM(0), new LPARAM(0));

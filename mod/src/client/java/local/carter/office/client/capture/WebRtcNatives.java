@@ -20,6 +20,10 @@ public final class WebRtcNatives {
 
 	private WebRtcNatives() {}
 
+	public static boolean isWindows() {
+		return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
+	}
+
 	/** True on 64-bit x86 Windows, the only platform whose natives the mod ships. */
 	public static boolean supported() {
 		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
@@ -36,8 +40,8 @@ public final class WebRtcNatives {
 			throw failure;
 		}
 		if (!supported()) {
-			failure = new UnsupportedOperationException("Window capture needs 64-bit Windows (this is " + System.getProperty("os.name") + " "
-					+ System.getProperty("os.arch") + ")");
+			failure = new UnsupportedOperationException((isWindows() ? "Window capture isn't supported on Windows on ARM yet"
+					: "Window capture needs Windows") + " (this is " + System.getProperty("os.name") + " " + System.getProperty("os.arch") + ")");
 			throw failure;
 		}
 		try {

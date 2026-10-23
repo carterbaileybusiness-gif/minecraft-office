@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import org.jspecify.annotations.Nullable;
 
@@ -55,7 +56,8 @@ public class HologramSettingsScreen extends Screen {
 	private final BlockPos pos;
 	private final boolean editable;
 	private final String ownerName;
-	private final List<WindowChoice> windows;
+	/** The pickable windows; null while the list is still being fetched off the game thread. */
+	private @Nullable List<WindowChoice> windows;
 	/** Whole-display (Extend) mode can't be picked on this computer (Windows beta): shown greyed out. */
 	private final boolean extendUnavailable;
 
@@ -87,11 +89,14 @@ public class HologramSettingsScreen extends Screen {
 		this.allowed = new HashSet<>(spec == null ? Set.of() : spec.privacy().allowed());
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
 		this.windowKey = spec == null ? null : spec.windowKey();
-		this.windows = editable ? List.copyOf(WindowListProvider.get().windows()) : List.of();
 		this.extendUnavailable = editable && !Platform.current().supportsExtend();
 		if (extendUnavailable && mode == Mode.EXTEND) {
-			mode = Mode.WINDOW; // the only mode this computer can show
-			send();
+			mode = Mode.WINDOW; // shown as the only choice; nothing is sent until the owner changes something
+		}
+		if (editable) {
+			loadWindows();
+		} else {
+			this.windows = List.of();
 		}
 	}
 
@@ -153,7 +158,10 @@ public class HologramSettingsScreen extends Screen {
 		} else {
 			label(left, y, "Window");
 			y += LABEL;
-			if (windows.isEmpty()) {
+			List<WindowChoice> windows = this.windows;
+			if (windows == null) {
+				note(left, y + 6, "Looking for windows…");
+			} else if (windows.isEmpty()) {
 				note(left, y + 6, editable ? "No windows found" : "Shows one window");
 			} else {
 				int pages = Math.max(1, (windows.size() + WINDOWS_PER_PAGE - 1) / WINDOWS_PER_PAGE);
@@ -232,6 +240,20 @@ public class HologramSettingsScreen extends Screen {
 		} else {
 			addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose()).bounds(center - 75, footY, 150, 20).build());
 		}
+	}
+
+	/** Fetches the window list on a background thread (listing can be slow) and redraws the picker when it arrives. */
+	private void loadWindows() {
+		CompletableFuture.supplyAsync(() -> List.copyOf(WindowListProvider.get().windows()), r -> {
+			Thread t = new Thread(r, "office-window-list");
+			t.setDaemon(true);
+			t.start();
+		}).exceptionally(e -> List.of()).thenAccept(list -> minecraft.execute(() -> {
+			windows = list;
+			if (minecraft.gui.screen() == this) {
+				rebuildWidgets();
+			}
+		}));
 	}
 
 	private void setShape(final Shape s) {

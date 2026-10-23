@@ -38,6 +38,9 @@ import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.extension.ExtensionContext;
+import org.junit.jupiter.api.extension.TestWatcher;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
@@ -46,7 +49,26 @@ import org.junit.jupiter.api.condition.OS;
  * has no interactive desktop the GUI tests are skipped with the reason logged — never passed without checking.
  */
 @EnabledOnOs(OS.WINDOWS)
+@ExtendWith(JavaDesktopSourceWindowsTest.Report.class)
 class JavaDesktopSourceWindowsTest {
+	/** One "[win-test] PASS|SKIP|FAIL <test>: <why>" line per test in the CI console (build.gradle echoes [win-test] lines). */
+	static final class Report implements TestWatcher {
+		@Override
+		public void testSuccessful(final ExtensionContext c) {
+			System.out.println("[win-test] PASS " + c.getDisplayName());
+		}
+
+		@Override
+		public void testAborted(final ExtensionContext c, final Throwable cause) {
+			System.out.println("[win-test] SKIP " + c.getDisplayName() + ": " + cause.getMessage());
+		}
+
+		@Override
+		public void testFailed(final ExtensionContext c, final Throwable cause) {
+			System.out.println("[win-test] FAIL " + c.getDisplayName() + ": " + cause);
+		}
+	}
+
 	/** keybd_event, to type into the low-level keyboard hook like a real keyboard would. */
 	public interface Keys extends StdCallLibrary {
 		Keys INSTANCE = Native.load("user32", Keys.class, W32APIOptions.DEFAULT_OPTIONS);
@@ -116,9 +138,8 @@ class JavaDesktopSourceWindowsTest {
 		return value.getAsLong();
 	}
 
-	/** Skips the test, printing the reason to the CI log first (JUnit only keeps it in the XML report). */
+	/** Skips the test; {@link Report} prints the reason to the CI log (JUnit itself only keeps it in the XML report). */
 	private static void skip(final String reason) {
-		System.out.println("[win-test] SKIP: " + reason);
 		Assumptions.abort(reason);
 	}
 
@@ -256,7 +277,7 @@ class JavaDesktopSourceWindowsTest {
 			assertNotNull(visible);
 			assertTrue(Math.abs(visible.x() - 40) <= 2 && Math.abs(visible.y() - 40) <= 2, "placed at " + visible);
 			assertTrue(Math.abs(visible.w() - 640) <= 2 && Math.abs(visible.h() - 400) <= 2, "sized to " + visible);
-			assertTrue(p.keyHookRunning(), "keyboard hook not running while zoomed");
+			assertTrue(waitUntil(p::keyHookRunning, 3_000), "keyboard hook not running while zoomed (it starts asynchronously)");
 
 			// A single Esc reaches the app; two within 350 ms ask to exit.
 			tapEsc();
@@ -272,6 +293,27 @@ class JavaDesktopSourceWindowsTest {
 			Platform.Rect after = w32.windowRect(hwnd);
 			System.out.println("[win-test] restored=" + after);
 			assertEquals(before, after, "window rect not restored");
+		} finally {
+			p.zoomOut();
+			kill(w32, hwnd);
+		}
+	}
+
+	@Test
+	void zoomRefusesAHandleThatNowBelongsToAnotherProgram() throws Exception {
+		Win32 w32 = Win32.get();
+		long hwnd = startNotepad(w32);
+		WindowsPlatform p = new WindowsPlatform();
+		try {
+			Platform.Rect before = w32.windowRect(hwnd);
+			String key = new WindowKey("someotherapp.exe", hwnd).format(); // same HWND, different program
+			HologramSpec spec = new HologramSpec(UUID.randomUUID(), Shape.WIDE_16_9, Mode.WINDOW, Privacy.PUBLIC, 1, key, 2.0, 0, 1, 0, 0f);
+			AtomicInteger exits = new AtomicInteger();
+			p.onExitRequested(exits::incrementAndGet);
+			p.zoomIn(spec, new Platform.Rect(40, 40, 640, 400));
+			assertTrue(waitUntil(() -> exits.get() == 1, 3_000), "a mismatched window must ask to exit");
+			assertEquals(before, w32.windowRect(hwnd), "an unrelated window was moved");
+			assertFalse(p.keyHookRunning());
 		} finally {
 			p.zoomOut();
 			kill(w32, hwnd);

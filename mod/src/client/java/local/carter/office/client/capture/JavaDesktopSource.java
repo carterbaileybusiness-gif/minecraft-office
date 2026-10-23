@@ -24,13 +24,18 @@ import local.carter.office.core.Mode;
  * Windows capture of one app window with webrtc-java's {@link WindowCapturer} (no helper install). Window mode only:
  * an Extend target ends at once with {@link #REASON_EXTEND}. One dedicated thread per running source calls
  * {@code captureFrame()} at 10 fps (30 while the player is working on that window, see {@link #setWorkingKey}), converts
- * each I420 frame to BGRA natively and then to RGBA, and delivers it as a {@link FrameSink#full} frame (no dirty
- * rectangles in v1). When the window goes away ({@code IsWindow} false, or a permanent capture error once it is gone)
- * the sink gets {@code ended("window closed")}.
+ * each I420 frame straight to RGBA natively (libyuv), and delivers it as a {@link FrameSink#full} frame (no dirty
+ * rectangles in v1). When the window goes away ({@code IsWindow} false, or a capture error once it is gone) the sink
+ * gets {@code ended("window closed")}; any other way it stops ends with a short, human-readable reason (also logged).
  */
 public final class JavaDesktopSource implements CaptureSource {
 	public static final String REASON_WINDOW_CLOSED = "window closed";
 	public static final String REASON_EXTEND = "Whole display is coming soon on Windows";
+	public static final String REASON_ARM = "Window capture isn't supported on Windows on ARM yet";
+	public static final String REASON_NOT_WINDOWS = "Window capture needs Windows";
+	public static final String REASON_NO_LIBRARY = "Capture library didn't load";
+	public static final String REASON_CANT_CAPTURE = "Can't capture this window";
+	public static final String REASON_FAILED = "Window capture failed";
 	public static final int IDLE_FPS = 10;
 	public static final int WORKING_FPS = 30;
 	/** Consecutive failed captures of a window that still exists before giving up (~5 s at 10 fps). */
@@ -66,7 +71,9 @@ public final class JavaDesktopSource implements CaptureSource {
 			return;
 		}
 		if (!WebRtcNatives.supported()) {
-			sink.ended("Window capture needs 64-bit Windows");
+			String why = WebRtcNatives.isWindows() ? REASON_ARM : REASON_NOT_WINDOWS;
+			LOGGER.info("Windows capture unavailable: {} ({})", why, System.getProperty("os.arch"));
+			sink.ended(why);
 			return;
 		}
 		Run run = new Run(t, key, maxFps, sink);
@@ -98,17 +105,16 @@ public final class JavaDesktopSource implements CaptureSource {
 	}
 
 	/**
-	 * Converts a captured I420 frame into tightly packed RGBA in {@code direct} (capacity at least w*h*4, written from
-	 * index 0). Natives must be loaded. Public for the Windows tests.
+	 * Converts a captured I420 frame into tightly packed, opaque RGBA in {@code direct} (capacity at least w*h*4,
+	 * written from index 0), in one native pass. Natives must be loaded. Public for the Windows tests.
 	 */
 	public static void toRgba(final VideoFrameBuffer frame, final ByteBuffer direct) throws Exception {
 		int w = frame.getWidth();
 		int h = frame.getHeight();
 		ByteBuffer out = direct.duplicate().clear();
 		out.limit(w * h * 4);
-		// libyuv "ARGB" = bytes B,G,R,A in memory, the same order the capturer used to make the I420 frame.
-		VideoBufferConverter.convertFromI420(frame, out, FourCC.ARGB);
-		BgraToRgba.convert(out, w * 4, w, h, out);
+		// libyuv names formats by little-endian word: "ABGR" is the bytes R,G,B,A in memory (and "ARGB" is B,G,R,A).
+		VideoBufferConverter.convertFromI420(frame, out, FourCC.ABGR);
 	}
 
 	/** One capture session on its own thread. */
@@ -157,7 +163,13 @@ public final class JavaDesktopSource implements CaptureSource {
 			WindowCapturer capturer = null;
 			Win32 w32 = null;
 			try {
-				WebRtcNatives.load();
+				try {
+					WebRtcNatives.load();
+				} catch (RuntimeException e) {
+					LOGGER.warn("Windows capture: {}", e.getMessage());
+					end(REASON_NO_LIBRARY);
+					return;
+				}
 				w32 = Win32.get();
 				String exe = w32.isWindow(key.hwnd()) ? w32.exeName(key.hwnd()) : null;
 				if (exe == null || !exe.equalsIgnoreCase(key.exe())) {
@@ -183,7 +195,7 @@ public final class JavaDesktopSource implements CaptureSource {
 							return;
 						}
 						if (++failures >= MAX_FAILURES) {
-							end("Can't capture this window");
+							end(REASON_CANT_CAPTURE);
 							return;
 						}
 					}
@@ -199,7 +211,7 @@ public final class JavaDesktopSource implements CaptureSource {
 				if (running) {
 					boolean gone = w32 != null && !w32.isWindow(key.hwnd());
 					LOGGER.warn("Windows capture of {} failed", key.exe(), e);
-					end(gone ? REASON_WINDOW_CLOSED : "Window capture failed: " + e.getMessage());
+					end(gone ? REASON_WINDOW_CLOSED : REASON_FAILED);
 				}
 			} finally {
 				if (capturer != null) {
@@ -237,7 +249,8 @@ public final class JavaDesktopSource implements CaptureSource {
 				if (running) {
 					sink.full(w, h, out.duplicate().clear());
 				}
-			} catch (Exception e) {
+			} catch (Throwable e) {
+				// never let anything escape into the native capturer's call frame
 				lastResult = DesktopCapturer.Result.ERROR_TEMPORARY;
 				LOGGER.debug("Frame conversion failed", e);
 			} finally {
@@ -248,6 +261,7 @@ public final class JavaDesktopSource implements CaptureSource {
 		private void end(final String reason) {
 			live = false;
 			if (running && endedSent.compareAndSet(false, true)) {
+				LOGGER.info("Windows capture of {} ended: {}", key.exe(), reason);
 				sink.ended(reason);
 			}
 		}

@@ -115,7 +115,8 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		boolean isZoomed = zoomed.test(be.hologramId());
 		st.contentAlpha = (float) HologramLook.contentAlpha(st.look, distance, isZoomed);
 		st.scanlineAlpha = (float) HologramLook.scanlineAlpha(distance, isZoomed);
-		st.label = HologramLook.label(st.look, spec, isOwner, HologramInteractions.ownerName(mc, be));
+		String detail = isOwner && st.look == State.UNAVAILABLE ? HologramLook.ownDetail(be.hologramId()) : null;
+		st.label = HologramLook.label(st.look, spec, isOwner, HologramInteractions.ownerName(mc, be), detail);
 		st.timeMs = Util.getMillis();
 
 		HologramInteractions.Hover hover = HologramInteractions.hover(partialTicks);
@@ -147,7 +148,7 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		float hw = (float) spec.width() / 2f;
 		float hh = (float) spec.height() / 2f;
 		float seconds = (st.timeMs % 3_600_000L) / 1000f;
-		int glowRgb = st.look == State.NEEDS_HELPER ? AMBER : CYAN;
+		int glowRgb = st.look == State.NEEDS_HELPER || st.look == State.UNAVAILABLE ? AMBER : CYAN;
 		float glowAlpha = glowAlpha(st.look, seconds) + (st.highlighted ? 0.25f : 0f);
 
 		poseStack.pushPose();
@@ -225,7 +226,8 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			case PRIVATE_FROSTED -> 0.40f;
 			case OFFLINE -> 0.13f + 0.07f * (0.5f + 0.5f * (float) Math.sin(seconds * Math.PI / 2.0)); // slow standby breathing
 			case WINDOW_CLOSED -> 0.32f;
-			case NEEDS_HELPER -> 0.50f;
+			case NEEDS_HELPER, UNAVAILABLE -> 0.50f;
+			case PICK_WINDOW -> 0.42f;
 		};
 	}
 
