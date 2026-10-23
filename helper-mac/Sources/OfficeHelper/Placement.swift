@@ -49,7 +49,7 @@ import ApplicationServices
         log("restored window \(placed.windowID) to \(placed.original)")
     }
 
-    private static func setFrame(_ element: AXUIElement, _ frame: CGRect) {
+    static func setFrame(_ element: AXUIElement, _ frame: CGRect) {
         var origin = frame.origin, size = frame.size
         // Size, position, size: a window moving to a smaller display may otherwise keep a clipped size.
         if let value = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value) }

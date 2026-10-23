@@ -8,6 +8,10 @@ import ScreenCaptureKit
     let placement = Placement()
     let cursor = CursorFocus()
     let hotkey = ExitHotkey()
+    /// In-world use: the crosshair as the mouse (drags, clicks into typing mode, scrolling).
+    let input = InWorldInput()
+    /// The player's windows, moved onto a hologram's display while they're in a world.
+    let windowMover = WindowMover()
     private var captures: [Int: SurfaceCapture] = [:]
     private var minecraftPid: pid_t?
     private var zoomedSurface: Int?
@@ -18,16 +22,21 @@ import ScreenCaptureKit
     static let permissionPollSeconds: TimeInterval = 2
     private var askedScreenRecording = false
     private var askedAccessibility = false
-    /// Mirror zoom: Minecraft hidden by us (unhidden on every way out), and the observer that ends the zoom when the
-    /// player brings Minecraft back (Dock, Cmd-Tab, clicking its window).
-    private var hideGuard = MinecraftHideGuard()
-    private var activationObserver: NSObjectProtocol?
     /// Called when the mod disconnects: the helper quits and its displays vanish with it.
     var onFinished: (() -> Void)?
 
     init(server: HelperServer) {
         self.server = server
         displays.log = Log.write; placement.log = Log.write; cursor.log = Log.write
+        input.log = Log.write; windowMover.log = Log.write
+        input.send = { [weak self] message in self?.server.send(message) }
+        input.minecraftPid = { [weak self] in self?.minecraftPid }
+        input.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
+        input.display = { [weak self] slot in
+            guard let self, let live = self.displays.displays[slot] else { return nil }
+            let bounds = CGDisplayBounds(live.displayID)
+            return bounds.isEmpty ? nil : (bounds, live.spec.width, live.spec.height)
+        }
         displays.onTerminated = { [weak self] slot in self?.displayGone(slot: slot) }
         hotkey.onExit = { [weak self] in
             Log.write("exit hotkey")
@@ -63,6 +72,8 @@ import ScreenCaptureKit
         pollTimer?.invalidate(); pollTimer = nil
         permissionTimer?.invalidate(); permissionTimer = nil
         endZoom(notifyMod: false, activateMinecraft: false)
+        input.shutdown()
+        windowMover.restore() // before the displays go: every window back exactly where it was
         for capture in captures.values { capture.stop() }
         captures.removeAll()
         displays.removeAll()
@@ -88,11 +99,23 @@ import ScreenCaptureKit
         case .zoomIn(let p): zoomIn(p)
         case .zoomOut: endZoom(notifyMod: false)
         case .requestPermissions: requestPermissions()
+        case .pointerDown, .pointerMove, .pointerUp, .click, .scroll, .exitTyping:
+            if !AXIsProcessTrusted() { askAccessibilityOnce() }
+            input.handle(message)
+        case .windowsToDisplay(let p): moveWindows(p)
+        case .windowsBack: windowMover.restore()
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
-        case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error:
+        case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
+    }
+
+    private func moveWindows(_ p: WindowsToDisplayPayload) {
+        guard let id = displays.displayID(slot: p.slot) else { sendError("not_found", "no display for slot \(p.slot)"); return }
+        var excluded: Set<pid_t> = [getpid()]
+        if let minecraftPid { excluded.insert(minecraftPid) }
+        windowMover.moveWindows(to: id, excluding: excluded, onlyApps: p.apps.map(Set.init))
     }
 
     private func sendError(_ code: String, _ message: String) {
@@ -259,59 +282,25 @@ import ScreenCaptureKit
             let f = p.mcWindowFrame
             placement.place(windowID: key.windowID, at: CGRect(x: f.x, y: f.y, width: f.w, height: f.h), minecraftPid: minecraftPid)
         case .main:
-            hideMinecraft() // the player is on their real desktop now; no cursor clamp
+            break // Mirror is view-only on a Mac (spec 5.9): nothing to work on
         }
         Log.write("zoom in surface \(p.surface)")
     }
 
-    // MARK: Mirror: Minecraft steps aside
-
-    private func hideMinecraft() {
-        guard let pid = minecraftPid, let minecraft = NSRunningApplication(processIdentifier: pid) else {
-            Log.write("mirror: Minecraft's process is unknown; not hiding")
-            return
-        }
-        hideGuard.hid() // before hide(): even a half-done hide is undone on the way out
-        if !minecraft.hide() { Log.write("mirror: macOS refused to hide Minecraft") }
-        let center = NSWorkspace.shared.notificationCenter
-        if let activationObserver { center.removeObserver(activationObserver) }
-        activationObserver = center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
-            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            guard app?.processIdentifier == pid else { return }
-            MainActor.assumeIsolated {
-                guard let self, self.hideGuard.isHidden else { return }
-                Log.write("mirror: Minecraft is active again; leaving the zoom")
-                self.endZoom(notifyMod: true)
-            }
-        }
-    }
-
-    /// Never leave Minecraft hidden: called on every way out of a zoom.
-    private func unhideMinecraft() {
-        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
-        activationObserver = nil
-        guard hideGuard.shouldUnhide else { return }
-        hideGuard.unhid()
-        if let pid = minecraftPid, let minecraft = NSRunningApplication(processIdentifier: pid), minecraft.isHidden {
-            if !minecraft.unhide() { Log.write("mirror: macOS refused to unhide Minecraft") }
-        }
-    }
-
-    /// Leaves the zoom: hotkey off, cursor released, placed window restored, Minecraft unhidden (Mirror) and in front again.
+    /// Leaves the zoom: hotkey off, cursor released, placed window restored, Minecraft in front again.
     func endZoom(notifyMod: Bool, activateMinecraft: Bool = true) {
         hotkey.disarm()
-        let wasZoomed = zoomedSurface != nil || cursor.isActive || placement.placed != nil || hideGuard.isHidden
+        let wasZoomed = zoomedSurface != nil || cursor.isActive || placement.placed != nil
         if let surface = zoomedSurface { captures[surface]?.setZoomed(false) }
         zoomedSurface = nil
         cursor.release(restore: true)
         placement.restore()
-        unhideMinecraft()
         if activateMinecraft, wasZoomed { activateMinecraftApp() }
         if notifyMod { server.send(.exitZoom) }
         if wasZoomed { Log.write("zoom out (notify mod: \(notifyMod))") }
     }
 
-    private func activateMinecraftApp() {
+    func activateMinecraftApp() {
         guard let pid = minecraftPid, let minecraft = NSRunningApplication(processIdentifier: pid) else { return }
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier == pid { return }

@@ -29,9 +29,9 @@ struct ExitChordDetector {
     }
 }
 
-/// What zooming into a surface does, by what it shows. Mirror: Minecraft steps aside (hidden) so the player uses the
-/// real desktop natively, no cursor clamp, and Minecraft becoming active again (Dock, Cmd-Tab, a click) ends the zoom.
-/// Extend: the cursor moves onto the virtual display and is clamped there. Window: the window is placed over Minecraft.
+/// What zooming into a surface does, by what it shows. Extend: the cursor moves onto the virtual display and is
+/// clamped there. Window: the window is placed over Minecraft. Mirror: nothing (view-only on a Mac, spec 5.9). Zoom
+/// itself is retired on a Mac; the messages stay for protocol compatibility.
 enum ZoomStyle: Equatable {
     case mirror, display, window
 
@@ -43,10 +43,8 @@ enum ZoomStyle: Equatable {
         }
     }
 
-    var hidesMinecraft: Bool { self == .mirror }
     var clampsCursor: Bool { self == .display }
     var placesWindow: Bool { self == .window }
-    var exitsWhenMinecraftActivates: Bool { self == .mirror }
 }
 
 /// Mirror captures are built only once Minecraft's app is in ScreenCaptureKit's shareable content, so it can be
@@ -60,15 +58,6 @@ enum MirrorExclusion {
         if found { return .capture }
         return attempt < delays.count ? .retry(after: delays[attempt]) : .fail
     }
-}
-
-/// Remembers whether the helper hid Minecraft, so every way out of a Mirror zoom (exit gesture, ZOOM_OUT, the surface
-/// ending, the mod disconnecting, the helper quitting) unhides it exactly once and Minecraft is never left hidden.
-struct MinecraftHideGuard {
-    private(set) var isHidden = false
-    mutating func hid() { isHidden = true }
-    mutating func unhid() { isHidden = false }
-    var shouldUnhide: Bool { isHidden }
 }
 
 enum CursorClamp {

@@ -93,15 +93,21 @@ then grant again.
 3. Repeat and press Esc twice during the sleep instead of waiting for `zoomout`: `EXIT_ZOOM`, window restored.
 4. Repeat and close the TextEdit window while zoomed: `ENDED {"reason":"window closed"}` then `EXIT_ZOOM`.
 
-## 6b. Mirror: the main display minus Minecraft, and Minecraft stepping aside
+## 6b. Mirror: the main display minus Minecraft (view-only)
 
-Best done with the mod (step 7): devclient's own process has no windows, so nothing is excluded or hidden by it.
+Best done with the mod (step 7): devclient's own process has no windows, so nothing is excluded by it.
 1. `helper; dev capture 3 main 1920 5 sleep 2` → FRAME of the main display (≤ 1920 wide) with the cursor.
-2. In game: place your first hologram (it is Mirror). It shows your desktop **without** the Minecraft window (no
-   Minecraft-inside-Minecraft); every other window and the cursor are there.
-3. Click it → zoom animation → Minecraft hides; you are on your normal desktop. Double-tap Esc (or Ctrl+Option+Cmd+Esc)
-   → Minecraft comes back, focused, and zooms out. Again, but click Minecraft in the Dock / Cmd-Tab to it → same.
-4. Zoom in, then quit OfficeHelper (`pkill -x OfficeHelper`, never java) → Minecraft unhides itself and zooms out.
+2. In game: switch a hologram to Mirror in its settings. It shows your desktop **without** the Minecraft window (no
+   Minecraft-inside-Minecraft). Clicking it only says it is view-only (zoom is retired on a Mac, spec 5.9).
+
+## 6c. In-world use (the crosshair is the mouse)
+
+Automated, no Minecraft needed: `bash helper-mac/Tools/inputprobe.sh` (builds the probe, compares the delivery routes,
+then drives the signed helper end to end: windows onto a display, a click into typing mode, Esc back, a head-turn text
+selection, a window dragged from display 1 to display 2, scrolling, windows back, quit). By hand with devclient:
+`helper; dev create 1 1920 1080 windowsto 1 com.apple.TextEdit sleep 1 click 1 400 300 sleep 5 windowsback` → TextEdit
+(open a document first) moves onto Office Display 1, gets clicked and the keyboard; press Esc → `TYPING_EXIT esc` and
+the terminal comes back to the front; at the end the window returns to where it was.
 
 ## 7. With the mod (after Task 9)
 

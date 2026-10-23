@@ -18,6 +18,15 @@ enum ProtocolTests {
         ("zoom_in", .zoomIn(ZoomInPayload(surface: 7, mcWindowFrame: WindowRect(x: 0, y: 25, w: 1440, h: 875)))),
         ("zoom_out", .zoomOut),
         ("request_permissions", .requestPermissions),
+        ("pointer_down", .pointerDown(PointerPayload(slot: 1, x: 960, y: 540, button: .left))),
+        ("pointer_move", .pointerMove(PointerPayload(slot: 2, x: 10, y: 20, button: nil))),
+        ("pointer_up", .pointerUp(PointerPayload(slot: 2, x: 10, y: 20, button: .left))),
+        ("scroll", .scroll(ScrollPayload(slot: 1, x: 100, y: 200, dx: 0, dy: -120))),
+        ("click", .click(PointerPayload(slot: 1, x: 300, y: 400, button: .right))),
+        ("exit_typing", .exitTyping),
+        ("windows_to_display", .windowsToDisplay(WindowsToDisplayPayload(slot: 1, apps: nil))),
+        ("windows_to_display_apps", .windowsToDisplay(WindowsToDisplayPayload(slot: 1, apps: ["com.apple.TextEdit"]))),
+        ("windows_back", .windowsBack),
         ("welcome", .welcome(WelcomePayload(version: 1, screenRecording: true, accessibility: false))),
         ("windows", .windows([
             WindowInfo(windowKey: "com.apple.Notes|4321", app: "Notes", title: "Groceries — List", w: 800, h: 600),
@@ -34,6 +43,9 @@ enum ProtocolTests {
         ("ended", .ended(EndedPayload(surface: 8, reason: "window closed"))),
         ("exit_zoom", .exitZoom),
         ("error", .error(ErrorPayload(code: "bad_slot", message: "slot must be 1...4"))),
+        ("typing_exit", .typingExit(ReasonPayload(reason: "esc"))),
+        ("drag_delta", .dragDelta(DeltaPayload(dx: 12, dy: -3))),
+        ("drag_ended", .dragEnded(ReasonPayload(reason: "released"))),
     ]
 
     static func decodeAll(_ bytes: Data) throws -> [Message] {

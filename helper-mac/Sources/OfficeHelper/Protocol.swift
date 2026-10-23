@@ -54,8 +54,13 @@ enum MessageType: UInt8, CaseIterable {
     case hello = 1, listWindows = 2, createDisplay = 3, removeDisplay = 4, capture = 5, stop = 6, ready = 7, zoomIn = 8, zoomOut = 9
     /// Ask macOS for the missing permissions now (native prompts); the helper answers with a fresh WELCOME.
     case requestPermissions = 10
+    /// In-world use (the crosshair is the mouse): a drag the helper drives, a click that enters typing mode, scrolling.
+    case pointerDown = 11, pointerMove = 12, pointerUp = 13, scroll = 14, click = 15, exitTyping = 16
+    /// Joining / leaving a world: the player's windows move onto a hologram's display and back.
+    case windowsToDisplay = 17, windowsBack = 18
     // Helper → mod
     case welcome = 64, windows = 65, display = 66, frame = 67, patch = 68, ended = 69, exitZoom = 70, error = 71
+    case typingExit = 72, dragDelta = 73, dragEnded = 74
 }
 
 enum ProtocolError: Error, Equatable {
@@ -121,6 +126,16 @@ struct CapturePayload: Codable, Equatable {
 struct WindowRect: Codable, Equatable { var x: Int; var y: Int; var w: Int; var h: Int }
 struct ZoomInPayload: Codable, Equatable { var surface: Int; var mcWindowFrame: WindowRect }
 
+/// A point on a virtual display in its pixels (0...w-1, 0...h-1). `button` for POINTER_DOWN / POINTER_UP / CLICK.
+struct PointerPayload: Codable, Equatable { var slot: Int; var x: Int; var y: Int; var button: PointerButton? }
+/// Scroll at a display pixel; dx/dy in pixels of content motion (positive dy = wheel away from you / up).
+struct ScrollPayload: Codable, Equatable { var slot: Int; var x: Int; var y: Int; var dx: Int; var dy: Int }
+/// `apps` (bundle ids) limits which apps' windows move (tests); absent = every app but Minecraft and the helper.
+struct WindowsToDisplayPayload: Codable, Equatable { var slot: Int; var apps: [String]? }
+struct ReasonPayload: Codable, Equatable { var reason: String }
+/// Physical mouse motion (points) during a helper-driven drag, for the mod to turn the player's head with.
+struct DeltaPayload: Codable, Equatable { var dx: Int; var dy: Int }
+
 struct WelcomePayload: Codable, Equatable { var version: Int; var screenRecording: Bool; var accessibility: Bool }
 struct WindowInfo: Codable, Equatable { var windowKey: String; var app: String; var title: String; var w: Int; var h: Int }
 struct DisplayPayload: Codable, Equatable { var slot: Int; var displayId: UInt32; var w: Int; var h: Int }
@@ -170,6 +185,14 @@ enum Message: Equatable {
     case zoomIn(ZoomInPayload)
     case zoomOut
     case requestPermissions
+    case pointerDown(PointerPayload)
+    case pointerMove(PointerPayload)
+    case pointerUp(PointerPayload)
+    case scroll(ScrollPayload)
+    case click(PointerPayload)
+    case exitTyping
+    case windowsToDisplay(WindowsToDisplayPayload)
+    case windowsBack
     case welcome(WelcomePayload)
     case windows([WindowInfo])
     case display(DisplayPayload)
@@ -178,6 +201,9 @@ enum Message: Equatable {
     case ended(EndedPayload)
     case exitZoom
     case error(ErrorPayload)
+    case typingExit(ReasonPayload)
+    case dragDelta(DeltaPayload)
+    case dragEnded(ReasonPayload)
 
     var type: MessageType {
         switch self {
@@ -191,6 +217,14 @@ enum Message: Equatable {
         case .zoomIn: return .zoomIn
         case .zoomOut: return .zoomOut
         case .requestPermissions: return .requestPermissions
+        case .pointerDown: return .pointerDown
+        case .pointerMove: return .pointerMove
+        case .pointerUp: return .pointerUp
+        case .scroll: return .scroll
+        case .click: return .click
+        case .exitTyping: return .exitTyping
+        case .windowsToDisplay: return .windowsToDisplay
+        case .windowsBack: return .windowsBack
         case .welcome: return .welcome
         case .windows: return .windows
         case .display: return .display
@@ -199,6 +233,9 @@ enum Message: Equatable {
         case .ended: return .ended
         case .exitZoom: return .exitZoom
         case .error: return .error
+        case .typingExit: return .typingExit
+        case .dragDelta: return .dragDelta
+        case .dragEnded: return .dragEnded
         }
     }
 
@@ -216,7 +253,12 @@ enum Message: Equatable {
     func payload() throws -> Data {
         switch self {
         case .hello(let p): return try Self.json(p)
-        case .listWindows, .zoomOut, .requestPermissions, .exitZoom: return try Self.json(Empty())
+        case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .windowsBack: return try Self.json(Empty())
+        case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p): return try Self.json(p)
+        case .scroll(let p): return try Self.json(p)
+        case .windowsToDisplay(let p): return try Self.json(p)
+        case .typingExit(let p), .dragEnded(let p): return try Self.json(p)
+        case .dragDelta(let p): return try Self.json(p)
         case .createDisplay(let p): return try Self.json(p)
         case .removeDisplay(let p): return try Self.json(p)
         case .capture(let p): return try Self.json(p)
@@ -296,6 +338,22 @@ enum Message: Equatable {
         case .zoomIn: return .zoomIn(try decodeJSON(ZoomInPayload.self, payload))
         case .zoomOut: return .zoomOut
         case .requestPermissions: return .requestPermissions
+        case .pointerDown, .pointerUp, .click:
+            let p = try decodeJSON(PointerPayload.self, payload)
+            guard p.button != nil else { throw ProtocolError.badPayload("\(type) needs button") }
+            switch type {
+            case .pointerDown: return .pointerDown(p)
+            case .pointerUp: return .pointerUp(p)
+            default: return .click(p)
+            }
+        case .pointerMove: return .pointerMove(try decodeJSON(PointerPayload.self, payload))
+        case .scroll: return .scroll(try decodeJSON(ScrollPayload.self, payload))
+        case .exitTyping: return .exitTyping
+        case .windowsToDisplay: return .windowsToDisplay(try decodeJSON(WindowsToDisplayPayload.self, payload))
+        case .windowsBack: return .windowsBack
+        case .typingExit: return .typingExit(try decodeJSON(ReasonPayload.self, payload))
+        case .dragDelta: return .dragDelta(try decodeJSON(DeltaPayload.self, payload))
+        case .dragEnded: return .dragEnded(try decodeJSON(ReasonPayload.self, payload))
         case .welcome: return .welcome(try decodeJSON(WelcomePayload.self, payload))
         case .windows: return .windows(try decodeJSON([WindowInfo].self, payload))
         case .display: return .display(try decodeJSON(DisplayPayload.self, payload))
