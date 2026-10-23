@@ -11,12 +11,22 @@ import java.util.function.Supplier;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.interact.HologramTracker;
+import local.carter.office.client.platform.Platform;
+import local.carter.office.client.render.HologramLook;
+import local.carter.office.client.render.HologramPlacement;
+import local.carter.office.client.render.HologramRenderer;
 import local.carter.office.client.render.ScreenTexture;
 import local.carter.office.client.render.ScreenTextureRegistry;
+import local.carter.office.core.HologramGeometry.Frame;
 import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Vec3d;
 import local.carter.office.hologram.HologramBlockEntity;
 
+import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -27,22 +37,49 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * when the hologram's {@link Target} changes and stopped when it unloads,
  * changes owner, or the player disconnects. Client thread only.
  *
- * <p>Task 7: disabled unless {@code -Doffice.testPattern=true}, and then every own hologram shows a
- * {@link TestPatternSource}. Tasks 9b/11 install the real capture with {@link #setSourceFactory} and {@link #setEnabled}.
+ * <p>Default source: this computer's own capture ({@link Platform#newOwnSource}: the Mac helper with an adaptive rate,
+ * {@link CaptureRate}: 5 fps while the hologram's front is on screen, 0 when not, 30 while zoomed in; or Windows'
+ * {@link JavaDesktopSource}, which paces itself under {@link #MAX_FPS}). With
+ * {@code -Doffice.testPattern=true} (dev override) every own hologram shows a {@link TestPatternSource} at 30 fps
+ * instead. Without either, own holograms are not fed.
  */
 public final class OwnScreens {
 	public static final String TEST_PATTERN_PROPERTY = "office.testPattern";
 	public static final int MAX_FPS = 30;
 
 	private static final Map<UUID, Feed> FEEDS = new HashMap<>();
-	private static boolean enabled = Boolean.getBoolean(TEST_PATTERN_PROPERTY);
+	private static boolean enabled;
 	private static Supplier<CaptureSource> factory = TestPatternSource::new;
+	/** Whether {@link #factory}'s sources get {@link CaptureSource#setMaxFps} from visibility (real capture). */
+	private static boolean adaptiveRate;
 
-	private record Feed(Target target, CaptureSource source, ScreenTexture texture) {}
+	private static final class Feed {
+		final Target target;
+		final CaptureSource source;
+		final ScreenTexture texture;
+		int fps;
+		CaptureRate.Visibility visibility = new CaptureRate.Visibility();
+
+		Feed(final Target target, final CaptureSource source, final ScreenTexture texture, final int fps) {
+			this.target = target;
+			this.source = source;
+			this.texture = texture;
+			this.fps = fps;
+		}
+	}
 
 	private OwnScreens() {}
 
 	public static void register() {
+		if (Boolean.getBoolean(TEST_PATTERN_PROPERTY)) {
+			enabled = true;
+		} else if (Platform.current().newOwnSource() != null) {
+			factory = () -> Platform.current().newOwnSource();
+			// Mac helper: 5 / 0 / 30 fps from visibility. Windows' JavaDesktopSource paces itself under the MAX_FPS cap.
+			adaptiveRate = !Platform.current().ownSourcePacesItself();
+			enabled = true;
+		}
+		HologramLook.setOwnSourceProvider(OwnScreens::ownSource);
 		ClientTickEvents.END_CLIENT_TICK.register(OwnScreens::tick);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(OwnScreens::stopAll));
 	}
@@ -56,16 +93,23 @@ public final class OwnScreens {
 		enabled = on;
 	}
 
-	/** The source used for each own hologram (default: {@link TestPatternSource}); running feeds restart with it. Client thread. */
+	/** The source used for each own hologram, at a fixed {@link #MAX_FPS}; running feeds restart with it. Client thread. */
 	public static void setSourceFactory(final Supplier<CaptureSource> sourceFactory) {
 		factory = sourceFactory;
+		adaptiveRate = false;
 		stopAll();
 	}
 
 	/** The texture currently fed for one of the local player's holograms, if any. */
 	public static @Nullable ScreenTexture texture(final UUID hologramId) {
 		Feed f = FEEDS.get(hologramId);
-		return f == null ? null : f.texture();
+		return f == null ? null : f.texture;
+	}
+
+	/** Owner-only problems of a hologram's source (for {@link HologramLook}); READY when not fed. */
+	public static HologramLook.OwnSource ownSource(final UUID hologramId) {
+		Feed f = FEEDS.get(hologramId);
+		return f == null ? HologramLook.OwnSource.READY : f.source.status();
 	}
 
 	static void tick(final Minecraft mc) {
@@ -76,6 +120,7 @@ public final class OwnScreens {
 			return;
 		}
 		UUID me = mc.player.getUUID();
+		Camera camera = mc.gameRenderer.mainCamera();
 		Set<UUID> seen = new HashSet<>();
 		for (HologramBlockEntity be : HologramTracker.loaded()) {
 			HologramSpec spec = be.spec();
@@ -88,37 +133,73 @@ public final class OwnScreens {
 			}
 			Target target = Target.of(spec);
 			Feed feed = FEEDS.get(id);
-			if (feed != null && feed.target().equals(target)) {
+			CaptureRate.Visibility visibility = feed != null ? feed.visibility : new CaptureRate.Visibility();
+			// Debounced (1 s) so sweeping the camera past a hologram doesn't STOP / CAPTURE the helper over and over.
+			int fps = adaptiveRate
+					? CaptureRate.fps(visibility.update(visible(camera, be.getBlockPos(), spec), System.nanoTime() / 1_000_000L),
+							HologramRenderer.isZoomed(id))
+					: MAX_FPS;
+			if (feed != null && feed.target.equals(target)) {
+				if (feed.fps != fps) {
+					feed.fps = fps;
+					feed.source.setMaxFps(fps);
+				}
 				continue;
 			}
 			ScreenTexture texture;
 			if (feed != null) {
 				// same hologram, new target: keep the texture (stable id), drop the old picture until the new source's
 				// first frame arrives
-				feed.source().stop();
-				texture = feed.texture();
+				feed.source.stop();
+				texture = feed.texture;
 				texture.clear();
 			} else {
 				texture = ScreenTexture.forHologram(id);
 			}
 			CaptureSource source = factory.get();
+			if (source == null) {
+				if (FEEDS.remove(id) != null) {
+					ScreenTextureRegistry.remove(id);
+				}
+				continue;
+			}
 			ScreenTextureRegistry.register(id, texture);
-			FEEDS.put(id, new Feed(target, source, texture));
-			source.start(target, MAX_FPS, texture);
+			Feed fresh = new Feed(target, source, texture, fps);
+			fresh.visibility = visibility;
+			FEEDS.put(id, fresh);
+			source.start(target, fps, texture);
 		}
 		for (Iterator<Map.Entry<UUID, Feed>> it = FEEDS.entrySet().iterator(); it.hasNext();) {
 			Map.Entry<UUID, Feed> e = it.next();
 			if (!seen.contains(e.getKey())) {
-				e.getValue().source().stop();
+				e.getValue().source.stop();
 				ScreenTextureRegistry.remove(e.getKey());
 				it.remove();
 			}
 		}
 	}
 
+	/** The hologram's front is in the camera's view frustum and within view distance. */
+	private static boolean visible(final @Nullable Camera camera, final BlockPos pos, final HologramSpec spec) {
+		if (camera == null) {
+			return true;
+		}
+		Frame f = HologramPlacement.frame(pos.getX(), pos.getY(), pos.getZ(), spec);
+		Vec3 eye = camera.position();
+		if (!CaptureRate.seesFront(f, new Vec3d(eye.x, eye.y, eye.z))) {
+			return false;
+		}
+		Vec3d half = f.right().scale(f.w() / 2);
+		double hy = f.h() / 2;
+		Vec3d c = f.center();
+		AABB box = new AABB(c.x() - Math.abs(half.x()), c.y() - hy, c.z() - Math.abs(half.z()),
+				c.x() + Math.abs(half.x()), c.y() + hy, c.z() + Math.abs(half.z())).inflate(0.1);
+		return camera.getCullFrustum().isVisible(box);
+	}
+
 	static void stopAll() {
 		for (Map.Entry<UUID, Feed> e : FEEDS.entrySet()) {
-			e.getValue().source().stop();
+			e.getValue().source.stop();
 			ScreenTextureRegistry.remove(e.getKey());
 		}
 		FEEDS.clear();

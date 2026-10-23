@@ -94,6 +94,13 @@ test {
 			logger.lifecycle(event.message.trim())
 		}
 	}
+	// Opt-in live check against the real Mac helper: ./gradlew test -Doffice.liveHelperTest=true [-Doffice.helperPath=...]
+	['office.liveHelperTest', 'office.helperPath'].each { name ->
+		def value = System.getProperty(name)
+		if (value != null) {
+			systemProperty name, value
+		}
+	}
 }
 
 processResources {

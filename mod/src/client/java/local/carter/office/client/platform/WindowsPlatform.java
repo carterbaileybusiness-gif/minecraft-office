@@ -25,6 +25,7 @@ import com.sun.jna.platform.win32.WinUser.WINDOWPLACEMENT;
 import dev.onvoid.webrtc.media.video.desktop.DesktopSource;
 import dev.onvoid.webrtc.media.video.desktop.WindowCapturer;
 
+import local.carter.office.client.capture.CaptureSource;
 import local.carter.office.client.capture.JavaDesktopSource;
 import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.capture.WebRtcNatives;
@@ -78,30 +79,33 @@ public final class WindowsPlatform implements Platform {
 	/** Bumped by every zoomIn/zoomOut, so a late watchdog tick or hook event from an old zoom is ignored. */
 	private final AtomicLong generation = new AtomicLong();
 
-	/** Client start-up on Windows: own holograms capture with {@link JavaDesktopSource}, the settings screen lists windows. */
-	public static void install() {
-		if (!(Platform.current() instanceof WindowsPlatform p)) {
-			return;
-		}
+	/**
+	 * Client start-up on Windows (from {@code OfficeClient} through {@link Platform#register}): the settings screen lists
+	 * windows, new holograms default to Window mode, a zoom is undone when the game stops. Own holograms are fed by
+	 * OwnScreens through {@link #newOwnSource} ({@link JavaDesktopSource}, unless {@code -Doffice.testPattern=true});
+	 * their look comes from {@link JavaDesktopSource#status()} ({@link #ownSourceFor}) plus {@link #ownDetail}.
+	 */
+	@Override
+	public void register() {
 		WebRtcNatives.preload();
-		WindowListProvider.set(p::windows);
-		if (!Boolean.getBoolean(OwnScreens.TEST_PATTERN_PROPERTY)) { // -Doffice.testPattern=true keeps the test pattern
-			OwnScreens.setSourceFactory(JavaDesktopSource::new);
-		}
-		OwnScreens.setEnabled(true);
-		HologramLook.setOwnSourceProvider(WindowsPlatform::ownSource);
+		WindowListProvider.set(this::windowChoices);
 		HologramLook.setOwnDetailProvider(WindowsPlatform::ownDetail);
 		installPlacementDefault();
-		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> p.zoomOut());
-		Runtime.getRuntime().addShutdownHook(new Thread(p::zoomOut, "office-win-restore"));
+		ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> zoomOut());
+		Runtime.getRuntime().addShutdownHook(new Thread(this::zoomOut, "office-win-restore"));
 		LOGGER.info("Minecraft Office: Windows window capture (beta) enabled; webrtc natives {}",
 				WebRtcNatives.supported() ? "available" : "not available on this CPU");
 	}
 
-	/** How the owner's capture of one hologram is doing, for its placeholder panel. */
-	static HologramLook.OwnSource ownSource(final UUID hologramId) {
-		ScreenTexture t = OwnScreens.texture(hologramId);
-		return ownSourceFor(t == null ? null : t.endedReason());
+	@Override
+	public CaptureSource newOwnSource() {
+		return new JavaDesktopSource();
+	}
+
+	/** {@link JavaDesktopSource} paces itself (10 fps, 30 while the player works on that window). */
+	@Override
+	public boolean ownSourcePacesItself() {
+		return true;
 	}
 
 	/** The reason under "Screens unavailable", or null. */
@@ -194,9 +198,21 @@ public final class WindowsPlatform implements Platform {
 		return false;
 	}
 
-	/** Capturable windows of other programs (webrtc-java's list), named by program. Blocks while natives load the first time. */
+	/** {@link #windowChoices} as {@link Platform.WindowInfo}s: program name only (never window titles), size unknown. */
 	@Override
-	public List<WindowChoice> windows() {
+	public List<WindowInfo> windows() {
+		List<WindowInfo> out = new ArrayList<>();
+		for (WindowChoice c : windowChoices()) {
+			out.add(new WindowInfo(c.key(), c.title(), "", 0, 0));
+		}
+		return out;
+	}
+
+	/**
+	 * Capturable windows of other programs (webrtc-java's list), named by program. Blocks while natives load the first
+	 * time, so the settings screen calls it off the game thread; safe from any thread (one capturer per call).
+	 */
+	public List<WindowChoice> windowChoices() {
 		try {
 			WebRtcNatives.load();
 			Win32 w32 = Win32.get();

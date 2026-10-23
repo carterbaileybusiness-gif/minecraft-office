@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
+import local.carter.office.client.platform.NoPlatform;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.platform.WindowsPlatform;
 import local.carter.office.core.HologramSpec;
@@ -58,6 +59,9 @@ public class HologramSettingsScreen extends Screen {
 	private final String ownerName;
 	/** The pickable windows; null while the list is still being fetched off the game thread. */
 	private @Nullable List<WindowChoice> windows;
+	/** Newest window-list fetch started / applied (client thread), so a slow older fetch never replaces a newer list. */
+	private int windowsAsked;
+	private int windowsShown;
 	/** Whole-display (Extend) mode can't be picked on this computer (Windows beta): shown greyed out. */
 	private final boolean extendUnavailable;
 
@@ -89,14 +93,25 @@ public class HologramSettingsScreen extends Screen {
 		this.allowed = new HashSet<>(spec == null ? Set.of() : spec.privacy().allowed());
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
 		this.windowKey = spec == null ? null : spec.windowKey();
-		this.extendUnavailable = editable && !Platform.current().supportsExtend();
+		Platform platform = Platform.current();
+		// Greyed only where own screens work but whole displays don't (Windows beta). Without own-screen support at all
+		// (NoPlatform: Linux, dev) nothing is greyed; the hologram itself says screens aren't set up.
+		this.extendUnavailable = editable && !platform.supportsExtend() && !(platform instanceof NoPlatform);
 		if (extendUnavailable && mode == Mode.EXTEND) {
 			mode = Mode.WINDOW; // shown as the only choice; nothing is sent until the owner changes something
 		}
 		if (editable) {
+			WindowListProvider.get().refresh(); // Mac: asks the helper (LIST_WINDOWS); its reply calls refreshWindows()
 			loadWindows();
 		} else {
 			this.windows = List.of();
+		}
+	}
+
+	/** A fresh window list arrived (client thread): fetch it again off the game thread and show it if it changed. */
+	public void refreshWindows() {
+		if (editable) {
+			loadWindows();
 		}
 	}
 
@@ -242,13 +257,22 @@ public class HologramSettingsScreen extends Screen {
 		}
 	}
 
-	/** Fetches the window list on a background thread (listing can be slow) and redraws the picker when it arrives. */
+	/**
+	 * Fetches the window list on a background thread (Windows: listing is slow and loads natives the first time; Mac:
+	 * the helper's cached list) and redraws the picker on the client thread when it arrives and changed.
+	 */
 	private void loadWindows() {
-		CompletableFuture.supplyAsync(() -> List.copyOf(WindowListProvider.get().windows()), r -> {
+		int ask = ++windowsAsked;
+		WindowListProvider provider = WindowListProvider.get();
+		CompletableFuture.supplyAsync(() -> List.copyOf(provider.windows()), r -> {
 			Thread t = new Thread(r, "office-window-list");
 			t.setDaemon(true);
 			t.start();
 		}).exceptionally(e -> List.of()).thenAccept(list -> minecraft.execute(() -> {
+			if (ask < windowsShown || list.equals(windows)) {
+				return; // a newer list is already shown, or nothing changed
+			}
+			windowsShown = ask;
 			windows = list;
 			if (minecraft.gui.screen() == this) {
 				rebuildWidgets();

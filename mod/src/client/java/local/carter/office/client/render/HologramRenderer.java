@@ -76,6 +76,11 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		zoomed = predicate == null ? id -> false : predicate;
 	}
 
+	/** Whether the local player is zoomed into this hologram (OwnScreens captures it at 30 fps then). */
+	public static boolean isZoomed(final UUID hologramId) {
+		return zoomed.test(hologramId);
+	}
+
 	@Override
 	public HologramRenderState createRenderState() {
 		return new HologramRenderState();

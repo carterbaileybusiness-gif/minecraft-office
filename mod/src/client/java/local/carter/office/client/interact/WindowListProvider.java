@@ -3,8 +3,8 @@ package local.carter.office.client.interact;
 import java.util.List;
 
 /**
- * Supplies the windows the settings screen offers in Window mode. The Mac helper (Task 9b) and Windows capture
- * (Task 11) install a real provider with {@link #set}; the default offers none.
+ * Supplies the windows the settings screen offers in Window mode. The Mac helper (Task 9b, from LIST_WINDOWS) and
+ * Windows capture (Task 11) install a real provider with {@link #set}; the default offers none.
  */
 public interface WindowListProvider {
 	/**
@@ -14,6 +14,9 @@ public interface WindowListProvider {
 	record WindowChoice(String key, String title) {}
 
 	List<WindowChoice> windows();
+
+	/** Asks for a fresh list (the settings screen calls this when it opens; the answer arrives later). */
+	default void refresh() {}
 
 	WindowListProvider NONE = List::of;
 

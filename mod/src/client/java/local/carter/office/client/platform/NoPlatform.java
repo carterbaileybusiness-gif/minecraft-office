@@ -2,18 +2,17 @@ package local.carter.office.client.platform;
 
 import java.util.List;
 
-import local.carter.office.client.interact.WindowListProvider.WindowChoice;
 import local.carter.office.core.HologramSpec;
 
-/** A computer without screen support (placeholder until Task 9b's version lands): no windows, zoom does nothing. */
+/** No own-screen support here (Linux / dev): friends' screens still show. */
 public final class NoPlatform implements Platform {
 	@Override
 	public boolean supportsExtend() {
-		return true; // nothing is greyed out; the hologram shows "Set up screens" instead
+		return false;
 	}
 
 	@Override
-	public List<WindowChoice> windows() {
+	public List<WindowInfo> windows() {
 		return List.of();
 	}
 

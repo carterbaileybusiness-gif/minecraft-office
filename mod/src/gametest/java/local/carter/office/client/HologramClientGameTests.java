@@ -10,6 +10,7 @@ import javax.imageio.ImageIO;
 import com.mojang.blaze3d.platform.InputConstants;
 
 import local.carter.office.client.capture.OwnScreens;
+import local.carter.office.client.capture.TestPatternSource;
 import local.carter.office.client.interact.HologramSettingsScreen;
 import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.render.HologramPlacement;
@@ -332,7 +333,10 @@ public class HologramClientGameTests implements FabricClientGameTest {
 	 * its pixels change between two screenshots 500 ms apart (moving bar + frame counter, uploaded as patches).
 	 */
 	private void liveTextureUpdates(final ClientGameTestContext context, final TestSingleplayerContext sp) {
-		context.runOnClient(mc -> OwnScreens.setEnabled(true));
+		context.runOnClient(mc -> {
+			OwnScreens.setSourceFactory(TestPatternSource::new); // not the Mac helper when run on a Mac
+			OwnScreens.setEnabled(true);
+		});
 		context.waitFor(mc -> clientHologram(mc) != null
 				&& ScreenTextureRegistry.get(clientHologram(mc).hologramId()).map(ScreenTexture::hasFrame).orElse(false), 1200);
 		HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
