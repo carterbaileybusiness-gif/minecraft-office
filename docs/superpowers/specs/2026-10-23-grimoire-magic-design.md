@@ -1,7 +1,17 @@
 # Grimoire Magic — design
 
-Date: 2026-10-23. Owner: Carter. Status: draft for approval. Replaces the Wizards (RPG Series) mod on the Minecraft Office
+Date: 2026-10-23. Owner: Carter. Status: approved by Carter 2026-10-23 evening (with the changes in section 0). Replaces the Wizards (RPG Series) mod on the Minecraft Office
 server. Marks: **(Carter)** = Carter decided; **(my call)** = Claude's default, Carter may override.
+
+## 0. Carter's final changes (override anything below)
+
+- **Recipe:** book + feather + **iron ingot** — everyone should get it early.
+- **Casting (Carter: B, off hand):** grimoire in the **off hand**; with an **empty main hand**, **tap right-click** = quick
+  cast of the selected spell, **hold right-click** = the summoning circle grows (charge) and **release** fires a stronger
+  version. With a tool/block in the main hand, right-click behaves normally (no magic). Select spells with **Shift + scroll**
+  or the **R** wheel. Ultimates still need hand signs. The V cast key is dropped.
+- **Timing (Carter: A, ambitious):** playable for Monday; aim for the full set (5 spells × 6 elements) polished by Sunday.
+  Guaranteed Monday floor: grimoire + element choice + wheel + charge casting + circles + mana + Recall + 2 spells/element.
 
 ## 1. Intent
 
@@ -30,7 +40,7 @@ Anti-goals
 
 ## 3. Player experience
 
-- **Get a grimoire:** craft from a book + feather + diamond (vanilla) **(my call)**. First open → full-screen
+- **Get a grimoire:** craft from a book + feather + iron ingot **(Carter)**. First open → full-screen
   "choose your element" scene: the book opens, six element sigils orbit, hovering previews a signature spell; confirm to
   bind. Choice is permanent; a rare **Re-binding** (crafted from vanilla: e.g. nether star + book) lets you change **(my call)**.
 - **Elements (my call):** Fire, Water, Wind, Lightning, Earth, Shadow.
