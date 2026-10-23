@@ -1,8 +1,10 @@
 package local.carter.office.stream;
 
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -16,6 +18,8 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
@@ -35,9 +39,16 @@ import local.carter.office.core.StreamHeader;
  * UDP relay for shared screens. It never decodes or stores pixels: it checks headers, then forwards bytes.
  *
  * <ul>
- * <li>HELLO = header(type HELLO) + the player's 8-byte session token (from {@code StreamToken}). A valid token binds that
- * player to the source address (a later HELLO with the same token rebinds, e.g. after a NAT port change) and is answered
- * with an 18-byte header(type HELLO_ACK). Unknown tokens get no answer.</li>
+ * <li>Binding is a two-step, return-routable handshake, accepted only from the IP of the player's game connection
+ * (any port, for NAT; a memory/local game connection allows loopback only):
+ * <ol>
+ * <li>HELLO = header(HELLO) + 8-byte token (26 bytes). Valid token from the right IP: answered with a challenge
+ * HELLO_ACK = header(HELLO_ACK) + 8-byte nonce (26 bytes). Nothing is bound yet.</li>
+ * <li>HELLO = header(HELLO) + token + that nonce (34 bytes), from the same IP and port within
+ * {@link #CHALLENGE_TTL_NANOS}: binds the player to that address and is answered with header(HELLO_ACK) alone (18
+ * bytes, "bound"). Rebinding after a NAT port change is the same handshake.</li>
+ * </ol>
+ * Anything else (unknown token, wrong IP, wrong or stale nonce, nonce echoed from another address) gets no answer.</li>
  * <li>TILE / SIZE / CLEAR from a client = header + body + its token. Forwarded only if the source address is bound to the
  * player whose token it carries and that player owns the stream in the current {@link #setRoutes routes}; the token is
  * stripped and the rest is sent unchanged to every viewer of the stream (UDP to its bound address, or through its
@@ -48,7 +59,9 @@ import local.carter.office.core.StreamHeader;
  * </ul>
  *
  * <p>Routes are an immutable snapshot published by the server thread ({@link StreamRouter}); the Netty thread only reads
- * it. Bind failure leaves the relay in payload-only mode ({@link #udpPort()} == 0) instead of throwing.
+ * it. Bind failure leaves the relay in payload-only mode ({@link #udpPort()} == 0) instead of throwing. If the socket
+ * closes unexpectedly the relay logs an error and rebinds the same address once after {@link #REBIND_DELAY_MS}; if that
+ * fails it stays payload-only and runs the {@link #onUdpLost} callback so clients can be told.
  */
 public final class StreamRelayServer implements AutoCloseable {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
@@ -58,6 +71,13 @@ public final class StreamRelayServer implements AutoCloseable {
 	/** Fallback budget per stream (each direction), bytes per second. */
 	public static final int FALLBACK_BYTES_PER_SEC = 150_000;
 	private static final int HELLO_BYTES = StreamHeader.HEADER_BYTES + Packetizer.TOKEN_BYTES;
+	private static final int NONCE_BYTES = 8;
+	private static final int CONFIRM_BYTES = HELLO_BYTES + NONCE_BYTES;
+	/** How long a HELLO challenge nonce stays valid. */
+	public static final long CHALLENGE_TTL_NANOS = TimeUnit.SECONDS.toNanos(10);
+	/** Delay before rebinding after the socket closed unexpectedly. */
+	public static final long REBIND_DELAY_MS = 500;
+	private static final SecureRandom RANDOM = new SecureRandom();
 	/** Largest datagram the relay sends over UDP (a client datagram minus its token is at most 1192). */
 	public static final int UDP_FORWARD_MAX = Packetizer.MAX_DATAGRAM;
 	/** Stateless use only ({@code split}); never reassembles anything server-side. */
@@ -73,7 +93,28 @@ public final class StreamRelayServer implements AutoCloseable {
 		}
 	}
 
-	private record Session(UUID player, byte[] token) {}
+	private record Challenge(InetSocketAddress address, byte[] nonce, long expiresAt) {}
+
+	/** One player's session: token, the IP their game connection uses (null = loopback only), pending challenge. */
+	private static final class Session {
+		final UUID player;
+		final byte[] token;
+		final @Nullable InetAddress gameAddress;
+		volatile @Nullable Challenge challenge;
+
+		Session(final UUID player, final byte[] token, final @Nullable InetAddress gameAddress) {
+			this.player = player;
+			this.token = token;
+			this.gameAddress = gameAddress;
+		}
+
+		boolean allows(final InetAddress source) {
+			if (gameAddress == null || gameAddress.isLoopbackAddress()) {
+				return source.isLoopbackAddress();
+			}
+			return gameAddress.equals(source);
+		}
+	}
 
 	private final int bytesPerSecPerStream;
 	private final LongSupplier nanoTime;
@@ -84,7 +125,11 @@ public final class StreamRelayServer implements AutoCloseable {
 	private volatile Map<Integer, Route> routes = Map.of();
 
 	private @Nullable EventLoopGroup group;
+	private @Nullable Bootstrap bootstrap;
+	private @Nullable InetSocketAddress bindAddress;
 	private volatile @Nullable Channel channel;
+	private volatile boolean closing;
+	private volatile Runnable udpLost = () -> { };
 
 	public StreamRelayServer(final int maxKbpsPerStream) {
 		this(maxKbpsPerStream, System::nanoTime);
@@ -103,16 +148,62 @@ public final class StreamRelayServer implements AutoCloseable {
 		EventLoopGroup g = new MultiThreadIoEventLoopGroup(1, new DefaultThreadFactory("office-relay", true),
 				NioIoHandler.newFactory());
 		try {
-			Channel ch = new Bootstrap().group(g).channel(NioDatagramChannel.class).handler(new Handler()).bind(bind)
-					.syncUninterruptibly().channel();
+			Bootstrap b = new Bootstrap().group(g).channel(NioDatagramChannel.class).handler(new Handler());
+			Channel ch = b.bind(bind).syncUninterruptibly().channel();
 			this.group = g;
-			this.channel = ch;
+			this.bootstrap = b;
+			this.bindAddress = (InetSocketAddress) ch.localAddress();
+			attach(ch);
 			LOGGER.info("[office] Screen relay listening on UDP {}", ch.localAddress());
 		} catch (Exception e) {
 			g.shutdownGracefully(0, 0, TimeUnit.MILLISECONDS);
 			LOGGER.error("[office] Could not open the screen relay on UDP {} ({}). Shared screens will use the slower "
 					+ "game-connection fallback. Check that the port is free and allowed by the host.", bind, e.toString());
 		}
+	}
+
+	/** Run (on a Netty thread) when UDP is gone for good after an unexpected close and a failed rebind. */
+	public void onUdpLost(final Runnable callback) {
+		this.udpLost = callback;
+	}
+
+	private void attach(final Channel ch) {
+		this.channel = ch;
+		ch.closeFuture().addListener(f -> onChannelClosed(ch));
+	}
+
+	/** Socket closed without {@link #close()}: log, then rebind the same address once; on failure go payload-only. */
+	private void onChannelClosed(final Channel ch) {
+		EventLoopGroup g = group;
+		Bootstrap b = bootstrap;
+		InetSocketAddress addr = bindAddress;
+		if (closing || channel != ch || g == null || b == null || addr == null) {
+			return;
+		}
+		channel = null;
+		LOGGER.error("[office] Screen relay UDP socket {} closed unexpectedly; rebinding in {} ms", addr, REBIND_DELAY_MS);
+		g.schedule(() -> {
+			if (closing) {
+				return;
+			}
+			b.bind(addr).addListener((ChannelFutureListener) f -> {
+				if (closing) {
+					f.channel().close();
+				} else if (f.isSuccess()) {
+					attach(f.channel());
+					LOGGER.info("[office] Screen relay rebound on UDP {}", addr);
+				} else {
+					LOGGER.error("[office] Could not rebind the screen relay on UDP {} ({}). Switching everyone to the "
+							+ "game-connection fallback.", addr, String.valueOf(f.cause()));
+					udpLost.run();
+				}
+			});
+		}, REBIND_DELAY_MS, TimeUnit.MILLISECONDS);
+	}
+
+	/** Test hook: the live socket (null when payload-only). */
+	@Nullable Channel channelForTest() {
+		return channel;
 	}
 
 	/** Local UDP port, or 0 when UDP is unavailable (payload-only). */
@@ -125,10 +216,13 @@ public final class StreamRelayServer implements AutoCloseable {
 		return channel == null;
 	}
 
-	/** New session for {@code player}: only HELLOs carrying {@code token} bind it. Replaces any earlier session. */
-	public void register(final UUID player, final long token) {
+	/**
+	 * New session for {@code player}: only HELLOs carrying {@code token} from {@code gameAddress} (the IP of their game
+	 * connection; null for a memory/local connection = loopback only) can bind it. Replaces any earlier session.
+	 */
+	public void register(final UUID player, final long token, final @Nullable InetAddress gameAddress) {
 		unbind(player);
-		sessions.put(player, new Session(player, tokenBytes(token)));
+		sessions.put(player, new Session(player, tokenBytes(token), gameAddress));
 	}
 
 	/** Player left: forget the token and address. */
@@ -202,22 +296,41 @@ public final class StreamRelayServer implements AutoCloseable {
 	}
 
 	private void hello(final byte[] data, final InetSocketAddress from) {
-		if (data.length != HELLO_BYTES) {
+		if (data.length != HELLO_BYTES && data.length != CONFIRM_BYTES) {
 			return;
 		}
 		Session s = sessionWithToken(data, StreamHeader.HEADER_BYTES);
-		if (s == null) {
+		if (s == null || !s.allows(from.getAddress())) {
+			return; // unknown token or not the player's IP: no answer, so no reflection to spoofed sources
+		}
+		long now = nanoTime.getAsLong();
+		if (data.length == HELLO_BYTES) {
+			byte[] nonce = new byte[NONCE_BYTES];
+			RANDOM.nextBytes(nonce);
+			s.challenge = new Challenge(from, nonce, now + CHALLENGE_TTL_NANOS);
+			send(ByteBuffer.allocate(StreamHeader.HEADER_BYTES + NONCE_BYTES)
+					.put(new StreamHeader(StreamHeader.TYPE_HELLO_ACK, 0, 0, 0, 0, 0, 0).encode()).put(nonce).array(), from);
 			return;
 		}
-		InetSocketAddress old = bindings.put(s.player, from);
-		if (old != null && !old.equals(from)) {
-			byAddress.remove(old, s.player);
+		Challenge c = s.challenge;
+		byte[] echoed = java.util.Arrays.copyOfRange(data, HELLO_BYTES, CONFIRM_BYTES);
+		if (c == null || !c.address.equals(from) || now - c.expiresAt > 0 || !MessageDigest.isEqual(c.nonce, echoed)) {
+			return;
 		}
-		UUID previous = byAddress.put(from, s.player);
-		if (previous != null && !previous.equals(s.player)) {
+		s.challenge = null;
+		bind(s.player, from);
+		send(new StreamHeader(StreamHeader.TYPE_HELLO_ACK, 0, 0, 0, 0, 0, 0).encode(), from);
+	}
+
+	private void bind(final UUID player, final InetSocketAddress from) {
+		InetSocketAddress old = bindings.put(player, from);
+		if (old != null && !old.equals(from)) {
+			byAddress.remove(old, player);
+		}
+		UUID previous = byAddress.put(from, player);
+		if (previous != null && !previous.equals(player)) {
 			bindings.remove(previous, from); // someone else's stale binding on this address
 		}
-		send(new StreamHeader(StreamHeader.TYPE_HELLO_ACK, 0, 0, 0, 0, 0, 0).encode(), from);
 	}
 
 	private void media(final StreamHeader h, final byte[] data, final InetSocketAddress from) {
@@ -319,6 +432,7 @@ public final class StreamRelayServer implements AutoCloseable {
 
 	@Override
 	public synchronized void close() {
+		closing = true;
 		Channel ch = channel;
 		channel = null;
 		if (ch != null) {
@@ -369,6 +483,8 @@ public final class StreamRelayServer implements AutoCloseable {
 		}
 	}
 
+	/** Stateless, so the same instance can serve a rebound channel. */
+	@ChannelHandler.Sharable
 	private final class Handler extends SimpleChannelInboundHandler<DatagramPacket> {
 		@Override
 		protected void channelRead0(final ChannelHandlerContext ctx, final DatagramPacket packet) {

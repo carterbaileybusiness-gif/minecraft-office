@@ -15,6 +15,7 @@ import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
+import local.carter.office.stream.StreamRouter;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -130,6 +131,7 @@ public class HologramBlockEntity extends BlockEntity {
 		super.preRemoveSideEffects(pos, state);
 		if (level instanceof ServerLevel serverLevel) {
 			HologramIndex.get(serverLevel.getServer()).remove(hologramId);
+			StreamRouter.signalChange(); // any removal path (hand break, /setblock): end its stream on the next tick
 		}
 	}
 

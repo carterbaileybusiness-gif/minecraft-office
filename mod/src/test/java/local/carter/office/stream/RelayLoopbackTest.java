@@ -96,6 +96,36 @@ class RelayLoopbackTest {
 				.putLong(token).array();
 	}
 
+	/** Second handshake step: HELLO + token + the nonce from the challenge. */
+	private static byte[] confirm(long token, byte[] nonce) {
+		return ByteBuffer.allocate(StreamHeader.HEADER_BYTES + Packetizer.TOKEN_BYTES + 8)
+				.put(new StreamHeader(StreamHeader.TYPE_HELLO, 0, 0, 0, 0, 0, 0).encode())
+				.putLong(token).put(nonce).array();
+	}
+
+	/** Sends HELLO from {@code s}; returns the challenge nonce (asserting a 26-byte HELLO_ACK). */
+	private byte[] challenge(DatagramSocket s, long token) throws Exception {
+		send(s, hello(token));
+		byte[] ack = receive(s, 2000);
+		assertNotNull(ack, "challenge received");
+		assertEquals(StreamHeader.HEADER_BYTES + 8, ack.length, "challenge = header + nonce");
+		assertEquals(StreamHeader.TYPE_HELLO_ACK, StreamHeader.decode(ack).orElseThrow().type());
+		return Arrays.copyOfRange(ack, StreamHeader.HEADER_BYTES, ack.length);
+	}
+
+	/** Echoes {@code nonce} from {@code s}; asserts the 18-byte "bound" HELLO_ACK. */
+	private void echo(DatagramSocket s, long token, byte[] nonce) throws Exception {
+		send(s, confirm(token, nonce));
+		byte[] bound = receive(s, 2000);
+		assertNotNull(bound, "bound ACK received");
+		assertEquals(StreamHeader.HEADER_BYTES, bound.length, "bound = bare header");
+		assertEquals(StreamHeader.TYPE_HELLO_ACK, StreamHeader.decode(bound).orElseThrow().type());
+	}
+
+	private static InetSocketAddress addr(DatagramSocket s) {
+		return new InetSocketAddress(LOOPBACK, s.getLocalPort());
+	}
+
 	/** One single-part TILE datagram (header + payload + token). */
 	private static byte[] tile(int streamId, int seq, int payloadBytes, long token) {
 		byte[] jpeg = new byte[payloadBytes];
@@ -112,13 +142,11 @@ class RelayLoopbackTest {
 		return Arrays.copyOf(datagram, datagram.length - Packetizer.TOKEN_BYTES);
 	}
 
-	/** Registers {@code id} with {@code token} and completes a HELLO from {@code s}; asserts the ACK. */
+	/** Registers {@code id} (game connection on loopback) and completes the two-step handshake from {@code s}. */
 	private void bind(UUID id, long token, DatagramSocket s) throws Exception {
-		relay.register(id, token);
-		send(s, hello(token));
-		byte[] ack = receive(s, 2000);
-		assertNotNull(ack, "HELLO_ACK received");
-		assertEquals(StreamHeader.TYPE_HELLO_ACK, StreamHeader.decode(ack).orElseThrow().type());
+		relay.register(id, token, LOOPBACK);
+		echo(s, token, challenge(s, token));
+		assertEquals(addr(s), relay.boundAddress(id));
 	}
 
 	private void routeOwnerToViewers() {
@@ -127,10 +155,58 @@ class RelayLoopbackTest {
 	}
 
 	@Test
-	void validHelloGetsAck() throws Exception {
+	void validHelloGetsChallengeAndBindsOnlyAfterTheEcho() throws Exception {
 		DatagramSocket s = socket();
-		bind(owner, 0x1234_5678_9ABCL, s);
-		assertEquals(new InetSocketAddress(LOOPBACK, s.getLocalPort()), relay.boundAddress(owner));
+		long token = 0x1234_5678_9ABCL;
+		relay.register(owner, token, LOOPBACK);
+		byte[] nonce = challenge(s, token);
+		assertNull(relay.boundAddress(owner), "not bound by HELLO alone");
+		echo(s, token, nonce);
+		assertEquals(addr(s), relay.boundAddress(owner));
+	}
+
+	@Test
+	void helloFromAnotherIpThanTheGameConnectionIsIgnored() throws Exception {
+		DatagramSocket s = socket();
+		relay.register(owner, 42L, InetAddress.getByName("192.0.2.10")); // game connection from a different IP
+		send(s, hello(42L));
+		assertNull(receive(s, 300), "no ACK to a source that is not the player's IP");
+		assertNull(relay.boundAddress(owner), "not bound");
+
+		// Spoofed source: a loopback player's token arriving "from" a foreign IP (fed straight into the handler).
+		relay.register(v1, 43L, LOOPBACK);
+		InetSocketAddress spoofed = new InetSocketAddress(InetAddress.getByName("192.0.2.99"), 5000);
+		relay.onDatagram(hello(43L), spoofed);
+		relay.onDatagram(confirm(43L, new byte[8]), spoofed);
+		assertNull(relay.boundAddress(v1), "spoofed IP never binds");
+	}
+
+	@Test
+	void nonceReplayFromAnotherAddressOrStaleNonceIsRejected() throws Exception {
+		DatagramSocket a = socket();
+		DatagramSocket b = socket();
+		relay.register(owner, 42L, LOOPBACK);
+		byte[] nonce = challenge(a, 42L);
+
+		relay.onDatagram(confirm(42L, nonce), new InetSocketAddress(InetAddress.getByName("192.0.2.7"), a.getLocalPort()));
+		assertNull(relay.boundAddress(owner), "replay from another IP rejected");
+		send(b, confirm(42L, nonce));
+		assertNull(receive(b, 300), "replay from the same IP but another port: no answer");
+		assertNull(relay.boundAddress(owner), "and no bind");
+		byte[] wrong = nonce.clone();
+		wrong[0] ^= 1;
+		send(a, confirm(42L, wrong));
+		assertNull(receive(a, 300), "wrong nonce: no answer");
+		assertNull(relay.boundAddress(owner));
+
+		byte[] fresh = challenge(a, 42L);
+		clock.addAndGet(StreamRelayServer.CHALLENGE_TTL_NANOS + 1);
+		send(a, confirm(42L, fresh));
+		assertNull(receive(a, 300), "stale nonce: no answer");
+		assertNull(relay.boundAddress(owner));
+
+		echo(a, 42L, challenge(a, 42L));
+		assertEquals(addr(a), relay.boundAddress(owner), "control: a fresh echo from the challenged address binds");
 	}
 
 	@Test
@@ -138,7 +214,7 @@ class RelayLoopbackTest {
 		DatagramSocket os = socket();
 		DatagramSocket vs1 = socket();
 		DatagramSocket vs2 = socket();
-		relay.register(owner, 42L);
+		relay.register(owner, 42L, LOOPBACK);
 		bind(v1, 43L, vs1);
 		bind(v2, 44L, vs2);
 		routeOwnerToViewers();
@@ -307,9 +383,10 @@ class RelayLoopbackTest {
 		bind(v1, 43L, vs1);
 		relay.setRoutes(Map.of(SID, new StreamRelayServer.Route(owner, List.of(new StreamRelayServer.Viewer(v1, null)))));
 
-		send(os2, hello(42L));
-		assertNotNull(receive(os2, 2000), "rebind ACKed");
-		assertEquals(new InetSocketAddress(LOOPBACK, os2.getLocalPort()), relay.boundAddress(owner));
+		byte[] nonce = challenge(os2, 42L); // same IP, new port
+		assertEquals(addr(os), relay.boundAddress(owner), "still the old binding until the nonce comes back");
+		echo(os2, 42L, nonce);
+		assertEquals(addr(os2), relay.boundAddress(owner), "rebound after the echo");
 		send(os, tile(SID, 1, 100, 42L));
 		assertNull(receive(vs1, 300), "old address no longer accepted");
 		byte[] ok = tile(SID, 2, 100, 42L);
@@ -319,6 +396,36 @@ class RelayLoopbackTest {
 		relay.unregister(owner);
 		send(os2, ok);
 		assertNull(receive(vs1, 300), "unregistered owner dropped");
+	}
+
+	@Test
+	void unexpectedSocketCloseRebindsTheSamePort() throws Exception {
+		int port = relay.udpPort();
+		relay.channelForTest().close().syncUninterruptibly();
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		while (relay.udpPort() != port && System.nanoTime() < deadline) {
+			Thread.sleep(20);
+		}
+		assertEquals(port, relay.udpPort(), "rebound on the same port");
+		DatagramSocket s = socket();
+		bind(owner, 42L, s); // handshake works on the new socket
+	}
+
+	@Test
+	void unexpectedSocketCloseWithoutRebindSwitchesToFallbackAndSaysSo() throws Exception {
+		java.util.concurrent.CountDownLatch lost = new java.util.concurrent.CountDownLatch(1);
+		relay.onUdpLost(lost::countDown);
+		int port = relay.udpPort();
+		relay.channelForTest().close().syncUninterruptibly();
+		DatagramSocket squatter = new DatagramSocket(new InetSocketAddress(LOOPBACK, port)); // takes the port first
+		sockets.add(squatter);
+		assertTrue(lost.await(5, TimeUnit.SECONDS), "UDP-lost callback ran");
+		assertTrue(relay.payloadOnly(), "payload-only");
+		assertEquals(0, relay.udpPort());
+		List<byte[]> fallback = new CopyOnWriteArrayList<>();
+		relay.setRoutes(Map.of(SID, new StreamRelayServer.Route(owner, List.of(new StreamRelayServer.Viewer(v1, fallback::add)))));
+		assertTrue(relay.fromFallback(owner, stripToken(tile(SID, 1, 100, 42L))), "fallback still routes");
+		assertEquals(1, fallback.size());
 	}
 
 	@Test

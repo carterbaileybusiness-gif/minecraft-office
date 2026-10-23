@@ -2,6 +2,7 @@ package local.carter.office.stream;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -27,7 +29,8 @@ import net.minecraft.world.phys.Vec3;
  * Decides, on the server thread, who streams to whom. A hologram streams while its owner is online and at least one
  * other online player in the same dimension, within {@code viewRange} blocks of the hologram's centre, may view it
  * ({@code privacy.canView}). Recomputed every {@link #UPDATE_INTERVAL_TICKS} ticks and on the next tick after
- * {@link #signalChange()} (privacy change, disconnect, UDP status).
+ * {@link #signalChange()} (disconnect, UDP status). Hologram edits call {@link #rerouteNow()}, which recomputes every live
+ * router synchronously, so a privacy change or removal takes effect before the edit handler returns.
  *
  * <p>Each stream gets a fresh server-wide {@code streamId} when it (re)starts. Signals: owner gets
  * {@code demand(wanted=true)} when a stream starts and {@code demand(wanted=false)} when it stops; each viewer gets
@@ -39,6 +42,8 @@ public final class StreamRouter {
 	/** Server-lifetime (JVM-lifetime) unique stream ids. */
 	private static final AtomicInteger NEXT_STREAM_ID = new AtomicInteger(1);
 	private static final AtomicLong CHANGES = new AtomicLong();
+	/** Routers that {@link #rerouteNow()} updates (weak: a dropped router simply disappears). Server thread only. */
+	private static final Set<StreamRouter> LIVE = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
 	/** Where routing signals go (network in production, a recorder in tests). Called on the server thread. */
 	public interface Sink {
@@ -78,6 +83,7 @@ public final class StreamRouter {
 	private List<Route> routes = List.of();
 	private long ticks;
 	private long seenChanges = -1;
+	private boolean closed;
 
 	/**
 	 * @param players   online players to consider (production: the server's player list)
@@ -89,6 +95,30 @@ public final class StreamRouter {
 		this.viewRange = viewRange;
 		this.players = players;
 		this.holograms = holograms;
+		LIVE.add(this);
+	}
+
+	/** Stops this router: no more updates, signals or routes. */
+	public void close() {
+		closed = true;
+		LIVE.remove(this);
+		routes = List.of();
+		listener.accept(routes);
+	}
+
+	/**
+	 * A hologram was edited or removed: recompute every live router now (server thread), publishing new routes to the
+	 * relay before returning. Privacy changes must not wait for a tick.
+	 */
+	public static void rerouteNow() {
+		signalChange();
+		List<StreamRouter> routers;
+		synchronized (LIVE) {
+			routers = List.copyOf(LIVE);
+		}
+		for (StreamRouter r : routers) {
+			r.update();
+		}
 	}
 
 	/** Something that affects routing changed (privacy, disconnect, UDP status): every router updates on its next tick. */
@@ -103,6 +133,9 @@ public final class StreamRouter {
 
 	/** Call once per server tick. */
 	public void tick() {
+		if (closed) {
+			return;
+		}
 		ticks++;
 		long changes = CHANGES.get();
 		if (changes != seenChanges || ticks % UPDATE_INTERVAL_TICKS == 0) {
@@ -156,6 +189,9 @@ public final class StreamRouter {
 
 	/** Recomputes every stream now. */
 	public void update() {
+		if (closed) {
+			return;
+		}
 		Collection<ServerPlayer> online = online();
 		Map<UUID, ServerPlayer> byId = new HashMap<>();
 		for (ServerPlayer p : online) {

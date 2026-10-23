@@ -1,19 +1,24 @@
 package local.carter.office;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Privacy;
+import local.carter.office.core.StreamHeader;
 import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.net.HologramActions;
 import local.carter.office.net.OfficePayloads;
 import local.carter.office.stream.OfficeConfig;
+import local.carter.office.stream.StreamRelayServer;
 import local.carter.office.stream.StreamRouter;
 
 import net.minecraft.core.BlockPos;
@@ -172,8 +177,9 @@ public class StreamRoutingGameTests {
 				List<Event> ended = rec.find("ended", b, e -> e.streamId == sid);
 				h.assertValueEqual(stop.size(), 1, "owner told to stop");
 				h.assertValueEqual(ended.size(), 1, "viewer told the stream ended");
-				h.assertTrue(stop.get(0).tick - changedAt[0] <= 20, "stop within 20 ticks: " + stop.get(0).tick + " vs " + changedAt[0]);
-				h.assertTrue(ended.get(0).tick - changedAt[0] <= 20, "ended within 20 ticks");
+				// Required: within 20 ticks. Ruling: immediately, so the edit handler reroutes before it returns.
+				h.assertValueEqual(stop.get(0).tick, changedAt[0], "owner told to stop on the same tick as the edit");
+				h.assertValueEqual(ended.get(0).tick, changedAt[0], "viewer told on the same tick as the edit");
 				h.assertValueEqual(router.routes().size(), 0, "relay no longer routes it");
 				h.assertValueEqual(router.viewers(be), Set.of(), "nobody views a private hologram");
 				h.succeed();
@@ -181,6 +187,50 @@ public class StreamRoutingGameTests {
 				removeAll(h, a, b);
 			}
 		});
+	}
+
+	@GameTest(maxTicks = 40)
+	public void privacyBlocksTheVeryNextOwnerDatagram(GameTestHelper h) {
+		ServerPlayer a = player(h, h.absoluteVec(new Vec3(1.5, 1, 3.5)));
+		HologramBlockEntity be = place(h, a);
+		ServerPlayer b = player(h, center(be).add(5, 0, 0));
+		Recorder rec = new Recorder(h);
+		StreamRouter router = router(h, rec, List.of(a, b), be);
+		// The router's routes feed a real relay (payload-only here); B is a fallback viewer so deliveries are visible.
+		StreamRelayServer relay = new StreamRelayServer(OfficeConfig.DEFAULTS.maxKbpsPerStream());
+		List<byte[]> delivered = new ArrayList<>();
+		router.onRoutes(routes -> {
+			Map<Integer, StreamRelayServer.Route> snapshot = new HashMap<>();
+			for (StreamRouter.Route r : routes) {
+				snapshot.put(r.streamId(), new StreamRelayServer.Route(r.owner().getUUID(),
+						r.viewers().stream().map(v -> new StreamRelayServer.Viewer(v.getUUID(), delivered::add)).toList()));
+			}
+			relay.setRoutes(snapshot);
+		});
+
+		h.runAtTickTime(5, () -> {
+			try {
+				int sid = rec.find("start", b).get(0).streamId;
+				h.assertTrue(relay.fromFallback(a.getUUID(), tile(sid, 1)), "owner datagram accepted while public");
+				h.assertValueEqual(delivered.size(), 1, "viewer got it");
+
+				setPrivacy(h, a, be, Privacy.PRIVATE); // no router tick in between
+				h.assertFalse(relay.fromFallback(a.getUUID(), tile(sid, 2)), "very next owner datagram refused");
+				h.assertValueEqual(delivered.size(), 1, "viewer got nothing more");
+				h.assertValueEqual(rec.find("ended", b, e -> e.streamId == sid).size(), 1, "viewer told at once");
+				h.succeed();
+			} finally {
+				relay.close();
+				router.close();
+				removeAll(h, a, b);
+			}
+		});
+	}
+
+	/** One single-part TILE datagram (header + small body), as an owner would send it in a fallback payload. */
+	private static byte[] tile(int streamId, int seq) {
+		return ByteBuffer.allocate(StreamHeader.HEADER_BYTES + 64)
+				.put(new StreamHeader(StreamHeader.TYPE_TILE, streamId, seq, 0, 0, 0, 1).encode()).array();
 	}
 
 	@GameTest(maxTicks = 40)

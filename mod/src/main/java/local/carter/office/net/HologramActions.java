@@ -138,7 +138,7 @@ public final class HologramActions {
 			return false;
 		}
 		be.setSpec(next);
-		StreamRouter.signalChange(); // privacy/position may change who views it: reroute on the next tick
+		StreamRouter.rerouteNow(); // privacy/position may change who views it: reroute before returning
 		return true;
 	}
 
@@ -150,7 +150,7 @@ public final class HologramActions {
 			return false;
 		}
 		StarterKit.give(player, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM));
-		StreamRouter.signalChange();
+		StreamRouter.rerouteNow();
 		return true;
 	}
 }

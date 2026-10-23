@@ -2,6 +2,7 @@ package local.carter.office.stream;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -10,6 +11,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
@@ -49,6 +52,8 @@ public final class StreamService implements StreamRouter.Sink {
 	private final StreamRouter router;
 	/** Players that reported no HELLO_ACK: their viewer datagrams go over the game connection. */
 	private final Set<UUID> udpFailed = ConcurrentHashMap.newKeySet();
+	/** This session's token per online player (re-sent with udpPort 0 if UDP is lost). */
+	private final Map<UUID, Long> tokens = new ConcurrentHashMap<>();
 
 	private StreamService(final MinecraftServer server, final OfficeConfig config) {
 		this.server = server;
@@ -57,6 +62,7 @@ public final class StreamService implements StreamRouter.Sink {
 		this.router = new StreamRouter(this, config.viewRange(), () -> server.getPlayerList().getPlayers(),
 				this::onlineOwnersHolograms);
 		this.router.onRoutes(this::publish);
+		this.relay.onUdpLost(() -> server.execute(this::udpLost));
 	}
 
 	public static @Nullable StreamService get() {
@@ -104,6 +110,7 @@ public final class StreamService implements StreamRouter.Sink {
 		StreamService s = instance;
 		instance = null;
 		if (s != null) {
+			s.router.close();
 			s.relay.close();
 		}
 	}
@@ -114,12 +121,36 @@ public final class StreamService implements StreamRouter.Sink {
 
 	public void onJoin(final ServerPlayer player) {
 		long token = RANDOM.nextLong();
-		relay.register(player.getUUID(), token);
+		relay.register(player.getUUID(), token, gameAddress(player.connection.getRemoteAddress()));
+		tokens.put(player.getUUID(), token);
 		udpFailed.remove(player.getUUID());
 		send(player, new StreamToken(token, relay.udpPort()));
 	}
 
+	/**
+	 * The IP UDP datagrams from this player must come from: their game connection's IP, or null (= loopback only) for an
+	 * in-memory / local connection (singleplayer host, test mocks).
+	 */
+	static @Nullable InetAddress gameAddress(final @Nullable SocketAddress remote) {
+		return remote instanceof InetSocketAddress isa && isa.getAddress() != null ? isa.getAddress() : null;
+	}
+
+	/** UDP socket died and could not be rebound (server thread): tell every client to use the fallback. */
+	private void udpLost() {
+		if (instance != this) {
+			return;
+		}
+		for (ServerPlayer p : server.getPlayerList().getPlayers()) {
+			Long token = tokens.get(p.getUUID());
+			if (token != null) {
+				send(p, new StreamToken(token, 0));
+			}
+		}
+		StreamRouter.rerouteNow(); // republish: every viewer becomes a fallback viewer
+	}
+
 	public void onLeave(final ServerPlayer player) {
+		tokens.remove(player.getUUID());
 		relay.unregister(player.getUUID());
 		udpFailed.remove(player.getUUID());
 		StreamRouter.signalChange();
@@ -166,18 +197,33 @@ public final class StreamService implements StreamRouter.Sink {
 			List<StreamRelayServer.Viewer> viewers = new ArrayList<>(r.viewers().size());
 			for (ServerPlayer v : r.viewers()) {
 				boolean fallback = payloadOnly || udpFailed.contains(v.getUUID());
-				// canSend is checked here (server thread); the sender itself runs on the relay's Netty thread.
-				boolean reachable = ServerPlayNetworking.canSend(v, StreamFallbackTile.TYPE);
 				int sid = r.streamId();
 				Consumer<byte[]> sender = null;
 				if (fallback) {
-					sender = reachable ? bytes -> ServerPlayNetworking.send(v, new StreamFallbackTile(sid, bytes)) : bytes -> { };
+					sender = onServerThread(server,
+							() -> server.getPlayerList().getPlayer(v.getUUID()) == v && !v.hasDisconnected()
+									&& ServerPlayNetworking.canSend(v, StreamFallbackTile.TYPE),
+							bytes -> ServerPlayNetworking.send(v, new StreamFallbackTile(sid, bytes)));
 				}
 				viewers.add(new StreamRelayServer.Viewer(v.getUUID(), sender));
 			}
 			snapshot.put(r.streamId(), new StreamRelayServer.Route(r.owner().getUUID(), viewers));
 		}
 		relay.setRoutes(snapshot);
+	}
+
+	/**
+	 * Wraps a fallback send for the relay: the relay may call it on its Netty thread, so the send is handed to the
+	 * server thread ({@code serverThread.execute}; runs inline when already on it), where {@code stillValid} re-checks
+	 * that the captured player is still this online session before anything is sent.
+	 */
+	static Consumer<byte[]> onServerThread(final Executor serverThread, final BooleanSupplier stillValid,
+			final Consumer<byte[]> send) {
+		return bytes -> serverThread.execute(() -> {
+			if (stillValid.getAsBoolean()) {
+				send.accept(bytes);
+			}
+		});
 	}
 
 	@Override
