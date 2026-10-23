@@ -1,5 +1,7 @@
 package local.carter.office.client.capture;
 
+import local.carter.office.client.render.HologramLook;
+
 /**
  * Something that produces live screen frames for one {@link Target}: the Mac helper (Task 9b), Windows Java capture
  * (Task 11), a network receiver for other players' screens (Task 14), or {@link TestPatternSource}.
@@ -21,4 +23,15 @@ public interface CaptureSource {
 	void stop();
 
 	boolean isLive();
+
+	/**
+	 * Changes the rate of a started source (OwnScreens: 5 while visible, 0 when not, 30 while zoomed). 0 pauses the
+	 * source without ending it; it resumes at the next rate above 0. Sources with a fixed rate ignore this.
+	 */
+	default void setMaxFps(final int fps) {}
+
+	/** Problems only the owner's client knows (helper missing, permission missing, window closed) for the look. */
+	default HologramLook.OwnSource status() {
+		return HologramLook.OwnSource.READY;
+	}
 }

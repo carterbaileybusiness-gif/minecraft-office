@@ -52,7 +52,7 @@ public class HologramSettingsScreen extends Screen {
 	private final BlockPos pos;
 	private final boolean editable;
 	private final String ownerName;
-	private final List<WindowChoice> windows;
+	private List<WindowChoice> windows;
 
 	private Shape shape;
 	private Mode mode;
@@ -83,6 +83,21 @@ public class HologramSettingsScreen extends Screen {
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
 		this.windowKey = spec == null ? null : spec.windowKey();
 		this.windows = editable ? List.copyOf(WindowListProvider.get().windows()) : List.of();
+		if (editable) {
+			WindowListProvider.get().refresh();
+		}
+	}
+
+	/** A fresh window list arrived (client thread): show it. */
+	public void refreshWindows() {
+		if (!editable) {
+			return;
+		}
+		List<WindowChoice> fresh = List.copyOf(WindowListProvider.get().windows());
+		if (!fresh.equals(windows)) {
+			windows = fresh;
+			rebuildWidgets();
+		}
 	}
 
 	@Override
