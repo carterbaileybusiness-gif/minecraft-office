@@ -11,10 +11,13 @@ import local.carter.office.core.Privacy;
 
 /** What a hologram shows to the local viewer, and the words/icon on its placeholder panels (pure logic). */
 public final class HologramLook {
-	public enum State { LIVE, CONNECTING, PRIVATE_FROSTED, OFFLINE, WINDOW_CLOSED, NEEDS_HELPER }
+	public enum State { LIVE, CONNECTING, PRIVATE_FROSTED, OFFLINE, WINDOW_CLOSED, NEEDS_HELPER, PICK_WINDOW, UNAVAILABLE }
 
-	/** Problems with the owner's own capture source; only the owner's client knows these. */
-	public enum OwnSource { READY, NEEDS_HELPER, WINDOW_CLOSED }
+	/**
+	 * Problems with the owner's own capture source; only the owner's client knows these. PICK_WINDOW: this computer can
+	 * only show one window and none is chosen; UNAVAILABLE: capture can't work here (the detail provider says why).
+	 */
+	public enum OwnSource { READY, NEEDS_HELPER, WINDOW_CLOSED, PICK_WINDOW, UNAVAILABLE }
 
 	public enum Icon { NONE, LOCK, POWER, DOWNLOAD, WINDOW }
 
@@ -30,11 +33,21 @@ public final class HologramLook {
 	 * and Windows capture (Task 11) replace this; until then everything is READY.
 	 */
 	private static volatile Function<UUID, OwnSource> ownSource = id -> OwnSource.READY;
+	/** A short reason shown under "Screens unavailable" (owner only), or null. */
+	private static volatile Function<UUID, @Nullable String> ownDetail = id -> null;
 
 	private HologramLook() {}
 
 	public static void setOwnSourceProvider(final Function<UUID, OwnSource> provider) {
 		ownSource = provider == null ? id -> OwnSource.READY : provider;
+	}
+
+	public static void setOwnDetailProvider(final Function<UUID, @Nullable String> provider) {
+		ownDetail = provider == null ? id -> null : provider;
+	}
+
+	public static @Nullable String ownDetail(final UUID hologramId) {
+		return ownDetail.apply(hologramId);
 	}
 
 	public static OwnSource ownSource(final UUID hologramId) {
@@ -70,6 +83,12 @@ public final class HologramLook {
 			if (own == OwnSource.NEEDS_HELPER) {
 				return State.NEEDS_HELPER;
 			}
+			if (own == OwnSource.UNAVAILABLE) {
+				return State.UNAVAILABLE;
+			}
+			if (own == OwnSource.PICK_WINDOW) {
+				return State.PICK_WINDOW;
+			}
 			if (needsWindowPick(spec)) {
 				return State.CONNECTING;
 			}
@@ -87,6 +106,12 @@ public final class HologramLook {
 
 	/** Placeholder text for {@code state}; null for LIVE (the screen itself is shown). */
 	public static @Nullable Label label(final State state, final HologramSpec spec, final boolean isOwner, final String ownerName) {
+		return label(state, spec, isOwner, ownerName, null);
+	}
+
+	/** As above; {@code detail} is the owner's short reason for {@link State#UNAVAILABLE} (ignored otherwise). */
+	public static @Nullable Label label(final State state, final HologramSpec spec, final boolean isOwner, final String ownerName,
+			final @Nullable String detail) {
 		String owner = ownerName == null ? "" : ownerName;
 		return switch (state) {
 			case LIVE -> null;
@@ -97,7 +122,17 @@ public final class HologramLook {
 			case OFFLINE -> new Label("Offline", owner, Icon.POWER);
 			case WINDOW_CLOSED -> new Label("Window closed", isOwner ? "Pick another in settings" : "", Icon.WINDOW);
 			case NEEDS_HELPER -> new Label("Set up screens", "See the Office Handbook", Icon.DOWNLOAD);
+			case PICK_WINDOW -> new Label("Pick a window", "Right-click the emitter", Icon.WINDOW);
+			case UNAVAILABLE -> new Label("Screens unavailable", isOwner && detail != null ? shorten(detail, MAX_DETAIL) : "", Icon.NONE);
 		};
+	}
+
+	/** Longest reason shown on a panel. */
+	public static final int MAX_DETAIL = 48;
+
+	static String shorten(final String s, final int max) {
+		String t = s.strip();
+		return t.length() <= max ? t : t.substring(0, max - 1).stripTrailing() + "…";
 	}
 
 	/** Scanline strength: 0 within {@link #SCANLINE_NEAR} blocks or while zoomed in, 0.10 from one block further out. */

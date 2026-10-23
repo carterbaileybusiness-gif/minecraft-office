@@ -4,6 +4,7 @@ import local.carter.office.client.capture.HologramTestCommand;
 import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramTracker;
+import local.carter.office.client.platform.WindowsPlatform;
 import local.carter.office.client.render.HologramRenderer;
 import local.carter.office.hologram.OfficeBlocks;
 
@@ -18,6 +19,8 @@ public class OfficeClient implements ClientModInitializer {
 		HologramInteractions.register();
 		// Own holograms' live screens (Task 7: test pattern only with -Doffice.testPattern=true; Tasks 9b/11: capture).
 		OwnScreens.register();
+		// Windows (beta, Task 11): window capture + zoom without a helper. Does nothing on other systems.
+		WindowsPlatform.install();
 		// Debug: /hologramtest (dev environment or -Doffice.testPattern=true only).
 		HologramTestCommand.register();
 	}

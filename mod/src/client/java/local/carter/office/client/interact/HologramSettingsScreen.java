@@ -6,10 +6,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
+import local.carter.office.client.platform.Platform;
+import local.carter.office.client.platform.WindowsPlatform;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Privacy;
@@ -24,6 +27,7 @@ import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.CycleButton;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.core.BlockPos;
@@ -52,7 +56,10 @@ public class HologramSettingsScreen extends Screen {
 	private final BlockPos pos;
 	private final boolean editable;
 	private final String ownerName;
-	private final List<WindowChoice> windows;
+	/** The pickable windows; null while the list is still being fetched off the game thread. */
+	private @Nullable List<WindowChoice> windows;
+	/** Whole-display (Extend) mode can't be picked on this computer (Windows beta): shown greyed out. */
+	private final boolean extendUnavailable;
 
 	private Shape shape;
 	private Mode mode;
@@ -82,7 +89,15 @@ public class HologramSettingsScreen extends Screen {
 		this.allowed = new HashSet<>(spec == null ? Set.of() : spec.privacy().allowed());
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
 		this.windowKey = spec == null ? null : spec.windowKey();
-		this.windows = editable ? List.copyOf(WindowListProvider.get().windows()) : List.of();
+		this.extendUnavailable = editable && !Platform.current().supportsExtend();
+		if (extendUnavailable && mode == Mode.EXTEND) {
+			mode = Mode.WINDOW; // shown as the only choice; nothing is sent until the owner changes something
+		}
+		if (editable) {
+			loadWindows();
+		} else {
+			this.windows = List.of();
+		}
 	}
 
 	@Override
@@ -107,15 +122,25 @@ public class HologramSettingsScreen extends Screen {
 		choice(left + 2 * (bw + 4), y, bw, "9:16", shape == Shape.TALL_9_16, () -> setShape(Shape.TALL_9_16));
 		y += ROW + 4;
 
-		CycleButton<Mode> modeButton = CycleButton.<Mode>builder(m -> Component.literal(m == Mode.EXTEND ? "Whole display" : "One window"), mode)
-				.withValues(List.of(Mode.EXTEND, Mode.WINDOW))
-				.create(left, y, COL_W, 20, Component.literal("Shows"), (b, m) -> {
-					mode = m;
-					send();
-					rebuildWidgets();
-				});
-		modeButton.active = editable;
-		addRenderableWidget(modeButton);
+		if (extendUnavailable) {
+			int hw = (COL_W - 4) / 2;
+			Button extend = Button.builder(Component.literal("Whole display"), b -> {}).bounds(left, y, hw, 20).build();
+			extend.active = false;
+			extend.setTooltip(Tooltip.create(Component.literal(Platform.current() instanceof WindowsPlatform
+					? "Coming soon on Windows" : "Not available on this computer")));
+			addRenderableWidget(extend);
+			choice(left + hw + 4, y, hw, "One window", true, () -> {});
+		} else {
+			CycleButton<Mode> modeButton = CycleButton.<Mode>builder(m -> Component.literal(m == Mode.EXTEND ? "Whole display" : "One window"), mode)
+					.withValues(List.of(Mode.EXTEND, Mode.WINDOW))
+					.create(left, y, COL_W, 20, Component.literal("Shows"), (b, m) -> {
+						mode = m;
+						send();
+						rebuildWidgets();
+					});
+			modeButton.active = editable;
+			addRenderableWidget(modeButton);
+		}
 		y += ROW + 4;
 
 		if (mode == Mode.EXTEND) {
@@ -133,7 +158,10 @@ public class HologramSettingsScreen extends Screen {
 		} else {
 			label(left, y, "Window");
 			y += LABEL;
-			if (windows.isEmpty()) {
+			List<WindowChoice> windows = this.windows;
+			if (windows == null) {
+				note(left, y + 6, "Looking for windows…");
+			} else if (windows.isEmpty()) {
 				note(left, y + 6, editable ? "No windows found" : "Shows one window");
 			} else {
 				int pages = Math.max(1, (windows.size() + WINDOWS_PER_PAGE - 1) / WINDOWS_PER_PAGE);
@@ -212,6 +240,20 @@ public class HologramSettingsScreen extends Screen {
 		} else {
 			addRenderableWidget(Button.builder(Component.literal("Done"), b -> onClose()).bounds(center - 75, footY, 150, 20).build());
 		}
+	}
+
+	/** Fetches the window list on a background thread (listing can be slow) and redraws the picker when it arrives. */
+	private void loadWindows() {
+		CompletableFuture.supplyAsync(() -> List.copyOf(WindowListProvider.get().windows()), r -> {
+			Thread t = new Thread(r, "office-window-list");
+			t.setDaemon(true);
+			t.start();
+		}).exceptionally(e -> List.of()).thenAccept(list -> minecraft.execute(() -> {
+			windows = list;
+			if (minecraft.gui.screen() == this) {
+				rebuildWidgets();
+			}
+		}));
 	}
 
 	private void setShape(final Shape s) {
