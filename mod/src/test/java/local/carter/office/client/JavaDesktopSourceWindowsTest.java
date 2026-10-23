@@ -378,6 +378,19 @@ class JavaDesktopSourceWindowsTest {
 			assertEquals(1, rec.alphaOk, "every pixel must be opaque");
 			assertTrue(source.isLive());
 
+			// A second Mirror hologram shares the same screen capture.
+			Recorder rec2 = new Recorder();
+			JavaDesktopSource second = new JavaDesktopSource();
+			second.start(new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9), 30, rec2);
+			try {
+				assertEquals(2, JavaDesktopSource.mirrorSubscribers(), "one shared capture, two holograms");
+				int before = rec.fulls.get();
+				assertTrue(waitUntil(() -> rec2.fulls.get() > 0 && rec.fulls.get() > before, 5_000), "both keep getting frames");
+			} finally {
+				second.stop();
+			}
+			assertEquals(1, JavaDesktopSource.mirrorSubscribers());
+
 			assertTrue(w32.minimize(hwnd) || w32.isMinimized(hwnd), "minimize (Minecraft stepping aside)");
 			assertTrue(waitUntil(() -> w32.isMinimized(hwnd), 3_000), "window not minimized");
 			w32.focus(hwnd); // zoomOut's way back: restores a minimized window first

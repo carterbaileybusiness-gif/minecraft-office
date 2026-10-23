@@ -138,10 +138,10 @@ downloads the small helper (OfficeHelper, a few MB, from this project's GitHub p
   `tccutil reset Accessibility local.carter.office-helper`
 
 Good to know on a Mac:
-- **Mirror** (your first hologram) shows your Mac's screen, everything except Minecraft itself.
-- **Extend** (every extra hologram) gives it its own brand new virtual screen, like plugging in another monitor. It
+- **Extend** (every new hologram) gives it its own brand new virtual screen, like plugging in another monitor. It
   shows up as "Office Display 1" (2, 3...) in System Settings, Displays, and goes away when you quit Minecraft.
-  **Window** mode shows one app window instead.
+  **Window** mode shows one app window instead, and **Mirror** (optional, view-only) shows your Mac's screen,
+  everything except Minecraft itself.
 - Protected video (Netflix and similar) shows black, and password boxes may not accept typing.
 
 <a id="windows"></a>
@@ -149,7 +149,7 @@ Good to know on a Mac:
 
 - **Nothing to install.** Windows holograms show your screen (**Mirror**, everything except Minecraft; needs
   Windows 10 version 2004 or newer) or one app window you pick (**Window**). Extend (a separate virtual screen)
-  comes later, so every new hologram mirrors.
+  comes later, so on Windows every new hologram mirrors.
 - If Windows **SmartScreen** shows a blue "Windows protected your PC" box for anything, click **More info**, then
   **Run anyway**.
 - It is a beta. After you first join, please run the [self-test](#10-something-wrong) and send Carter the report,
@@ -163,9 +163,8 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
 
 1. **Get emitters.** Your first-join starter kit has 4. Need more? Type `/emitter` in chat (limit: 8 holograms each).
 2. **Place it** like a block, on the floor, a desk, anywhere. The hologram appears above it. It can float mid-air.
-   Your **first** hologram is your screen (**Mirror**): exactly what you see on your computer, minus Minecraft, like
-   plugging your laptop into a monitor. **Each extra** hologram is a new empty screen (**Extend**, Mac), like adding
-   monitor #2, #3: drag windows onto it, or open apps while zoomed into it.
+   On a Mac each hologram is a new screen (**Extend**), like plugging in monitor #2, #3. On Windows it is your screen
+   (**Mirror**): exactly what you see on your computer, minus Minecraft.
 3. **Resize.** Hold the emitter, point at a corner of the hologram, then **hold right-click and drag**. A cyan outline
    shows the new size. Let go to set it. Anything from tiny to wall-sized.
 4. **Settings.** Right-click the emitter itself:
@@ -189,7 +188,7 @@ Good to know:
 - Only **you** can resize, change, or remove your holograms. Emitters survive explosions.
 - Friends see your public holograms live but a bit smaller and slower (about 10 frames a second). You always see
   your own at full speed. When you are offline your holograms show a dim "offline" glow.
-- **A Public Mirror shows friends nearby your whole screen** (the settings say so too). Make it **Private** or
+- **A Public (or Show to...) Mirror shows those players your whole screen** (the settings say so too). Make it **Private** or
   **Show to...** when you have something personal open.
 - **Privacy promise:** a Private screen never leaves your computer. It is not hidden after being sent. It is never
   sent at all.

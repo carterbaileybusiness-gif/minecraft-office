@@ -49,6 +49,19 @@ enum ZoomStyle: Equatable {
     var exitsWhenMinecraftActivates: Bool { self == .mirror }
 }
 
+/// Mirror captures are built only once Minecraft's app is in ScreenCaptureKit's shareable content, so it can be
+/// excluded: retried with backoff (about 5 s in all), then the capture fails rather than show Minecraft inside itself.
+enum MirrorExclusion {
+    enum Decision: Equatable { case capture, retry(after: TimeInterval), fail }
+    static let delays: [TimeInterval] = [0.25, 0.5, 1, 1.5, 2]
+
+    /// `attempt` counts from 0; `found` = Minecraft's app is in the shareable content.
+    static func decide(found: Bool, attempt: Int) -> Decision {
+        if found { return .capture }
+        return attempt < delays.count ? .retry(after: delays[attempt]) : .fail
+    }
+}
+
 /// Remembers whether the helper hid Minecraft, so every way out of a Mirror zoom (exit gesture, ZOOM_OUT, the surface
 /// ending, the mod disconnecting, the helper quitting) unhides it exactly once and Minecraft is never left hidden.
 struct MinecraftHideGuard {

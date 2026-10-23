@@ -78,7 +78,8 @@ class WindowsLookTest {
 	void publicMirrorWarnsThatFriendsSeeTheWholeScreen() {
 		assertEquals("Friends nearby can see your whole screen.", HologramLook.mirrorWarning(Mode.MIRROR, Privacy.Level.PUBLIC));
 		assertEquals(null, HologramLook.mirrorWarning(Mode.MIRROR, Privacy.Level.PRIVATE));
-		assertEquals(null, HologramLook.mirrorWarning(Mode.MIRROR, Privacy.Level.SHOW_TO));
+		assertEquals(HologramLook.MIRROR_SHOW_TO_WARNING, HologramLook.mirrorWarning(Mode.MIRROR, Privacy.Level.SHOW_TO),
+				"the players picked see the whole screen too");
 		assertEquals(null, HologramLook.mirrorWarning(Mode.EXTEND, Privacy.Level.PUBLIC));
 		assertEquals(null, HologramLook.mirrorWarning(Mode.WINDOW, Privacy.Level.PUBLIC));
 	}

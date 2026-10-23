@@ -170,9 +170,8 @@ public final class WindowsPlatform implements Platform {
 	}
 
 	/**
-	 * Every hologram after the first is placed as Extend (a new virtual display), which Windows can't make yet: right
-	 * after the local player places one, switch it to Mirror (the first one already mirrors; the owner can pick a window
-	 * in settings instead).
+	 * Every hologram is placed as Extend (a new virtual display), which Windows can't make yet: right after the local
+	 * player places one, switch it to Mirror (the owner can pick a window in settings instead).
 	 */
 	private static void installPlacementDefault() {
 		PlacementDefault placed = new PlacementDefault();

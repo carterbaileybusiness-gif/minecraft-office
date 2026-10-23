@@ -171,7 +171,7 @@ public class HologramEmitterBlock extends BaseEntityBlock {
 		float yaw = facingYaw(state);
 		boolean online = serverLevel.getServer().getPlayerList().getPlayer(owner) != null;
 		HologramIndex index = HologramIndex.get(serverLevel.getServer());
-		// First hologram mirrors the owner's screen; each extra one is a new virtual display (spec 5.8).
+		// Every hologram is a new virtual display on the next free slot (Windows clients switch theirs to Mirror).
 		PlacementPlan.Choice choice = index.placementFor(owner);
 		HologramSpec spec = defaultSpec(owner, choice.displaySlot(), mount(state), yaw).withMode(choice.mode());
 		be.initPlaced(spec, by.getName().getString(), online);
@@ -179,21 +179,21 @@ public class HologramEmitterBlock extends BaseEntityBlock {
 	}
 
 	/**
-	 * Default floor hologram: 16:9, Mirror, Public, width 2, centred above the emitter, bottom edge 0.6 above its centre.
-	 * Placement then picks Mirror or Extend with {@link HologramIndex#placementFor}.
+	 * Default floor hologram: 16:9, Extend, Public, width 2, centred above the emitter, bottom edge 0.6 above its centre.
+	 * Placement then picks the display slot with {@link HologramIndex#placementFor}.
 	 */
 	public static HologramSpec defaultSpec(final UUID owner, final int displaySlot, final float yaw) {
 		return defaultSpec(owner, displaySlot, Mount.FLOOR, yaw);
 	}
 
 	/**
-	 * Default hologram for a mount: 16:9, Mirror, Public, width 2. Floor: centred above the emitter. Wall: centred on the
+	 * Default hologram for a mount: 16:9, Extend, Public, width 2. Floor: centred above the emitter. Wall: centred on the
 	 * clicked face, content plane {@link Mount#WALL_GAP} off the wall, facing out. Ceiling: hanging just below the mount.
 	 */
 	public static HologramSpec defaultSpec(final UUID owner, final int displaySlot, final Mount mount, final float yaw) {
 		double height = DEFAULT_WIDTH / Shape.WIDE_16_9.aspect();
 		Vec3d off = mount.defaultOffsets(yaw, height);
-		return new HologramSpec(owner, Shape.WIDE_16_9, Mode.MIRROR, Privacy.PUBLIC, displaySlot, null, DEFAULT_WIDTH,
+		return new HologramSpec(owner, Shape.WIDE_16_9, Mode.EXTEND, Privacy.PUBLIC, displaySlot, null, DEFAULT_WIDTH,
 				off.x(), off.y(), off.z(), yaw);
 	}
 

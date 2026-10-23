@@ -37,8 +37,9 @@ class HologramSpecTest {
     }
 
     @Test
-    void mirrorIsTheFirstModeAndLegacyNamesStillLoad() {
-        assertEquals(Mode.MIRROR, Mode.values()[0]);
+    void mirrorIsAppendedSoOldOrdinalsKeepTheirMeaningAndLegacyNamesStillLoad() {
+        // Wire (readEnum) uses ordinals: a jar without MIRROR must never read EXTEND as MIRROR or the other way round.
+        assertEquals(List.of(Mode.EXTEND, Mode.WINDOW, Mode.MIRROR), List.of(Mode.values()));
         HologramSpec ext = sample(Shape.WIDE_16_9, Mode.EXTEND, Privacy.PUBLIC, null);
         Map<String, Object> m = new java.util.HashMap<>(ext.toMap());
         assertEquals(Mode.EXTEND, HologramSpec.fromMap(m).mode()); // a stored "EXTEND" stays Extend

@@ -93,7 +93,7 @@ public class HologramSettingsScreen extends Screen {
 		HologramSpec spec = be.spec();
 		this.editable = minecraft.player != null && be.isOwner(minecraft.player.getUUID());
 		this.shape = spec == null ? Shape.WIDE_16_9 : spec.shape();
-		this.mode = spec == null ? Mode.MIRROR : spec.mode();
+		this.mode = spec == null ? Mode.EXTEND : spec.mode();
 		this.privacyLevel = spec == null ? Privacy.Level.PUBLIC : spec.privacy().level();
 		this.allowed = new HashSet<>(spec == null ? Set.of() : spec.privacy().allowed());
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
@@ -250,7 +250,8 @@ public class HologramSettingsScreen extends Screen {
 
 		// ---- footer ----
 		int footY = top + bodyHeight + 8;
-		warningY = HologramLook.mirrorWarning(mode, privacyLevel) != null ? footY - LABEL - 2 : -1;
+		// below the footer when there is room (a Show-to player pager may sit just above it), else just above it
+		warningY = HologramLook.mirrorWarning(mode, privacyLevel) == null ? -1 : footY + 24 + 9 <= height ? footY + 24 : footY - LABEL - 2;
 		int center = width / 2;
 		if (editable) {
 			addRenderableWidget(Button.builder(Component.literal("Pick up"), b -> {
