@@ -1,0 +1,9 @@
+{
+	"required": true,
+	"package": "local.carter.office.mixin.client",
+	"compatibilityLevel": "JAVA_25",
+	"client": [],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

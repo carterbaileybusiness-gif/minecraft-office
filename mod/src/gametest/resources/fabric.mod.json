@@ -1,0 +1,12 @@
+{
+	"schemaVersion": 1,
+	"id": "office-test",
+	"version": "1.0.0",
+	"name": "Minecraft Office tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-gametest": [
+			"local.carter.office.gametest.OfficeGameTest"
+		]
+	}
+}
