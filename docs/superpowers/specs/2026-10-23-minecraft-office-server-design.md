@@ -121,6 +121,21 @@ Only the owner can resize, change settings or remove a hologram **(my call)**.
   monitor, like plugging in monitor #3, #4).
 - Settings offer Mirror / Extend / Window. This supersedes the earlier "no mirror main screen" call in 5.4.
 
+### 5.9 In-world use, no zoom — supersedes 5.5 (zoom) and 5.8's Mirror default on Mac **(Carter, 2026-10-23 ~19:20)**
+"I can't really drag stuff from one monitor to another… maybe we don't do the zoom in and instead just have it so I can
+interact with the monitor from the Minecraft world and drag things over from one to another in the world."
+- **Pointer (Carter: A):** the crosshair is the mouse. Aiming at a hologram puts a small cursor at that point on that screen.
+  Left-click = click, right-click = right-click (never break/place blocks while aimed at a hologram). Hold left-click and turn
+  your head = drag — including dragging a window from one hologram onto another (like across real monitors). Scroll wheel
+  scrolls the app while aimed at a hologram (not the hotbar).
+- **Typing (Carter: A):** clicking into an app enters typing mode: keys go to the app and the player stands still; **Esc**
+  returns to walking/looking (Esc is not delivered to the app in this mode).
+- **Monitors (my call, Carter approved):** on Mac every hologram is an Extend virtual display; Minecraft stays on the real
+  screen. On join, the player's open app windows move onto their first hologram's display; on leave they move back. Holograms
+  2–4 start empty. Holding an emitter still means edit (resize/move/settings). Friends view only; Private unchanged.
+- **Mirror** remains an optional, view-only mode in settings. **Windows (my call):** keeps Mirror/Window + click-to-zoom (beta)
+  until Windows gets virtual displays.
+
 ## 6. How the screens work (architecture)
 
 Three parts **(my call; based on research)**:
