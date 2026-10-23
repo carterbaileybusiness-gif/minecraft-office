@@ -109,6 +109,15 @@ Only the owner can resize, change settings or remove a hologram **(my call)**.
 - Windows get onto a hologram display with normal OS tools: drag across, or open apps while zoomed into that hologram.
   No custom "send window to hologram" feature in v1.
 
+### 5.8 Mirror mode — default **(Carter, 2026-10-23 evening, after play-testing)**
+"It should just be my screen… like when I plug my computer into any monitor, mirror at first, then I can choose extend."
+- New holograms default to **Mirror**: the hologram shows the owner's main display **with Minecraft's own window excluded
+  from the capture** (macOS ScreenCaptureKit excluding the Minecraft app; Windows `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`
+  on Minecraft's window), so there is no Minecraft-inside-Minecraft.
+- Zooming into a Mirror hologram: camera zoom animation, then Minecraft steps aside (hidden/minimized) so the player uses their
+  real desktop natively; double-tap Esc (global hotkey) brings Minecraft back and zooms out.
+- Settings offer Mirror / Extend / Window. This supersedes the earlier "no mirror main screen" call in 5.4.
+
 ## 6. How the screens work (architecture)
 
 Three parts **(my call; based on research)**:
