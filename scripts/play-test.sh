@@ -63,13 +63,27 @@ CFG
   info "wrote minimal prismlauncher.cfg (skips the setup wizard; you'll still sign in once)"
 fi
 
-/usr/bin/python3 -I - "$INST/instance.cfg" "$JAVA" <<'PY'
+# No GitHub release of the helper exists yet: when a locally built (helper-mac/build.sh) OfficeHelper.app is present,
+# point the mod at it with the dev override -Doffice.helperPath so it never tries to download one.
+HELPER_APP="$REPO/helper-mac/build/OfficeHelper.app"
+HELPER_ARG=""
+if [ -d "$HELPER_APP" ]; then
+  HELPER_ARG="-Doffice.helperPath=$HELPER_APP"
+  info "using local helper: $HELPER_APP"
+else
+  info "NOTE: no local helper at $HELPER_APP (build with: scripts/heavy.sh bash helper-mac/build.sh)"
+fi
+
+/usr/bin/python3 -I - "$INST/instance.cfg" "$JAVA" "$HELPER_ARG" <<'PY'
 import sys, os
-path, java = sys.argv[1:3]
+path, java, helper_arg = sys.argv[1:4]
+jvm_args = "-XX:+UseZGC"
+if helper_arg:
+    jvm_args += ' "' + helper_arg + '"'  # quoted: the path contains a space; Prism splits JvmArgs shell-style
 want = {
   "InstanceType": "OneSix", "ConfigVersion": "1.3", "name": "Minecraft Office (Test)", "iconKey": "default",
   "OverrideMemory": "true", "MaxMemAlloc": "3072", "MinMemAlloc": "1024",
-  "OverrideJavaArgs": "true", "JvmArgs": "-XX:+UseZGC",
+  "OverrideJavaArgs": "true", "JvmArgs": jvm_args,
   "OverrideJavaLocation": "true", "JavaPath": java,
 }
 lines, seen = [], set()
