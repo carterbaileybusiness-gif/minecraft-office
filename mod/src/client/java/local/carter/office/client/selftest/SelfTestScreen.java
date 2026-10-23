@@ -1,16 +1,15 @@
 package local.carter.office.client.selftest;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import org.jspecify.annotations.Nullable;
@@ -24,13 +23,17 @@ import com.mojang.renderpearl.api.device.DeviceInfo;
 import com.mojang.renderpearl.api.device.GpuDevice;
 
 import local.carter.office.client.OfficeClient;
+import local.carter.office.client.interact.HologramTracker;
 import local.carter.office.client.platform.MacPlatform;
 import local.carter.office.client.platform.NoPlatform;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.platform.WindowsPlatform;
+import local.carter.office.client.render.HologramPlacement;
 import local.carter.office.client.selftest.SelfTestReport.Line;
 import local.carter.office.client.selftest.SelfTestReport.Status;
 import local.carter.office.client.stream.StreamClient;
+import local.carter.office.core.HologramSpec;
+import local.carter.office.hologram.HologramBlockEntity;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -38,6 +41,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -54,6 +58,9 @@ import net.fabricmc.loader.api.ModContainer;
  * {@link SelfTest} runs off the client thread. The plain-text report is saved as
  * {@code <gameDir>/office-selftest/selftest-<timestamp>.txt}; <b>Copy report</b> puts it on the clipboard and
  * <b>Open folder</b> shows the folder. Closing the screen cancels a running test.
+ *
+ * <p>Opening the screen only reads the window list the platform already has: nothing is started and no permission
+ * prompt can appear until the player presses Run test (the Mac helper then starts and is asked for windows once).
  */
 public final class SelfTestScreen extends Screen {
 	private static final Logger LOGGER = LogUtils.getLogger();
@@ -70,31 +77,28 @@ public final class SelfTestScreen extends Screen {
 	private static boolean openRequested;
 
 	private final @Nullable Screen parent;
-	/** Windows the player may pick (null while loading); index -1 = none (real capture is skipped). */
-	private @Nullable List<Platform.WindowInfo> windows;
-	private List<String> windowLabels = List.of();
-	private int picked = -1;
-	private int windowsAsked;
-
 	// client thread
+	private final WindowPick pick = new WindowPick();
+	private boolean windowsRequested;
+	private int windowsAsked;
 	private final Map<String, Line> lines = new HashMap<>();
 	private List<SelfTest.StepDef> steps = SelfTest.steps();
 	private SelfTest.@Nullable Run run;
 	private @Nullable SelfTestReport report;
 	private @Nullable String text;
-	private @Nullable Path saved;
+	private boolean ranOnce;
 	private String status = "Pick a window to also test real capture (optional), then press Run test.";
 
 	public SelfTestScreen(final @Nullable Screen parent) {
 		super(Component.literal(TITLE));
 		this.parent = parent;
-		loadWindows();
 	}
 
 	// ------------------------------------------------------------------ entry points
 
 	/** Client init: the Esc-menu button and {@code /officeselftest}. */
 	public static void register() {
+		PrivateText.setGameDir(FabricLoader.getInstance().getGameDir());
 		ScreenEvents.AFTER_INIT.register((mc, screen, w, h) -> {
 			if (screen instanceof PauseScreen pause && pause.showsPauseMenu()) {
 				Screens.getWidgets(screen).add(Button.builder(Component.literal(TITLE), b -> mc.gui.setScreen(new SelfTestScreen(screen)))
@@ -114,26 +118,29 @@ public final class SelfTestScreen extends Screen {
 		});
 	}
 
-	/** The window list changed (Mac helper reply): fetch it again. */
+	/** A window list arrived (Mac helper reply): re-read it. Never asks for another list. */
 	public void refreshWindows() {
-		if (run == null || !run.isAlive()) {
-			loadWindows();
-		}
+		loadWindows();
 	}
 
 	// ------------------------------------------------------------------ layout
 
 	@Override
 	protected void init() {
+		if (!windowsRequested) {
+			windowsRequested = true;
+			loadWindows();
+		}
 		int w = 308;
 		int left = (width - w) / 2;
 		int top = 44;
-		boolean running = run != null && run.isAlive();
+		boolean running = isRunning();
 
-		Button pick = Button.builder(Component.literal(trim("Test window: " + pickedLabel(), 196)), b -> cyclePick()).bounds(left, top, 200, 20).build();
-		pick.active = !running && windows != null;
-		addRenderableWidget(pick);
-		Button go = Button.builder(Component.literal(text == null ? "Run test" : "Run again"), b -> runTest()).bounds(left + 204, top, 104, 20).build();
+		Button pickButton = Button.builder(Component.literal(trim("Test window: " + pick.label(emptyLabel()), 196)), b -> cyclePick())
+				.bounds(left, top, 200, 20).build();
+		pickButton.active = !running && pick.loaded();
+		addRenderableWidget(pickButton);
+		Button go = Button.builder(Component.literal(ranOnce ? "Run again" : "Run test"), b -> runTest()).bounds(left + 204, top, 104, 20).build();
 		go.active = !running;
 		addRenderableWidget(go);
 
@@ -163,7 +170,7 @@ public final class SelfTestScreen extends Screen {
 				default -> GREY;
 			};
 			graphics.text(font, st.symbol(), left, y, color);
-			String detail = l == null || l.detail().isEmpty() ? "" : ": " + (report == null ? l.detail() : report.scrubDetail(l.detail()));
+			String detail = l == null || l.detail().isEmpty() ? "" : ": " + l.detail();
 			graphics.text(font, trim(s.name() + detail, 296), left + 12, y, st == Status.PENDING ? GREY : TEXT);
 			y += ROW;
 		}
@@ -187,107 +194,79 @@ public final class SelfTestScreen extends Screen {
 		super.removed();
 	}
 
-	private void cancel() {
+	private boolean isRunning() {
 		SelfTest.Run r = run;
-		if (r != null && r.isAlive()) {
-			r.cancel();
+		return r != null && r.isAlive();
+	}
+
+	private void cancel() {
+		if (isRunning()) {
+			run.cancel();
 		}
 	}
 
 	// ------------------------------------------------------------------ window pick
 
-	/**
-	 * Fetches the window list off the client thread (Windows: slow, loads natives the first time; Mac: starts an
-	 * installed helper if needed and asks it for windows).
-	 */
+	/** On a Mac the list only fills once the helper runs, which only happens when the player presses Run test. */
+	private String emptyLabel() {
+		return Platform.current() instanceof MacPlatform && !ranOnce ? "none yet (press Run test)" : "none found";
+	}
+
+	/** Re-reads the platform's window list off the client thread (Windows: listing is slow the first time). */
 	private void loadWindows() {
 		int ask = ++windowsAsked;
 		Platform platform = Platform.current();
-		CompletableFuture.supplyAsync(() -> {
-			platform.prepareSelfTest();
-			return List.copyOf(platform.windows());
-		}, r -> {
+		Minecraft mc = Minecraft.getInstance();
+		CompletableFuture.supplyAsync(() -> WindowPick.read(platform), r -> {
 			Thread t = new Thread(r, "office-selftest-windows");
 			t.setDaemon(true);
 			t.start();
-		}).exceptionally(e -> List.of()).thenAccept(list -> minecraft.execute(() -> {
-			if (ask != windowsAsked) {
-				return;
+		}).exceptionally(e -> List.of()).thenAccept(list -> mc.execute(() -> {
+			if (ask != windowsAsked || !pick.apply(list)) {
+				return; // a newer read is on its way, or nothing changed
 			}
-			String keep = picked >= 0 && windows != null && picked < windows.size() ? windows.get(picked).key() : null;
-			windows = list;
-			windowLabels = labels(list);
-			picked = -1;
-			for (int i = 0; keep != null && i < list.size(); i++) {
-				if (list.get(i).key().equals(keep)) {
-					picked = i;
-				}
-			}
-			if (minecraft.gui.screen() == this) {
+			if (mc.gui.screen() == this) {
 				rebuildWidgets();
 			}
 		}));
 	}
 
-	/** App names only, numbered when one app has several windows ("Google Chrome (2)"). */
-	static List<String> labels(final List<Platform.WindowInfo> list) {
-		Map<String, Integer> count = new HashMap<>();
-		List<String> out = new ArrayList<>();
-		for (Platform.WindowInfo w : list) {
-			String app = w.app() == null || w.app().isBlank() ? "Window" : w.app();
-			int n = count.merge(app.toLowerCase(Locale.ROOT), 1, Integer::sum);
-			out.add(n == 1 || app.matches(".* \\(\\d+\\)") ? app : app + " (" + n + ")");
-		}
-		return out;
-	}
-
-	private String pickedLabel() {
-		if (windows == null) {
-			return "looking…";
-		}
-		if (windows.isEmpty()) {
-			return "none found";
-		}
-		return picked < 0 ? "None (skip)" : windowLabels.get(picked);
-	}
-
 	private void cyclePick() {
-		List<Platform.WindowInfo> list = windows;
-		if (list == null) {
+		if (!pick.loaded()) {
 			return;
 		}
-		if (list.isEmpty()) {
-			loadWindows(); // look again (e.g. the Mac helper has started meanwhile)
-			Platform.current().refreshWindows();
-			return;
+		if (pick.cycle()) {
+			rebuildWidgets();
+		} else {
+			loadWindows(); // empty: read again (the Mac list arrives after a run)
 		}
-		picked = picked + 1 >= list.size() ? -1 : picked + 1;
-		rebuildWidgets();
 	}
 
 	// ------------------------------------------------------------------ run
 
 	private void runTest() {
-		if (run != null && run.isAlive()) {
+		if (isRunning()) {
 			return;
 		}
 		Platform platform = Platform.current();
-		List<Platform.WindowInfo> list = windows == null ? List.of() : windows;
-		Platform.WindowInfo choice = picked >= 0 && picked < list.size() ? list.get(picked) : null;
+		Platform.WindowInfo choice = pick.choice();
 		SelfTestReport r = new SelfTestReport();
-		r.hideWindowTitles(list);
-		collectInfo(r, platform, choice == null ? null : windowLabels.get(picked));
+		r.hideWindowTitles(pick.windows());
+		collectInfo(r, platform, pick.choiceLabel());
+		SelfTest.ZoomTarget zoom = zoomTarget();
 		report = r;
 		text = null;
-		saved = null;
+		ranOnce = true;
 		lines.clear();
 		steps = SelfTest.steps();
 		status = "Running… (up to 30 s; you can keep playing)";
 		Path dir = folder();
-		run = SelfTest.start(steps, new SelfTest.Context(platform, choice, StreamClient.get(), r), new SelfTest.Listener() {
+		Minecraft mc = Minecraft.getInstance();
+		run = SelfTest.start(steps, new SelfTest.Context(platform, choice, StreamClient.get(), r, zoom), new SelfTest.Listener() {
 			@Override
 			public void changed(final Line line) {
-				minecraft.execute(() -> lines.put(line.id(), line));
+				Line shown = new Line(line.id(), line.name(), line.status(), r.scrubDetail(line.detail()), line.millis());
+				mc.execute(() -> lines.put(shown.id(), shown));
 			}
 
 			@Override
@@ -298,20 +277,19 @@ public final class SelfTestScreen extends Screen {
 					Files.createDirectories(dir);
 					file = dir.resolve("selftest-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT)) + ".txt");
 					Files.writeString(file, rendered, StandardCharsets.UTF_8);
-				} catch (IOException | RuntimeException e) {
-					LOGGER.warn("[office] Could not save the self-test report: {}", e.toString());
-					err = e.getMessage();
+				} catch (Exception e) {
+					err = PrivateText.current().scrub(e.toString());
+					LOGGER.warn("[office] Could not save the self-test report: {}", err);
 					file = null;
 				}
 				Path f = file;
 				String e = err;
-				minecraft.execute(() -> {
+				mc.execute(() -> {
 					text = rendered;
-					saved = f;
 					status = f != null ? "Done. Saved as " + FOLDER + "/" + f.getFileName() + ". Press Copy report and send it to Carter."
 							: "Done, but saving failed (" + e + "). Copy report still works.";
 					LOGGER.info("[office] Self-test finished:\n{}", rendered);
-					if (minecraft.gui.screen() == SelfTestScreen.this) {
+					if (mc.gui.screen() == SelfTestScreen.this) {
 						rebuildWidgets();
 					}
 				});
@@ -332,8 +310,9 @@ public final class SelfTestScreen extends Screen {
 		try {
 			Files.createDirectories(dir);
 			Blaze3D.openPath(dir);
-		} catch (IOException | RuntimeException e) {
-			status = "Couldn't open the folder: it is " + dir;
+		} catch (Exception e) {
+			status = "Couldn't open the folder (" + PrivateText.current().scrub(e.toString()) + "): look for " + FOLDER
+					+ " in your Minecraft folder";
 		}
 	}
 
@@ -342,6 +321,25 @@ public final class SelfTestScreen extends Screen {
 	}
 
 	// ------------------------------------------------------------------ facts (client thread)
+
+	/** The player's first loaded own hologram for the zoom dry run, or null. */
+	private static SelfTest.@Nullable ZoomTarget zoomTarget() {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.player == null) {
+			return null;
+		}
+		UUID me = mc.player.getUUID();
+		for (HologramBlockEntity be : HologramTracker.loaded()) {
+			HologramSpec spec = be.spec();
+			if (spec != null && me.equals(spec.owner())) {
+				BlockPos p = be.getBlockPos();
+				Window w = mc.getWindow();
+				return new SelfTest.ZoomTarget(spec, HologramPlacement.frame(p.getX(), p.getY(), p.getZ(), spec), mc.options.fov().get(),
+						w.getWidth(), w.getHeight());
+			}
+		}
+		return null;
+	}
 
 	/** Versions, Java/OS/CPU/RAM, GPU, display and optional mods. Never the server address or player data. */
 	private void collectInfo(final SelfTestReport r, final Platform platform, final @Nullable String pickedApp) {

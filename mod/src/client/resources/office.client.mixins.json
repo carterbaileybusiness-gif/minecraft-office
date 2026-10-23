@@ -3,7 +3,13 @@
 	"package": "local.carter.office.mixin.client",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
-		"MinecraftUseItemMixin"
+		"CameraZoomMixin",
+		"EntityRendererNameTagMixin",
+		"GameRendererSkipWorldMixin",
+		"MinecraftFrameMixin",
+		"MinecraftUseItemMixin",
+		"OptionsSaveMixin",
+		"PlayerTabOverlayMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

@@ -29,6 +29,8 @@ import java.util.function.Function;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.Timeout;
 
 import local.carter.office.client.helper.HelperProtocol.CreateDisplay;
@@ -85,7 +87,9 @@ class HelperConnectionTest {
 		return connection;
 	}
 
+	// macOS helper only: POSIX 0600 token file (setPosixFilePermissions throws on Windows); the Mac helper is never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void helloCarriesTheTokenAndWelcomeConnects() throws Exception {
 		writeToken();
 		helper = new FakeHelper(dir, n -> new Welcome(1, true, false));
@@ -99,7 +103,9 @@ class HelperConnectionTest {
 		assertTrue(connection.isConnected());
 	}
 
+	// macOS helper only: POSIX 0600 token file (setPosixFilePermissions throws on Windows); the Mac helper is never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void sendAndReceiveAfterWelcome() throws Exception {
 		writeToken();
 		helper = new FakeHelper(dir, n -> new Welcome(1, true, true));
@@ -112,7 +118,9 @@ class HelperConnectionTest {
 		assertEquals(new Display(1, 5, 1920, 1080), events.messages.poll(5, TimeUnit.SECONDS));
 	}
 
+	// macOS helper only: POSIX 0600 token file (setPosixFilePermissions throws on Windows); the Mac helper is never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void busyHelperIsRetriedWithBackoff() throws Exception {
 		writeToken();
 		// First client: a stale connection is still ending -> ERROR busy, closed. Second: welcome.
@@ -125,7 +133,9 @@ class HelperConnectionTest {
 		assertEquals(0, events.disconnects.get(), "a refused attempt is not a disconnect");
 	}
 
+	// macOS helper only: POSIX 0600 token file (setPosixFilePermissions throws on Windows); the Mac helper is never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void launchesTheHelperWhenNoSocketExists() throws Exception {
 		AtomicInteger launches = new AtomicInteger();
 		connect(() -> {
@@ -144,7 +154,9 @@ class HelperConnectionTest {
 		assertEquals(1, launches.get());
 	}
 
+	// macOS helper only: POSIX 0600 token file (setPosixFilePermissions throws on Windows); the Mac helper is never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void reconnectsWhenTheHelperGoesAway() throws Exception {
 		writeToken();
 		helper = new FakeHelper(dir, n -> new Welcome(1, true, true));
@@ -157,7 +169,9 @@ class HelperConnectionTest {
 		assertEquals(500L, sleeps.get(sleeps.size() - 1), "backoff was reset by the successful connection");
 	}
 
+	// macOS helper only: POSIX 0600 token file (setPosixFilePermissions throws on Windows); the Mac helper is never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	@Timeout(10)
 	void sendAndCloseNeverBlockOnAHelperThatStoppedReading() throws Exception {
 		writeToken();
@@ -197,7 +211,9 @@ class HelperConnectionTest {
 		assertEquals(500L, b.next());
 	}
 
+	// macOS helper only: POSIX 0600 token file (setPosixFilePermissions throws on Windows); the Mac helper is never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void tokenMustBeOwnerOnly() throws Exception {
 		Path t = dir.resolve("helper.token");
 		Files.writeString(t, TOKEN);

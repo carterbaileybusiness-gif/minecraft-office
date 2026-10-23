@@ -1,5 +1,9 @@
 package local.carter.office;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Mount;
@@ -448,6 +452,39 @@ public class HologramGameTests {
 		HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
 		h.assertTrue(HologramActions.apply(a, new OfficePayloads.MoveHologram(be.getBlockPos(), 0.5, 2.0, -1.5, 45f)), "move");
 		h.assertValueEqual(be.spec().offZ(), -1.5, "floor holograms move freely");
+		h.succeed();
+	}
+
+	@GameTest
+	public void workingSetIsBroadcastAndClearedOnDisconnect(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		String teamBefore = String.valueOf(a.getTeam());
+		List<List<UUID>> sent = new ArrayList<>();
+		HologramActions.setWorkingBroadcast((server, working) -> sent.add(working));
+		try {
+			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "working");
+			h.assertTrue(HologramActions.isWorking(a.getUUID()), "server knows");
+			h.assertTrue(sent.size() == 1 && sent.get(0).contains(a.getUUID()), "broadcast with the player: " + sent);
+			h.assertTrue(HologramActions.workingPayload().players().contains(a.getUUID()), "what a joining player is sent");
+			h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "repeat is a no-op");
+			h.assertValueEqual(sent.size(), 1, "no broadcast without a change");
+			h.assertValueEqual(String.valueOf(a.getTeam()), teamBefore, "teams / scoreboard untouched");
+			h.assertFalse(a.getDisplayName().getString().contains("working"), "server-side name (chat) unchanged");
+
+			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(false)), "stopped working");
+			h.assertFalse(sent.get(sent.size() - 1).contains(a.getUUID()), "broadcast without the player");
+
+			HologramActions.apply(a, new OfficePayloads.SetWorking(true));
+			int before = sent.size();
+			HologramActions.clearWorking(a); // disconnect
+			h.assertFalse(HologramActions.isWorking(a.getUUID()), "cleared on disconnect");
+			h.assertValueEqual(sent.size(), before + 1, "disconnect is broadcast");
+			h.assertFalse(sent.get(sent.size() - 1).contains(a.getUUID()), "everyone drops the suffix");
+			HologramActions.clearWorking(a);
+			h.assertValueEqual(sent.size(), before + 1, "clearing someone not working sends nothing");
+		} finally {
+			HologramActions.setWorkingBroadcast(null);
+		}
 		h.succeed();
 	}
 

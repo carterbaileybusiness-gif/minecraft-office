@@ -18,9 +18,12 @@ import local.carter.office.client.selftest.SelfTest.Outcome;
 import local.carter.office.client.stream.StbJpeg;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.client.stream.StreamSender;
+import local.carter.office.client.zoom.ZoomPose;
+import local.carter.office.core.HologramGeometry;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Shape;
 import local.carter.office.core.TileCodec;
+import local.carter.office.core.Vec3d;
 
 /**
  * The built-in self-test steps. Captures keep only the frame size and whether it was all black: pixels are looked at
@@ -34,6 +37,8 @@ public final class SelfTestSteps {
 	static final long UDP_WAIT_MS = 4_000;
 	/** Longest wait for the Mac helper to connect before reporting its state. */
 	public static final long HELPER_WAIT_MS = 3_000;
+	/** A zoom camera farther than this from the panel is wrong. */
+	static final double MAX_ZOOM_DISTANCE = 512;
 	/** A pixel with a channel above this isn't black. */
 	static final int BLACK_LEVEL = 16;
 	private static final int SAMPLES = 4096;
@@ -48,8 +53,7 @@ public final class SelfTestSteps {
 		SelfTest.registerStep("real-capture", "Real window capture (1 frame)", SelfTestSteps::realCapture);
 		SelfTest.registerStep("jpeg", "JPEG encode/decode", SelfTestSteps::jpeg);
 		SelfTest.registerStep("udp", "Shared-screen link (UDP)", SelfTestSteps::udp);
-		// Placeholder until Task 10 (zoom) lands: it calls SelfTest.registerStep("zoom", ...) with a real dry run.
-		SelfTest.registerStep("zoom", "Zoom in/out dry run", SelfTestSteps::zoomUnavailable);
+		SelfTest.registerStep("zoom", "Zoom in/out dry run", SelfTestSteps::zoom);
 	}
 
 	static Outcome system(final Context ctx) {
@@ -189,9 +193,41 @@ public final class SelfTestSteps {
 				+ ": using the game-connection fallback");
 	}
 
-	/** Until Task 10 registers the real zoom dry run. */
-	public static Outcome zoomUnavailable(final Context ctx) {
-		return Outcome.skip("not available in this build");
+	/**
+	 * Zoom dry run on the player's first own hologram, without zooming: would {@link Platform#workProblem} let them work
+	 * on it, and is the zoom camera sane (finite, in front of the panel, a sensible distance, the letterboxed view inside
+	 * the game window at the panel's aspect)?
+	 */
+	static Outcome zoom(final Context ctx) {
+		SelfTest.ZoomTarget z = ctx.zoom();
+		if (z == null) {
+			return Outcome.skip("no hologram of yours nearby (place one, or stand near it, to test zooming)");
+		}
+		HologramGeometry.Frame f = z.frame();
+		int sw = z.windowW();
+		int sh = z.windowH();
+		double aspect = sw > 0 && sh > 0 ? (double) sw / sh : 16.0 / 9.0;
+		ZoomPose.Pose pose = ZoomPose.framing(f, z.fovDeg(), aspect);
+		Vec3d off = pose.eye().sub(f.center());
+		double dist = off.length();
+		Vec3d normal = f.right().cross(f.up());
+		boolean finite = Double.isFinite(pose.eye().x()) && Double.isFinite(pose.eye().y()) && Double.isFinite(pose.eye().z())
+				&& Float.isFinite(pose.yaw()) && Float.isFinite(pose.pitch());
+		boolean poseOk = finite && dist > 0 && dist < MAX_ZOOM_DISTANCE && off.dot(normal) > 0;
+		double panelAspect = f.h() > 0 ? f.w() / f.h() : 0;
+		ZoomPose.Rect box = ZoomPose.letterbox(sw, sh, panelAspect);
+		boolean boxOk = box.w() > 0 && box.h() > 0 && box.x() >= 0 && box.y() >= 0 && box.x() + box.w() <= sw && box.y() + box.h() <= sh
+				&& panelAspect > 0 && Math.abs((double) box.w() / box.h() - panelAspect) / panelAspect < 0.02;
+		String what = String.format(java.util.Locale.ROOT, "%s hologram %.1fx%.1f blocks, camera %.1f blocks in front, view %dx%d of %dx%d",
+				z.spec().mode() == Mode.WINDOW ? "window" : "whole-display", f.w(), f.h(), dist, box.w(), box.h(), sw, sh);
+		if (!poseOk || !boxOk) {
+			return Outcome.fail("zoom camera math is off: " + what);
+		}
+		String problem = ctx.platform().workProblem(z.spec());
+		if (problem != null) {
+			return Outcome.fail("can't work on it yet: " + problem + " (" + what + ")");
+		}
+		return Outcome.pass("could work on it (no real zoom done): " + what);
 	}
 
 	// ------------------------------------------------------------------ capture one frame

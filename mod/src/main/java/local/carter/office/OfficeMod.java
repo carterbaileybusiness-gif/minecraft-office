@@ -35,6 +35,7 @@ public class OfficeMod implements ModInitializer {
 		HologramActions.registerReceivers();
 		StreamService.registerReceivers();
 		ServerLifecycleEvents.SERVER_STARTED.register(StreamService::start);
+		ServerLifecycleEvents.SERVER_STARTED.register(HologramActions::resetWorking);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> StreamService.stop());
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			StreamService s = StreamService.get();
@@ -47,6 +48,7 @@ public class OfficeMod implements ModInitializer {
 		PlayerBlockBreakEvents.BEFORE.register(HologramEmitterBlock::allowBreak);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			StarterKit.giveIfFirstJoin(handler.player);
+			HologramActions.sendWorkingTo(handler.player);
 			HologramBlockEntity.setOwnerOnline(server, handler.player.getUUID(), true);
 			StreamService s = StreamService.get();
 			if (s != null) {
@@ -55,7 +57,7 @@ public class OfficeMod implements ModInitializer {
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			HologramBlockEntity.setOwnerOnline(server, handler.player.getUUID(), false);
-			HologramActions.clearWorking(handler.player.getUUID());
+			HologramActions.clearWorking(handler.player);
 			StreamService s = StreamService.get();
 			if (s != null) {
 				s.onLeave(handler.player);

@@ -39,7 +39,7 @@ class SelfTestReportTest {
 		FakePlatform platform = new FakePlatform(List.of(BUDGET, BANK, FINDER));
 		// the real source "fails" with a message that quotes the window title (as an OS error might)
 		platform.source = new FakeSource(null, "could not capture 'Salaries 2026 (secret).xlsx' at /Users/friend/Library/x");
-		SelfTestReport report = new SelfTestReport("/Users/friend");
+		SelfTestReport report = new SelfTestReport(new PrivateText("/Users/friend", "friend", null, "/tmp/x"));
 		report.hideWindowTitles(platform.windows());
 		SelfTest.basicInfo(report);
 		SelfTest.Context ctx = new SelfTest.Context(platform, BUDGET, null, report);
@@ -92,7 +92,7 @@ class SelfTestReportTest {
 
 	@Test
 	void unknownTitlesInInfoAndAddressesInDetailsAreScrubbed() {
-		SelfTestReport report = new SelfTestReport("/home/x");
+		SelfTestReport report = new SelfTestReport(new PrivateText("/home/x", "x", null, "/tmp/x"));
 		report.hideWindowTitles(List.of(BANK));
 		report.info("Java", "25.0.4.1 (Eclipse Adoptium)");
 		report.result(new SelfTestReport.Line("udp", "Shared-screen link (UDP)", Status.FAIL,
@@ -102,6 +102,29 @@ class SelfTestReportTest {
 		assertFalse(text.contains("2001:db8"), text);
 		assertTrue(text.contains("25.0.4.1"), "versions in info lines are kept:\n" + text);
 		assertTrue(text.contains("12:34:56"), "clock times aren't addresses:\n" + text);
+	}
+
+	@Test
+	void titlesThatArePartOfAnAppNameStayAndShortOnesToo() {
+		SelfTestReport report = new SelfTestReport(new PrivateText("/home/x", "x", null, "/tmp/x"));
+		report.hideWindowTitles(List.of(new Platform.WindowInfo("a", "Google Chrome", "Chrome", 1, 1),
+				new Platform.WindowInfo("b", "Mail", "Inbox", 1, 1), new Platform.WindowInfo("c", "Terminal", "zsh", 1, 1)));
+		String s = report.scrub("Google Chrome, Mail: Inbox, zsh");
+		assertEquals("Google Chrome, Mail: " + SelfTestReport.HIDDEN_TITLE + ", zsh", s);
+	}
+
+	@Test
+	void personalPathsInStepDetailsAreScrubbed() throws Exception {
+		SelfTestReport report = new SelfTestReport(new PrivateText("C:\\Users\\John Smith", "John Smith",
+				"C:\\Users\\John Smith\\AppData\\Roaming\\PrismLauncher\\instances\\Office\\.minecraft",
+				"C:\\Users\\JOHNSM~1\\AppData\\Local\\Temp\\"));
+		report.result(new SelfTestReport.Line("platform", "Window capture natives", Status.FAIL,
+				"UnsatisfiedLinkError: c:\\users\\john smith\\appdata\\local\\temp\\webrtc-java123.dll; "
+						+ "C:\\Users\\JOHNSM~1\\AppData\\Local\\Temp\\lwjgl\\x.dll; written by JOHN SMITH", 3));
+		String text = report.render(ZonedDateTime.now());
+		assertFalse(text.toLowerCase(Locale.ROOT).contains("john"), text);
+		assertFalse(text.toUpperCase(Locale.ROOT).contains("JOHNSM"), text);
+		assertTrue(text.contains("webrtc-java123.dll") && text.contains(PrivateText.USER), text);
 	}
 
 	/** Writes a sample report (this machine, fake platform) to build/selftest-sample.txt for the task report. */

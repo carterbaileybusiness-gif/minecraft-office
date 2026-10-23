@@ -19,9 +19,14 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import local.carter.office.client.platform.NoPlatform;
+import local.carter.office.client.render.HologramPlacement;
 import local.carter.office.client.selftest.SelfTestReport.Status;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.client.stream.UdpLink;
+import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Mode;
+import local.carter.office.core.Privacy;
+import local.carter.office.core.Shape;
 import local.carter.office.core.TileCodec;
 import local.carter.office.net.OfficePayloads.StreamToken;
 import local.carter.office.stream.StreamRelayServer;
@@ -100,15 +105,70 @@ class SelfTestTest {
 			assertEquals(before, after.stream().map(SelfTest.StepDef::id).toList(), "same place, same order");
 			assertEquals(real, after.get(before.indexOf("zoom")).step());
 		} finally {
-			SelfTest.registerStep("zoom", "Zoom in/out dry run", SelfTestSteps::zoomUnavailable);
+			SelfTest.registerStep("zoom", "Zoom in/out dry run", SelfTestSteps::zoom);
 		}
 	}
 
 	@Test
-	void zoomIsMarkedNotAvailableInThisBuild() throws Exception {
-		SelfTest.Outcome o = SelfTestSteps.zoomUnavailable(context());
+	void zoomWithoutAnOwnHologramIsSkipped() {
+		SelfTest.Outcome o = SelfTestSteps.zoom(context());
 		assertEquals(Status.SKIP, o.status());
-		assertTrue(o.detail().contains("not available in this build"));
+		assertTrue(o.detail().contains("no hologram"), o.detail());
+	}
+
+	@Test
+	void zoomDryRunChecksWorkProblemAndTheCameraWithoutZooming() {
+		HologramSpec spec = new HologramSpec(UUID.randomUUID(), Shape.WIDE_16_9, Mode.WINDOW, Privacy.PUBLIC, 1, "k", 2.0, 0, 1, 0, 37f);
+		SelfTest.ZoomTarget target = new SelfTest.ZoomTarget(spec, HologramPlacement.frame(10, 64, -3, spec), 70, 1708, 960);
+		ZoomPlatform ok = new ZoomPlatform(null);
+		SelfTest.Outcome pass = SelfTestSteps.zoom(new SelfTest.Context(ok, null, null, new SelfTestReport(), target));
+		assertEquals(Status.PASS, pass.status(), pass.detail());
+		assertTrue(pass.detail().contains("no real zoom"), pass.detail());
+		assertEquals(0, ok.zooms, "a dry run never zooms");
+
+		ZoomPlatform refused = new ZoomPlatform("Allow Accessibility for Minecraft Office Helper in System Settings");
+		SelfTest.Outcome fail = SelfTestSteps.zoom(new SelfTest.Context(refused, null, null, new SelfTestReport(), target));
+		assertEquals(Status.FAIL, fail.status());
+		assertTrue(fail.detail().contains("Allow Accessibility"), fail.detail());
+		assertEquals(0, refused.zooms);
+	}
+
+	/** Can capture nothing; reports a fixed work problem; counts zoom calls (must stay 0). */
+	private static final class ZoomPlatform implements local.carter.office.client.platform.Platform {
+		private final String problem;
+		int zooms;
+
+		ZoomPlatform(final String problem) {
+			this.problem = problem;
+		}
+
+		@Override
+		public boolean supportsExtend() {
+			return false;
+		}
+
+		@Override
+		public List<WindowInfo> windows() {
+			return List.of();
+		}
+
+		@Override
+		public void zoomIn(final HologramSpec spec, final Rect mcWindow) {
+			zooms++;
+		}
+
+		@Override
+		public void zoomOut() {
+			zooms++;
+		}
+
+		@Override
+		public void onExitRequested(final Runnable r) {}
+
+		@Override
+		public String workProblem(final HologramSpec spec) {
+			return problem;
+		}
 	}
 
 	@Test

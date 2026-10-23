@@ -17,6 +17,7 @@ import local.carter.office.client.capture.MacHelperSource;
 import local.carter.office.client.capture.Target;
 import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperInstaller;
+import local.carter.office.client.helper.HelperProtocol;
 import local.carter.office.client.helper.HelperProtocol.Welcome;
 import local.carter.office.client.helper.HelperProtocol.WindowRect;
 import local.carter.office.client.helper.MacHelper;
@@ -29,13 +30,12 @@ import local.carter.office.core.HologramSpec;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ConfirmScreen;
-import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
@@ -53,7 +53,6 @@ public final class MacPlatform implements Platform {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 	public static final String SCREEN_RECORDING_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 	public static final String ACCESSIBILITY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-	private static final String COMMAND = "officescreens";
 
 	private final HelperInstaller installer;
 	private final MacHelper helper;
@@ -63,6 +62,9 @@ public final class MacPlatform implements Platform {
 	private HelperInstaller.@Nullable Asset pendingAsk;
 	private int pendingSession;
 	private boolean permissionNotified;
+	// zoom (client thread)
+	private boolean zoomed;
+	private @Nullable String zoomFailure;
 
 	MacPlatform() {
 		installer = HelperInstaller.create(OfficeClient.MOD_VERSION, OfficeClient.RELEASE_BASE);
@@ -82,6 +84,7 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void register() {
 		helper.onStatusChange(this::statusChanged);
+		helper.onError(this::helperError);
 		helper.onWindows(() -> {
 			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
 				s.refreshWindows();
@@ -106,15 +109,14 @@ public final class MacPlatform implements Platform {
 		});
 		ClientTickEvents.END_CLIENT_TICK.register(this::tick);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(this::leftWorld));
-		ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(ClientCommands.literal(COMMAND)
-				.then(ClientCommands.literal("setup").executes(ctx -> {
-					setUpScreens();
-					return 1;
-				}))
-				.then(ClientCommands.literal("retry").executes(ctx -> {
-					checkAgain();
-					return 1;
-				}))));
+		// The chat links' /officescreens: a Fabric client command, so clicks never reach the (dedicated) server.
+		ClientCommandRegistrationCallback.EVENT.register((dispatcher, context) -> dispatcher.register(
+				OfficeScreensCommand.<FabricClientCommandSource>tree(action -> {
+					switch (action) {
+						case SETUP -> setUpScreens();
+						case RETRY -> checkAgain();
+					}
+				})));
 	}
 
 	// ---------------------------------------------------------------- Platform
@@ -138,14 +140,36 @@ public final class MacPlatform implements Platform {
 		helper.listWindows();
 	}
 
+	/**
+	 * Sends ZOOM_IN for the hologram's capture surface. If it can't be sent (no surface, helper gone) or the helper
+	 * answers ERROR not_found / no_accessibility, {@link #workProblem} reports why until {@link #zoomOut}, so the zoom
+	 * ends with that reason instead of leaving the player in a view they can't use.
+	 */
 	@Override
 	public void zoomIn(final HologramSpec spec, final Rect mcWindow) {
-		helper.zoomIn(helper.surfaceFor(Target.of(spec)), new WindowRect(mcWindow.x(), mcWindow.y(), mcWindow.w(), mcWindow.h()));
+		zoomed = true;
+		zoomFailure = null;
+		int surface = helper.surfaceFor(Target.of(spec));
+		boolean sent = helper.zoomIn(surface, new WindowRect(mcWindow.x(), mcWindow.y(), mcWindow.w(), mcWindow.h()));
+		zoomFailure = ZoomFailure.forZoomIn(helper.isConnected(), surface, sent);
+		if (zoomFailure != null) {
+			LOGGER.info("Office helper: zoom-in not possible ({}; surface {})", zoomFailure, surface);
+		}
 	}
 
 	@Override
 	public void zoomOut() {
+		zoomed = false;
+		zoomFailure = null;
 		helper.zoomOut();
+	}
+
+	/** An ERROR from the helper while zoomed that means the zoom didn't happen (client thread). */
+	private void helperError(final HelperProtocol.HelperError e) {
+		String why = ZoomFailure.forHelperError(e.code());
+		if (zoomed && why != null && zoomFailure == null) {
+			zoomFailure = why;
+		}
 	}
 
 	@Override
@@ -158,7 +182,11 @@ public final class MacPlatform implements Platform {
 	/** Self-test: longest wait for an installed helper to connect before reporting its state. */
 	static final long SELF_TEST_HELPER_WAIT_MS = 3_000;
 
-	/** Installed? Connected? Screen Recording / Accessibility granted? Starts an installed helper; never installs one. */
+	/**
+	 * Installed? Connected? Screen Recording / Accessibility granted? Only runs when the player pressed Run test: starts
+	 * an installed helper (never installs one) and, once connected, asks it for the window list once (the reply only
+	 * makes the self-test screen re-read {@link #windows}).
+	 */
 	@Override
 	public Readiness readiness() throws InterruptedException {
 		if (installer.installedApp().isEmpty()) {
@@ -174,34 +202,34 @@ public final class MacPlatform implements Platform {
 		MacHelper.Status st = helper.status();
 		if (w == null) {
 			return new Readiness(true, false, false, "screen helper installed but not connected after " + SELF_TEST_HELPER_WAIT_MS / 1000
-					+ " s (" + st.name().toLowerCase(Locale.ROOT).replace('_', ' ') + ")");
+					+ " s (" + st.name().toLowerCase(Locale.ROOT).replace('_', ' ') + "): type /officescreens setup");
 		}
+		helper.listWindows(); // one request per check (never from the reply), so the next run can offer windows
 		boolean recording = st == MacHelper.Status.READY;
 		boolean ok = recording && w.accessibility();
 		String detail = "helper connected (protocol " + w.version() + "), Screen Recording " + (recording ? "on" : "OFF")
 				+ ", Accessibility " + (w.accessibility() ? "on" : "OFF");
 		if (!ok) {
-			detail += ": switch it on in System Settings > Privacy & Security, then type /officescreens retry";
+			detail += ": type /officescreens setup, switch OfficeHelper on in System Settings > Privacy & Security, then run again";
 		}
 		return new Readiness(true, ok, recording, detail);
 	}
 
+	/** Working needs the helper connected and Accessibility (cursor focus, window placement, the exit hotkey). */
 	@Override
-	public void prepareSelfTest() {
-		if (installer.installedApp().isEmpty()) {
-			return;
+	public @Nullable String workProblem(final HologramSpec spec) {
+		String failure = zoomFailure;
+		if (zoomed && failure != null) {
+			return failure;
 		}
-		ensureStarted();
-		long deadline = System.nanoTime() + SELF_TEST_HELPER_WAIT_MS * 1_000_000L;
-		try {
-			while (!helper.isConnected() && System.nanoTime() < deadline) {
-				Thread.sleep(100);
-			}
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			return;
+		Welcome w = helper.welcome();
+		if (!helper.isConnected() || w == null) {
+			return ZoomFailure.NO_HELPER;
 		}
-		helper.listWindows(); // the reply refreshes the self-test screen (onWindows)
+		if (!w.accessibility()) {
+			return ZoomFailure.NO_ACCESSIBILITY;
+		}
+		return null;
 	}
 
 	@Override
@@ -234,7 +262,7 @@ public final class MacPlatform implements Platform {
 			case ASK -> ask();
 			case BAD_OVERRIDE -> chat(Component.literal("office.helperPath does not point to OfficeHelper.app.").withStyle(ChatFormatting.RED));
 			case REPORT_FAILURE -> chat(Component.literal("Screen helper setup failed: " + (failure == null ? "unknown error" : cause(failure).getMessage()) + " ")
-					.withStyle(ChatFormatting.RED).append(link("Try again", "setup", "Download again")));
+					.withStyle(ChatFormatting.RED).append(link("Try again", OfficeScreensCommand.Action.SETUP, "Download again")));
 			case NONE -> {
 				// waiting for an answer or a download, or "Not now" this session
 			}
@@ -248,7 +276,7 @@ public final class MacPlatform implements Platform {
 				if (err != null && asked == setup.session()) {
 					LOGGER.warn("Office helper: release manifest unavailable: {}", cause(err).toString());
 					chat(Component.literal("Couldn't reach GitHub to set up your screens (" + cause(err).getMessage() + "). ")
-							.append(link("Try again", "setup", "Ask again")));
+							.append(link("Try again", OfficeScreensCommand.Action.SETUP, "Ask again")));
 				}
 				return;
 			}
@@ -279,7 +307,7 @@ public final class MacPlatform implements Platform {
 	private void answered(final int asked, final boolean yes) {
 		if (!setup.answered(asked, yes)) {
 			if (!yes && asked == setup.session()) {
-				chat(Component.literal("Your screens stay off for now. ").append(link("Set up screens", "setup", "Download the helper app")));
+				chat(Component.literal("Your screens stay off for now. ").append(link("Set up screens", OfficeScreensCommand.Action.SETUP, "Download the helper app")));
 			}
 			return;
 		}
@@ -310,9 +338,14 @@ public final class MacPlatform implements Platform {
 					act(HelperSetup.Action.START, null);
 					chat(Component.literal("Starting the screen helper…"));
 				} else if (!w.screenRecording() || helper.status() == MacHelper.Status.NO_PERMISSION) {
+					helper.requestPermissions();
 					openSetupPages(SCREEN_RECORDING_PANE);
+					chat(Component.literal("Opened System Settings → Privacy & Security → Screen Recording: switch on OfficeHelper."));
 				} else if (!w.accessibility()) {
+					helper.requestPermissions(); // macOS lists OfficeHelper under Accessibility and shows its prompt
 					openSetupPages(ACCESSIBILITY_PANE);
+					chat(Component.literal("Opened System Settings → Privacy & Security → Accessibility: switch on OfficeHelper. "
+							+ "Your screens update by themselves."));
 				} else {
 					chat(Component.literal("Your screens are set up."));
 				}
@@ -351,9 +384,9 @@ public final class MacPlatform implements Platform {
 				missing.add("Accessibility (to work on a screen)");
 			}
 			chat(Component.literal("OfficeHelper needs macOS " + String.join(" and ", missing) + ". ")
-					.append(link("Set up screens", "setup", "Opens the setup guide and System Settings"))
+					.append(link("Set up screens", OfficeScreensCommand.Action.SETUP, "Asks macOS again and opens System Settings"))
 					.append(" ")
-					.append(link("Check again", "retry", "Restart the helper after switching it on")));
+					.append(link("Check again", OfficeScreensCommand.Action.RETRY, "Restart the helper after switching it on")));
 		} else if (st == MacHelper.Status.READY && permissionNotified) {
 			permissionNotified = false;
 			chat(Component.literal("Screens ready."));
@@ -383,9 +416,9 @@ public final class MacPlatform implements Platform {
 		}
 	}
 
-	private static MutableComponent link(final String text, final String sub, final String hover) {
+	private static MutableComponent link(final String text, final OfficeScreensCommand.Action action, final String hover) {
 		return Component.literal("[" + text + "]").withStyle(s -> s.withColor(ChatFormatting.AQUA).withUnderlined(true)
-				.withClickEvent(new ClickEvent.RunCommand("/" + COMMAND + " " + sub))
+				.withClickEvent(OfficeScreensCommand.click(action))
 				.withHoverEvent(new HoverEvent.ShowText(Component.literal(hover))));
 	}
 

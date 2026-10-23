@@ -112,8 +112,10 @@ downloads the small helper (OfficeHelper, a few MB, from this project's GitHub p
    **OfficeHelper** on:
    - macOS 15 and macOS 26: **System Settings, Privacy & Security, Screen & System Audio Recording**.
    - macOS 14: **System Settings, Privacy & Security, Screen Recording**.
-2. **Accessibility.** The next time you use a hologram, macOS asks again. Switch **OfficeHelper** on in
-   **System Settings, Privacy & Security, Accessibility**. This lets your mouse and keyboard work inside a hologram.
+2. **Accessibility.** macOS asks "OfficeHelper would like to control this computer" when the helper starts (or
+   click **[Set up screens]** in chat to be asked again). Click **Open System Settings** and switch **OfficeHelper**
+   on in **System Settings, Privacy & Security, Accessibility**. This lets your mouse and keyboard work inside a
+   hologram. The game notices within a couple of seconds; no restart needed.
 3. Normally nothing else shows up. But if macOS ever says OfficeHelper cannot be opened because it is from an
    unidentified developer, open **System Settings, Privacy & Security**, scroll to the Security section, and click
    **Open Anyway** next to OfficeHelper. (We do not pay Apple for signing.)
@@ -221,7 +223,9 @@ Run the self-test while you are on the server:
 2. Click **Screen self-test** (bottom-left corner). You can also type `/officeselftest` in chat.
 3. Optional: click **Test window** until it shows an app you have open (for example your browser). This lets the test
    capture one frame of that window to check that capture works. Leave it on **None (skip)** to skip that check. The
-   test never captures a window you did not pick.
+   test never captures a window you did not pick. On a Mac the list says **none yet (press Run test)** until the
+   first run, because the helper only starts when you press **Run test**. Run once, then pick a window and click
+   **Run again**.
 4. Click **Run test**. A checklist fills in: ✓ worked, ✗ failed, – skipped. It takes up to 30 seconds and the game
    keeps running.
 5. Click **Copy report**, then paste it into a message to **Carter**.

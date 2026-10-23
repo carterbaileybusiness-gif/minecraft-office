@@ -41,6 +41,15 @@ public interface Platform {
 	/** Runs (on the client thread) when the OS-level exit gesture fires while zoomed. */
 	void onExitRequested(Runnable r);
 
+	/**
+	 * Why the player can't work on {@code spec}'s screen right now (a short sentence for the action bar), or null when
+	 * {@link #zoomIn} will work. Checked before zooming in and every tick while zoomed: when it turns non-null (e.g. the
+	 * helper quit) the zoom ends.
+	 */
+	default @Nullable String workProblem(final HologramSpec spec) {
+		return null;
+	}
+
 	/** A capture source for one of the player's own holograms, or null when this computer can't capture. */
 	default @Nullable CaptureSource newOwnSource() {
 		return null;
@@ -61,17 +70,14 @@ public interface Platform {
 	 */
 	record Readiness(boolean supported, boolean ok, boolean canCapture, String detail) {}
 
-	/** Checks {@link Readiness}; off the client thread, may wait a few seconds (Mac: for the helper to connect). */
+	/**
+	 * Checks {@link Readiness}; off the client thread, only after the player pressed Run test, may wait a few seconds
+	 * (Mac: starts an installed helper, waits for it, asks it for windows once; never installs anything).
+	 */
 	default Readiness readiness() throws InterruptedException {
 		return new Readiness(false, false, false, "no own-screen support on " + System.getProperty("os.name", "this system")
 				+ " (friends' screens still show)");
 	}
-
-	/**
-	 * Self-test screen opened (off the client thread, may block briefly): get the window list ready. Mac: starts an
-	 * already installed helper and asks it for windows; never installs anything.
-	 */
-	default void prepareSelfTest() {}
 
 	/** Hooks events, commands and providers; called once from the client initializer. */
 	default void register() {}

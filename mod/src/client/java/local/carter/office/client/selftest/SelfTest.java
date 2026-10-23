@@ -20,6 +20,8 @@ import local.carter.office.client.platform.Platform;
 import local.carter.office.client.selftest.SelfTestReport.Line;
 import local.carter.office.client.selftest.SelfTestReport.Status;
 import local.carter.office.client.stream.StreamClient;
+import local.carter.office.core.HologramGeometry;
+import local.carter.office.core.HologramSpec;
 
 /**
  * The screen self-test: an ordered list of steps run one after another on a background thread, each on its own
@@ -27,8 +29,8 @@ import local.carter.office.client.stream.StreamClient;
  * capture or native call never freezes the game or the test. A step that throws (anything, even a LinkageError) or
  * hangs is recorded as failed with the reason; steps left when the total limit runs out are skipped.
  *
- * <p>Other features add their own checks with {@link #registerStep} (Task 10 replaces the {@code "zoom"} placeholder
- * with a real zoom-in/out dry run). No Minecraft classes here, so the runner is unit-tested.
+ * <p>Other features add their own checks with {@link #registerStep} (same id: replaced in place). No Minecraft classes
+ * here, so the runner is unit-tested.
  */
 public final class SelfTest {
 	private static final Logger LOGGER = LogUtils.getLogger();
@@ -61,9 +63,21 @@ public final class SelfTest {
 	/**
 	 * What the steps may use: this computer's platform, the window the player picked for the real-capture check (null:
 	 * skip it — the self-test never captures a window the player didn't choose), the shared-screen client (null outside a
-	 * world) and the report (facts already collected on the client thread).
+	 * world), the report (facts already collected on the client thread) and the zoom dry run's hologram (null: none).
 	 */
-	public record Context(Platform platform, Platform.@Nullable WindowInfo window, @Nullable StreamClient stream, SelfTestReport report) {}
+	public record Context(Platform platform, Platform.@Nullable WindowInfo window, @Nullable StreamClient stream, SelfTestReport report,
+			@Nullable ZoomTarget zoom) {
+		public Context(final Platform platform, final Platform.@Nullable WindowInfo window, final @Nullable StreamClient stream,
+				final SelfTestReport report) {
+			this(platform, window, stream, report, null);
+		}
+	}
+
+	/**
+	 * The player's first loaded own hologram for the zoom dry run (read on the client thread): its spec, its panel in the
+	 * world, the FOV and the game window size. Null: no own hologram nearby.
+	 */
+	public record ZoomTarget(HologramSpec spec, HologramGeometry.Frame frame, double fovDeg, int windowW, int windowH) {}
 
 	/** Progress for the live checklist and the end result. Called on the self-test thread. */
 	public interface Listener {
@@ -211,7 +225,7 @@ public final class SelfTest {
 					: "timed out after " + seconds(stepMs));
 		} catch (ExecutionException e) {
 			Throwable cause = e.getCause() == null ? e : e.getCause();
-			LOGGER.info("[office] Self-test step {} failed: {}", s.id(), cause.toString());
+			LOGGER.info("[office] Self-test step {} failed: {}", s.id(), ctx.report().scrubDetail(cause.toString()));
 			return Outcome.fail(describe(cause));
 		} catch (InterruptedException | CancellationException e) {
 			task.cancel(true);

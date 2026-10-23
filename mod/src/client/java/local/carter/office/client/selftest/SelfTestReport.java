@@ -20,14 +20,17 @@ import local.carter.office.client.platform.Platform;
 /**
  * The self-test's plain-text report: facts about this computer, then one result line per step. Safe to paste
  * anywhere: it never holds screen pixels (steps only record frame sizes), window titles are replaced by
- * {@link #HIDDEN_TITLE} wherever they appear (only app names stay), the home folder becomes {@code ~}, and IP
- * addresses (the server's) in step results become {@link #HIDDEN_ADDRESS}. Thread-safe.
+ * {@link #HIDDEN_TITLE} wherever they appear (only app names stay), personal paths and the login name are removed by
+ * {@link PrivateText}, and IP addresses (the server's) in step results become {@link #HIDDEN_ADDRESS}. Thread-safe.
  */
 public final class SelfTestReport {
 	public static final String HIDDEN_TITLE = "<window title>";
 	public static final String HIDDEN_ADDRESS = "<address>";
-	/** Titles shorter than this aren't scrubbed (too likely to hit ordinary words); they say little anyway. */
-	static final int MIN_TITLE_CHARS = 3;
+	/**
+	 * Titles shorter than this aren't scrubbed (too likely to hit ordinary words); neither are titles that are part of an
+	 * app name ("Finder" in "Finder", "Chrome" in "Google Chrome"), which would hide the app names the report keeps.
+	 */
+	static final int MIN_TITLE_CHARS = 4;
 	private static final Pattern IPV4 = Pattern.compile("(?<![\\d.])\\d{1,3}(?:\\.\\d{1,3}){3}(?::\\d{1,5})?(?![\\d.])");
 	/** Three or more colons: never a clock time ("12:34:56"). */
 	private static final Pattern IPV6 = Pattern.compile("(?<![\\w:])\\[?(?:[0-9a-fA-F]{0,4}:){3,7}[0-9a-fA-F]{0,4}\\]?(?![\\w:])");
@@ -64,14 +67,14 @@ public final class SelfTestReport {
 	private final Map<String, Line> lines = new LinkedHashMap<>();
 	private final Set<String> titles = new HashSet<>();
 	private final Set<String> appNames = new HashSet<>();
-	private final String home;
+	private final PrivateText privacy;
 
 	public SelfTestReport() {
-		this(System.getProperty("user.home", ""));
+		this(PrivateText.current());
 	}
 
-	SelfTestReport(final String home) {
-		this.home = home == null ? "" : home;
+	SelfTestReport(final PrivateText privacy) {
+		this.privacy = privacy;
 	}
 
 	/** A fact about this computer ("OS" → "Mac OS X 26.0 (aarch64)"); values are scrubbed. */
@@ -92,7 +95,8 @@ public final class SelfTestReport {
 		}
 		for (Platform.WindowInfo w : windows) {
 			String t = w.title() == null ? "" : w.title().trim();
-			if (t.length() >= MIN_TITLE_CHARS && !appNames.contains(t.toLowerCase(Locale.ROOT))) {
+			String lower = t.toLowerCase(Locale.ROOT);
+			if (t.length() >= MIN_TITLE_CHARS && appNames.stream().noneMatch(app -> app.contains(lower))) {
 				titles.add(t);
 			}
 		}
@@ -142,7 +146,7 @@ public final class SelfTestReport {
 		return sb.toString();
 	}
 
-	/** Removes window titles and the home folder from {@code s}. */
+	/** Removes window titles, personal paths and the login name from {@code s}. */
 	public synchronized String scrub(final String s) {
 		if (s == null || s.isEmpty()) {
 			return "";
@@ -153,10 +157,7 @@ public final class SelfTestReport {
 		for (String t : sorted) {
 			out = replaceIgnoreCase(out, t, HIDDEN_TITLE);
 		}
-		if (home.length() > 1) {
-			out = out.replace(home, "~");
-		}
-		return out;
+		return privacy.scrub(out);
 	}
 
 	/** {@link #scrub} plus IP addresses (step details may quote a socket error; info lines hold versions like 25.0.4.1). */
