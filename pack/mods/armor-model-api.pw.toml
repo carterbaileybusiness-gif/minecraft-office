@@ -1,0 +1,13 @@
+name = "Armor Model API"
+filename = "armor_model_api-fabric-1.1.2+26.3.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/onz2NN2n/versions/1smYVF1k/armor_model_api-fabric-1.1.2%2B26.3.jar"
+hash-format = "sha512"
+hash = "ed2f56f08979b16928ec86cf9fc58d027b1bb5a8e62cba8fb0b8a459d4feae70f29a39087822ce1ea00b6a665b44d62d5388d9860ea2f679aa29e03fc48cf5a3"
+
+[update]
+[update.modrinth]
+mod-id = "onz2NN2n"
+version = "1smYVF1k"

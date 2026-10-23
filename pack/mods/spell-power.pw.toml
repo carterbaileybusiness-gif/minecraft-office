@@ -1,0 +1,13 @@
+name = "Spell Power Attributes"
+filename = "spell_power-fabric-1.6.2+26.3.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/8ooWzSQP/versions/YdRPWTj8/spell_power-fabric-1.6.2%2B26.3.jar"
+hash-format = "sha512"
+hash = "26fbf824391fd4acf3a2e91d660705c745c6bf144d76eddf5a74e05f87fa3d0fc16e3f616b972e00657a93c590ecc85d822895133eb3cfc34882d28cab5e9be4"
+
+[update]
+[update.modrinth]
+mod-id = "8ooWzSQP"
+version = "YdRPWTj8"
