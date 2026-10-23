@@ -1,0 +1,33 @@
+{
+	"schemaVersion": 1,
+	"id": "office",
+	"version": "${version}",
+	"name": "Minecraft Office",
+	"description": "Hologram monitors that show players' real desktops inside Minecraft.",
+	"authors": [
+		"Carter Bailey"
+	],
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"local.carter.office.OfficeMod"
+		],
+		"client": [
+			"local.carter.office.client.OfficeClient"
+		]
+	},
+	"mixins": [
+		"office.mixins.json",
+		{
+			"config": "office.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

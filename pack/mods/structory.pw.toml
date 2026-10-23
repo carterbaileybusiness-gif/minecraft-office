@@ -1,0 +1,13 @@
+name = "Structory"
+filename = "Structory_26.3_v1.3.18+26.3.jar"
+side = "server"
+
+[download]
+url = "https://cdn.modrinth.com/data/aKCwCJlY/versions/GjOkOVW4/Structory_26.3_v1.3.18%2B26.3.jar"
+hash-format = "sha512"
+hash = "a9b7c7ce45a38c4be68563337e413adbf486a8e47fecc450d3ee59dadf807faee39d49a098c2dbfc2a466f0d36c71ca8e051f161efdbfc19b069f0c70e6b4223"
+
+[update]
+[update.modrinth]
+mod-id = "aKCwCJlY"
+version = "GjOkOVW4"
