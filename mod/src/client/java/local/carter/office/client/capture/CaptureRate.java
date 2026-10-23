@@ -12,7 +12,37 @@ public final class CaptureRate {
 	/** Same as the hologram renderer's view distance. */
 	public static final double VIEW_DISTANCE = 64.0;
 
+	/** A visibility change only counts once it has lasted this long (no capture churn when the camera sweeps by). */
+	public static final long VISIBILITY_HOLD_MS = 1_000;
+
 	private CaptureRate() {}
+
+	/** Debounced visibility of one hologram: the first observation counts at once, later changes after {@link #VISIBILITY_HOLD_MS}. */
+	public static final class Visibility {
+		private boolean known;
+		private boolean shown;
+		private long pendingSinceMs = -1;
+
+		public boolean update(final boolean raw, final long nowMs) {
+			if (!known) {
+				known = true;
+				shown = raw;
+				return shown;
+			}
+			if (raw == shown) {
+				pendingSinceMs = -1;
+				return shown;
+			}
+			if (pendingSinceMs < 0) {
+				pendingSinceMs = nowMs;
+			}
+			if (nowMs - pendingSinceMs >= VISIBILITY_HOLD_MS) {
+				shown = raw;
+				pendingSinceMs = -1;
+			}
+			return shown;
+		}
+	}
 
 	public static int fps(final boolean visible, final boolean zoomed) {
 		if (zoomed) {

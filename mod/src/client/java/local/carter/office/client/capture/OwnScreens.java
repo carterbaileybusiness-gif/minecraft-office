@@ -47,9 +47,9 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * {@code -Doffice.testPattern=true} (dev override) every own hologram shows a {@link TestPatternSource} at 30 fps
  * instead. Without either, own holograms are not fed.
  *
- * <p>Sharing (Task 14): every source feeds a {@link FanOutSink}: the hologram's texture first, then the share tap
- * ({@link #setShareTaps}) while friends are watching. A watched hologram is captured at least {@link #SHARE_FPS}
- * even when its owner isn't looking at it.
+ * <p>Sharing (Task 14): every source (Mac helper, Windows desktop capture, test pattern) feeds a {@link FanOutSink}:
+ * the hologram's texture first, then the share tap ({@link #setShareTaps}) while friends are watching. A watched
+ * hologram is captured at least {@link #SHARE_FPS} even when its owner isn't looking at it.
  */
 public final class OwnScreens {
 	public static final String TEST_PATTERN_PROPERTY = "office.testPattern";
@@ -72,6 +72,7 @@ public final class OwnScreens {
 		final CaptureSource source;
 		final ScreenTexture texture;
 		int fps;
+		CaptureRate.Visibility visibility = new CaptureRate.Visibility();
 
 		Feed(final Target target, final CaptureSource source, final ScreenTexture texture, final int fps) {
 			this.target = target;
@@ -156,12 +157,17 @@ public final class OwnScreens {
 			if (!seen.add(id)) {
 				continue;
 			}
-			int fps = adaptiveRate ? CaptureRate.fps(visible(camera, be.getBlockPos(), spec), HologramRenderer.isZoomed(id)) : MAX_FPS;
+			Target target = Target.of(spec);
+			Feed feed = FEEDS.get(id);
+			CaptureRate.Visibility visibility = feed != null ? feed.visibility : new CaptureRate.Visibility();
+			// Debounced (1 s) so sweeping the camera past a hologram doesn't STOP / CAPTURE the helper over and over.
+			int fps = adaptiveRate
+					? CaptureRate.fps(visibility.update(visible(camera, be.getBlockPos(), spec), System.nanoTime() / 1_000_000L),
+							HologramRenderer.isZoomed(id))
+					: MAX_FPS;
 			if (shared(id)) {
 				fps = Math.max(fps, SHARE_FPS);
 			}
-			Target target = Target.of(spec);
-			Feed feed = FEEDS.get(id);
 			if (feed != null && feed.target.equals(target)) {
 				if (feed.fps != fps) {
 					feed.fps = fps;
@@ -169,27 +175,27 @@ public final class OwnScreens {
 				}
 				continue;
 			}
-			CaptureSource source = factory.get();
+			ScreenTexture texture;
 			if (feed != null) {
+				// same hologram, new target: keep the texture (stable id), drop the old picture until the new source's
+				// first frame arrives
 				feed.source.stop();
+				texture = feed.texture;
+				texture.clear();
+			} else {
+				texture = ScreenTexture.forHologram(id);
 			}
+			CaptureSource source = factory.get();
 			if (source == null) {
 				if (FEEDS.remove(id) != null) {
 					ScreenTextureRegistry.remove(id);
 				}
 				continue;
 			}
-			ScreenTexture texture;
-			if (feed != null) {
-				// same hologram, new target: keep the texture (stable id), drop the old picture until the new source's
-				// first frame arrives
-				texture = feed.texture;
-				texture.clear();
-			} else {
-				texture = ScreenTexture.forHologram(id);
-			}
 			ScreenTextureRegistry.register(id, texture);
-			FEEDS.put(id, new Feed(target, source, texture, fps));
+			Feed fresh = new Feed(target, source, texture, fps);
+			fresh.visibility = visibility;
+			FEEDS.put(id, fresh);
 			source.start(target, fps, new FanOutSink(id, texture));
 		}
 		for (Iterator<Map.Entry<UUID, Feed>> it = FEEDS.entrySet().iterator(); it.hasNext();) {
