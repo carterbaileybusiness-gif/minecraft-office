@@ -235,8 +235,10 @@ public final class OwnScreens {
 	 * logged and skipped; it never affects the owner's own picture.
 	 */
 	static final class FanOutSink implements FrameSink {
+		static final long WARN_EVERY_NANOS = 10_000_000_000L;
 		private final UUID id;
 		private final FrameSink primary;
+		private volatile long lastWarn;
 
 		FanOutSink(final UUID id, final FrameSink primary) {
 			this.id = id;
@@ -251,6 +253,15 @@ public final class OwnScreens {
 			}
 		}
 
+		/** Logs a tap failure at most once per {@link #WARN_EVERY_NANOS} per hologram (it could fail every frame). */
+		private void tapFailed(final RuntimeException e) {
+			long now = System.nanoTime();
+			if (lastWarn == 0 || now - lastWarn >= WARN_EVERY_NANOS) {
+				lastWarn = now;
+				LOGGER.warn("[office] Share tap of hologram {} failed (further failures muted for 10 s)", id, e);
+			}
+		}
+
 		@Override
 		public void full(final int w, final int h, final ByteBuffer rgba) {
 			primary.full(w, h, rgba);
@@ -259,7 +270,7 @@ public final class OwnScreens {
 				try {
 					t.full(w, h, rgba);
 				} catch (RuntimeException e) {
-					LOGGER.warn("[office] Share tap failed", e);
+					tapFailed(e);
 				}
 			}
 		}
@@ -272,7 +283,7 @@ public final class OwnScreens {
 				try {
 					t.patch(x, y, w, h, rgba);
 				} catch (RuntimeException e) {
-					LOGGER.warn("[office] Share tap failed", e);
+					tapFailed(e);
 				}
 			}
 		}
@@ -282,7 +293,11 @@ public final class OwnScreens {
 			primary.ended(reason);
 			FrameSink t = tap();
 			if (t != null) {
-				t.ended(reason);
+				try {
+					t.ended(reason);
+				} catch (RuntimeException e) {
+					tapFailed(e);
+				}
 			}
 		}
 	}

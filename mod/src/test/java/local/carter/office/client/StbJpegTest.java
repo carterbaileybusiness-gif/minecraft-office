@@ -78,4 +78,31 @@ class StbJpegTest {
 			assertEquals(255, edgeOut.get(3) & 0xFF, "decoded opaque");
 		}
 	}
+
+	@Test
+	void aTileDeclaringAHugeSizeIsRefusedBeforeDecoding() {
+		try (StbJpeg jpeg = open()) {
+			ByteBuffer px = ByteBuffer.allocate(64 * 64 * 4);
+			byte[] enc = jpeg.encode(new TileCodec.Tile(0, 0, 64, 64, px), 70);
+			// rewrite the SOF0 frame header (FF C0, len u16, precision u8, height u16, width u16) to 30000 x 30000
+			int sof = -1;
+			for (int i = 0; i + 1 < enc.length; i++) {
+				if ((enc[i] & 0xFF) == 0xFF && (enc[i + 1] & 0xFF) == 0xC0) {
+					sof = i;
+					break;
+				}
+			}
+			assertTrue(sof > 0, "SOF0 found");
+			byte[] huge = enc.clone();
+			huge[sof + 5] = (byte) (30000 >> 8);
+			huge[sof + 6] = (byte) 30000;
+			huge[sof + 7] = (byte) (30000 >> 8);
+			huge[sof + 8] = (byte) 30000;
+			ByteBuffer out = ByteBuffer.allocateDirect(64 * 64 * 4);
+			IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> jpeg.decodeInto(huge, out, 64, 64));
+			assertTrue(e.getMessage().contains("declares 30000x30000"), e.getMessage());
+			assertThrows(IllegalArgumentException.class, () -> jpeg.decodeInto(enc, out, 128, 128), "tiles over 64 px refused");
+			jpeg.decodeInto(enc, out, 64, 64); // the untouched tile still decodes
+		}
+	}
 }

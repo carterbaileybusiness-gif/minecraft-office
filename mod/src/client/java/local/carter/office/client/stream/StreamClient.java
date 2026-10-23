@@ -14,9 +14,10 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
@@ -61,8 +62,8 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
  * receive executor; the sender has its own thread ({@link #pump}). Production wiring is {@link #register()}.
  */
 public final class StreamClient {
-	/** Datagrams waiting for the receive thread beyond this are dropped (refresh tiles repair the picture). */
-	public static final int MAX_QUEUED_DATAGRAMS = 4096;
+	/** Datagram bytes waiting for the receive thread beyond this are dropped (refresh tiles repair the picture). */
+	public static final long MAX_QUEUED_BYTES = 8L * 1024 * 1024;
 	/** A local switch to PRIVATE is trusted over the (not yet updated) synced spec for this long. */
 	public static final long LOCAL_PRIVATE_NANOS = TimeUnit.SECONDS.toNanos(5);
 
@@ -83,7 +84,7 @@ public final class StreamClient {
 	private final UdpOpener opener;
 	private final Supplier<@Nullable InetAddress> serverHost;
 	private final Executor receiveExecutor;
-	private final AtomicInteger queued = new AtomicInteger();
+	private final AtomicLong queuedBytes = new AtomicLong();
 	private final Packetizer splitter = new Packetizer();
 	private final StreamSender sender;
 	private final StreamReceiver receiver;
@@ -92,13 +93,14 @@ public final class StreamClient {
 	public StreamClient(final Payloads payloads, final UdpOpener opener, final Supplier<@Nullable InetAddress> serverHost,
 			final TileCodec.Jpeg sendJpeg, final TileCodec.Jpeg receiveJpeg, final Function<UUID, @Nullable Privacy> privacyOf,
 			final Function<UUID, @Nullable ScreenTexture> ownTexture, final Function<UUID, ScreenTexture> textureFactory,
-			final Executor receiveExecutor, final Executor clientThread, final LongSupplier clock) {
+			final Executor receiveExecutor, final Executor clientThread, final Predicate<UUID> isOwnHologram,
+			final LongSupplier clock) {
 		this.payloads = payloads;
 		this.opener = opener;
 		this.serverHost = serverHost;
 		this.receiveExecutor = receiveExecutor;
 		this.sender = new StreamSender(new Link(), sendJpeg, privacyOf, ownTexture, clock);
-		this.receiver = new StreamReceiver(textureFactory, receiveJpeg, clock, clientThread);
+		this.receiver = new StreamReceiver(textureFactory, receiveJpeg, clock, clientThread, isOwnHologram);
 	}
 
 	public StreamSender sender() {
@@ -155,8 +157,18 @@ public final class StreamClient {
 		}
 	}
 
+	/** Client thread: the texture is made here (GPU side), then the receive thread binds the stream to it. */
 	public void onStart(final StreamStart s) {
-		receiveExecutor.execute(() -> safely(() -> receiver.onStart(s.streamId(), s.hologramId())));
+		boolean go;
+		try {
+			go = receiver.prepareStart(s.streamId(), s.hologramId());
+		} catch (RuntimeException e) {
+			LOGGER.warn("[office] Shared-screen start failed", e);
+			return;
+		}
+		if (go) {
+			receiveExecutor.execute(() -> safely(() -> receiver.begin(s.streamId(), s.hologramId())));
+		}
 	}
 
 	public void onEnded(final StreamEnded e) {
@@ -192,8 +204,9 @@ public final class StreamClient {
 	}
 
 	private void enqueueDatagram(final byte[] d) {
-		if (queued.incrementAndGet() > MAX_QUEUED_DATAGRAMS) {
-			queued.decrementAndGet();
+		long n = d.length;
+		if (queuedBytes.addAndGet(n) > MAX_QUEUED_BYTES) {
+			queuedBytes.addAndGet(-n);
 			return;
 		}
 		try {
@@ -201,12 +214,17 @@ public final class StreamClient {
 				try {
 					safely(() -> receiver.onDatagram(d));
 				} finally {
-					queued.decrementAndGet();
+					queuedBytes.addAndGet(-n);
 				}
 			});
 		} catch (RuntimeException e) {
-			queued.decrementAndGet();
+			queuedBytes.addAndGet(-n);
 		}
+	}
+
+	/** Datagram bytes waiting for the receive thread (tests). */
+	public long queuedBytes() {
+		return queuedBytes.get();
 	}
 
 	private void closeUdp() {
@@ -256,6 +274,7 @@ public final class StreamClient {
 
 	// =============================== production wiring ===============================
 
+	/** Privacy of each loaded own hologram; its key set is also "holograms the local player owns" for the receiver. */
 	private static final Map<UUID, Privacy> PRIVACY = new ConcurrentHashMap<>();
 	private static final Map<UUID, Long> LOCAL_PRIVATE = new ConcurrentHashMap<>();
 	private static @Nullable StreamClient instance;
@@ -289,7 +308,7 @@ public final class StreamClient {
 				});
 			}
 		}, UdpLink::open, StreamClient::serverHost, new LazyJpeg(), new LazyJpeg(), PRIVACY::get, OwnScreens::texture,
-				ScreenTexture::forHologram, recv, Minecraft.getInstance()::execute, System::nanoTime);
+				ScreenTexture::forHologram, recv, Minecraft.getInstance()::execute, PRIVACY::containsKey, System::nanoTime);
 		instance = c;
 		send.scheduleAtFixedRate(c::pump, 20, 20, TimeUnit.MILLISECONDS);
 		recv.scheduleAtFixedRate(c::tickReceiver, 500, 500, TimeUnit.MILLISECONDS);

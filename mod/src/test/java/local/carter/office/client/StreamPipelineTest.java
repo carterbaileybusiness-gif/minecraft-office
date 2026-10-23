@@ -58,6 +58,8 @@ class StreamPipelineTest {
 
 	private final AtomicLong now = new AtomicLong(TimeUnit.SECONDS.toNanos(100));
 	private final Map<UUID, Privacy> privacy = new ConcurrentHashMap<>();
+	/** Holograms the local player owns. */
+	private final java.util.Set<UUID> own = ConcurrentHashMap.newKeySet();
 	private final UUID hologram = UUID.randomUUID();
 	private final FakeJpeg jpeg = new FakeJpeg();
 	private final List<AutoCloseable> closeMe = new ArrayList<>();
@@ -171,7 +173,7 @@ class StreamPipelineTest {
 		Relay relay = new Relay(0, receiver);
 		StreamSender sender = sender(relay);
 		privacy.put(hologram, Privacy.PUBLIC);
-		receiver.onStart(SID, hologram);
+		start(receiver, SID, hologram);
 		assertTrue(ScreenTextureRegistry.get(hologram).isPresent(), "registered at StreamStart");
 		sender.onDemand(new StreamDemand(hologram, SID, true));
 		ByteBuffer src = frame(320, 200, 3);
@@ -196,23 +198,117 @@ class StreamPipelineTest {
 	void registryChangesRunOnTheClientThreadAndQueuedOnesCantUndoALaterOne() {
 		java.util.ArrayDeque<Runnable> clientThread = new java.util.ArrayDeque<>();
 		StreamReceiver receiver = new StreamReceiver(id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), jpeg, now::get,
-				clientThread::add);
-		receiver.onStart(SID, hologram);
+				clientThread::add, own::contains);
+		start(receiver, SID, hologram);
 		assertFalse(ScreenTextureRegistry.get(hologram).isPresent(), "not touched off the client thread");
 		receiver.onEnded(SID);
-		receiver.onStart(SID + 1, hologram); // end + restart queued before the client thread runs anything
+		start(receiver, SID + 1, hologram); // end + restart queued before the client thread runs anything
 		assertFalse(ScreenTextureRegistry.get(hologram).isPresent());
-		assertEquals(3, clientThread.size());
+		assertFalse(clientThread.isEmpty());
 		while (!clientThread.isEmpty()) {
 			clientThread.poll().run();
 		}
 		assertSame(receiver.textureOf(hologram), ScreenTextureRegistry.get(hologram).orElseThrow(),
 				"the newest wish wins: registered for the new stream");
+		assertEquals(1, receiver.textureCount());
 
 		receiver.onEnded(SID + 1);
 		assertTrue(ScreenTextureRegistry.get(hologram).isPresent(), "still registered until the client thread runs");
-		clientThread.poll().run();
+		while (!clientThread.isEmpty()) {
+			clientThread.poll().run();
+		}
 		assertFalse(ScreenTextureRegistry.get(hologram).isPresent());
+		assertEquals(0, receiver.textureCount(), "the texture object is pruned once the hologram has no stream");
+	}
+
+	// ------------------------------------------------------------------ review fixes: limits and ownership
+
+	@Test
+	void aFrameSizeOver1280OrATileOver64EndsTheStream() {
+		StreamReceiver receiver = receiver();
+		int[][] bad = { { 8192, 8192, 64 }, { 1281, 720, 64 }, { 1280, 1281, 64 }, { 0, 720, 64 }, { 640, 360, 128 } };
+		int sid = 100;
+		for (int[] b : bad) {
+			start(receiver, sid, hologram);
+			receiver.onDatagram(size(sid, b[0], b[1], b[2]));
+			assertEquals(0, receiver.streamCount(), "stream ended for " + Arrays.toString(b));
+			assertFalse(ScreenTextureRegistry.get(hologram).isPresent());
+			assertEquals(0, receiver.textureCount());
+			sid++;
+		}
+		start(receiver, sid, hologram);
+		receiver.onDatagram(size(sid, 1280, 1280, 64));
+		assertEquals(1, receiver.streamCount(), "1280 a side is fine");
+		assertEquals(0, receiver.textureOf(hologram).width(), "and nothing is allocated before a tile arrives");
+	}
+
+	@Test
+	void aFriendsStreamNeverReplacesYourOwnScreen() {
+		AtomicInteger made = new AtomicInteger();
+		StreamReceiver receiver = new StreamReceiver(id -> {
+			made.incrementAndGet();
+			return new ScreenTexture(ScreenTexture.idFor(id), new NoGpu());
+		}, jpeg, now::get, Runnable::run, own::contains);
+		ScreenTexture mine = new ScreenTexture(ScreenTexture.idFor(hologram), new NoGpu());
+		ScreenTextureRegistry.register(hologram, mine); // what OwnScreens does for an own hologram
+		own.add(hologram);
+
+		assertFalse(receiver.prepareStart(SID, hologram), "a start for an own hologram is ignored");
+		receiver.begin(SID, hologram);
+		receiver.onDatagram(size(SID, 320, 200, 64));
+		assertEquals(0, made.get(), "no texture is ever made for an own hologram");
+		assertEquals(0, receiver.streamCount());
+		assertSame(mine, ScreenTextureRegistry.get(hologram).orElseThrow(), "own screen untouched");
+
+		// a stream that started before the hologram was known to be ours ends at its next datagram, leaving ours alone
+		own.clear();
+		ScreenTextureRegistry.remove(hologram);
+		start(receiver, SID + 1, hologram);
+		own.add(hologram);
+		ScreenTextureRegistry.register(hologram, mine);
+		receiver.onDatagram(size(SID + 1, 320, 200, 64));
+		assertEquals(0, receiver.streamCount());
+		assertSame(mine, ScreenTextureRegistry.get(hologram).orElseThrow());
+		mine.clear();
+	}
+
+	@Test
+	void texturesAreMadeOnlyOnTheClientThreadHalf() {
+		AtomicInteger made = new AtomicInteger();
+		StreamReceiver receiver = new StreamReceiver(id -> {
+			made.incrementAndGet();
+			return new ScreenTexture(ScreenTexture.idFor(id), new NoGpu());
+		}, jpeg, now::get, Runnable::run, own::contains);
+		receiver.begin(SID, hologram); // receive thread without the client-thread half: nothing to bind to
+		assertEquals(0, made.get(), "the receive thread never creates a (GPU-backed) texture");
+		assertEquals(0, receiver.streamCount());
+		assertTrue(receiver.prepareStart(SID, hologram));
+		assertEquals(1, made.get());
+		receiver.begin(SID, hologram);
+		assertEquals(1, receiver.streamCount());
+		assertEquals(1, made.get());
+	}
+
+	@Test
+	void theReceiveQueueIsCappedInBytes() {
+		List<Runnable> neverRun = new ArrayList<>();
+		StreamClient client = new StreamClient(new RecordingPayloads(), UdpLink::open, InetAddress::getLoopbackAddress, jpeg,
+				new FakeJpeg(), privacy::get, id -> null, id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()),
+				neverRun::add, Runnable::run, own::contains, now::get);
+		byte[] body = new byte[30 * 1024 - StreamHeader.HEADER_BYTES];
+		ByteBuffer d = ByteBuffer.allocate(StreamHeader.HEADER_BYTES + body.length);
+		new StreamHeader(StreamHeader.TYPE_TILE, SID, 1, 0, 0, 0, 1).writeTo(d);
+		byte[] datagram = d.put(body).array();
+		for (int i = 0; i < 1000; i++) { // ~30 MB offered to a stalled receive thread
+			client.onFallbackTile(new local.carter.office.net.OfficePayloads.StreamFallbackTile(SID, datagram));
+		}
+		assertTrue(client.queuedBytes() <= StreamClient.MAX_QUEUED_BYTES, "queued " + client.queuedBytes());
+		assertEquals(StreamClient.MAX_QUEUED_BYTES / datagram.length, neverRun.size(), "the rest was dropped");
+	}
+
+	private static byte[] size(final int sid, final int w, final int h, final int tile) {
+		return ByteBuffer.allocate(StreamHeader.HEADER_BYTES + 6).put(new StreamHeader(StreamHeader.TYPE_SIZE, sid, 1, 0, 0, 0, 1).encode())
+				.putShort((short) w).putShort((short) h).putShort((short) tile).array();
 	}
 
 	@Test
@@ -221,7 +317,7 @@ class StreamPipelineTest {
 		Relay relay = new Relay(0, receiver);
 		StreamSender sender = sender(relay);
 		privacy.put(hologram, Privacy.PUBLIC);
-		receiver.onStart(SID, hologram);
+		start(receiver, SID, hologram);
 		sender.onDemand(new StreamDemand(hologram, SID, true));
 		feedFull(sender, 320, 200, frame(320, 200, 3));
 		runFrames(sender, 1);
@@ -247,7 +343,7 @@ class StreamPipelineTest {
 		Relay relay = new Relay(0.20, receiver);
 		StreamSender sender = sender(relay);
 		privacy.put(hologram, Privacy.PUBLIC);
-		receiver.onStart(SID, hologram);
+		start(receiver, SID, hologram);
 		sender.onDemand(new StreamDemand(hologram, SID, true));
 		int w = 448;
 		int h = 256; // 7 x 4 = 28 tiles
@@ -277,14 +373,14 @@ class StreamPipelineTest {
 		privacy.put(hologram, Privacy.PUBLIC);
 		Relay relay1 = new Relay(0, receiver);
 		StreamSender owner1 = sender(relay1);
-		receiver.onStart(1, hologram);
+		start(receiver, 1, hologram);
 		owner1.onDemand(new StreamDemand(hologram, 1, true));
 		feedFull(owner1, 320, 200, frame(320, 200, 1));
 		runFrames(owner1, 1);
 		ScreenTexture tex = receiver.textureOf(hologram);
 		assertEquals(320, tex.width());
 
-		receiver.onStart(2, hologram); // owner respawned / rejoined: new stream id
+		start(receiver, 2, hologram); // owner respawned / rejoined: new stream id
 		assertEquals(1, receiver.streamCount(), "the old stream is gone");
 		assertSame(tex, receiver.textureOf(hologram), "same texture (stable id) reused");
 		assertEquals(0, tex.width(), "the old picture is dropped");
@@ -316,7 +412,7 @@ class StreamPipelineTest {
 		Relay relay = new Relay(0, receiver);
 		StreamSender sender = sender(relay);
 		privacy.put(hologram, Privacy.PUBLIC);
-		receiver.onStart(SID, hologram);
+		start(receiver, SID, hologram);
 		sender.onDemand(new StreamDemand(hologram, SID, true));
 		// 2x2 checker of black/white pixels: the box filter averages 2x2 source blocks (2560 -> 1280) to mid grey
 		int sw = 2560;
@@ -446,7 +542,7 @@ class StreamPipelineTest {
 		viewer.connect(new StreamToken(2L, relay.udpPort()));
 		waitFor(() -> owner.udpBound() && viewer.udpBound(), 5000, "both bound");
 
-		viewer.receiver().onStart(SID, hologram);
+		viewer.onStart(new local.carter.office.net.OfficePayloads.StreamStart(SID, hologram));
 		privacy.put(hologram, Privacy.PUBLIC);
 		owner.onDemand(new StreamDemand(hologram, SID, true));
 		ByteBuffer src = frame(320, 200, 4);
@@ -472,12 +568,20 @@ class StreamPipelineTest {
 	}
 
 	private StreamReceiver receiver() {
-		return new StreamReceiver(id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), jpeg, now::get, Runnable::run);
+		return new StreamReceiver(id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), jpeg, now::get, Runnable::run,
+				own::contains);
+	}
+
+	/** Both halves of a StreamStart: client thread (texture) then receive thread (bind). */
+	private static void start(final StreamReceiver receiver, final int sid, final UUID hologramId) {
+		if (receiver.prepareStart(sid, hologramId)) {
+			receiver.begin(sid, hologramId);
+		}
 	}
 
 	private StreamClient client(final RecordingPayloads payloads, final java.util.function.Supplier<InetAddress> host) {
 		return new StreamClient(payloads, UdpLink::open, host, jpeg, new FakeJpeg(), privacy::get, id -> null,
-				id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), Runnable::run, Runnable::run, now::get);
+				id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), Runnable::run, Runnable::run, own::contains, now::get);
 	}
 
 	private void shareOneFrame(final StreamClient client) {
