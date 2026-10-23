@@ -55,10 +55,12 @@ public final class StarterKit {
 	static final String[][] PAGES = {
 		{"Office Handbook", "Hologram Emitters put your real computer screen into the world.\n\n"
 				+ "You get 4. Type /emitter for more (up to 8 holograms each)."},
-		{"Placing", "Place an emitter like a block. A screen floats above it, facing you.\n\n"
-				+ "Only you can resize, change or remove your holograms. Explosions can't break them."},
-		{"Sizing", "Hold an emitter, point at a corner of your hologram, hold right-click and drag. Let go to set the size.\n\n"
-				+ "Shift + right-click and drag the middle to move it. Scroll while moving to turn it."},
+		{"Placing", "Put an emitter on a wall: the screen hangs flat on it, like a painting.\n"
+				+ "On the floor: it floats above, facing you. Under a ceiling: it hangs below.\n\n"
+				+ "Only you can resize, change or remove your holograms."},
+		{"Sizing", "Hold an emitter and look at your screen: glowing corners appear.\n"
+				+ "Hold right-click on a corner and drag, or just scroll.\n\n"
+				+ "Shift + hold right-click to move it (scroll turns floor screens)."},
 		{"Settings", "Right-click the emitter:\n- Shape: 16:9, 21:9 or 9:16\n- Mode: Extend or Window\n"
 				+ "- Display: which of your screens\n- Remove"},
 		{"Privacy", "Also in the emitter menu:\n- Public: anyone nearby sees it\n- Private: only you; others see frosted glass\n"

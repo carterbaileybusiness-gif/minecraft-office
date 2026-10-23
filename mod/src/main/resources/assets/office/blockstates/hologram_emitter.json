@@ -1,7 +1,49 @@
 {
   "variants": {
-    "": {
+    "face=floor,facing=north": {
       "model": "office:block/hologram_emitter"
+    },
+    "face=floor,facing=east": {
+      "model": "office:block/hologram_emitter",
+      "y": 90
+    },
+    "face=floor,facing=south": {
+      "model": "office:block/hologram_emitter",
+      "y": 180
+    },
+    "face=floor,facing=west": {
+      "model": "office:block/hologram_emitter",
+      "y": 270
+    },
+    "face=wall,facing=north": {
+      "model": "office:block/hologram_emitter_wall"
+    },
+    "face=wall,facing=east": {
+      "model": "office:block/hologram_emitter_wall",
+      "y": 90
+    },
+    "face=wall,facing=south": {
+      "model": "office:block/hologram_emitter_wall",
+      "y": 180
+    },
+    "face=wall,facing=west": {
+      "model": "office:block/hologram_emitter_wall",
+      "y": 270
+    },
+    "face=ceiling,facing=north": {
+      "model": "office:block/hologram_emitter_ceiling"
+    },
+    "face=ceiling,facing=east": {
+      "model": "office:block/hologram_emitter_ceiling",
+      "y": 90
+    },
+    "face=ceiling,facing=south": {
+      "model": "office:block/hologram_emitter_ceiling",
+      "y": 180
+    },
+    "face=ceiling,facing=west": {
+      "model": "office:block/hologram_emitter_ceiling",
+      "y": 270
     }
   }
 }
