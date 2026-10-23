@@ -30,6 +30,8 @@ import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 import local.carter.office.client.helper.HelperInstaller.Asset;
 import local.carter.office.client.helper.HelperInstaller.InstallException;
@@ -106,7 +108,9 @@ class HelperInstallerTest {
 		serveManifest(ZIP_URL, sha256(zip), zip.length);
 	}
 
+	// macOS helper installer only: ensureSupportDir sets POSIX rwx------ (throws on Windows); never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void zipSlipIsRefusedBeforeUnpacking() throws Exception {
 		Path outside = dir.getParent().resolve("evil.txt");
 		for (String bad : new String[] {"OfficeHelper.app/../../evil.txt", "../evil.txt", "/tmp/evil.txt", "Other.app/x"}) {
@@ -217,7 +221,9 @@ class HelperInstallerTest {
 		assertEquals(List.of(URI.create(BASE + "manifest.json")), fetched);
 	}
 
+	// macOS helper installer only: ensureSupportDir sets POSIX rwx------ (throws on Windows); never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void checksumMismatchRefusesTheInstall() throws Exception {
 		byte[] zip = fakeAppZip();
 		served.put(ZIP_URL, zip);
@@ -234,7 +240,9 @@ class HelperInstallerTest {
 		}
 	}
 
+	// macOS helper installer only: ensureSupportDir sets POSIX rwx------ (throws on Windows); never reached on Windows.
 	@Test
+	@DisabledOnOs(OS.WINDOWS)
 	void sizeMismatchRefusesTheInstall() throws Exception {
 		byte[] zip = fakeAppZip();
 		served.put(ZIP_URL, zip);
