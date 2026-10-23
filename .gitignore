@@ -1,0 +1,6 @@
+.superpowers/
+build/
+.gradle/
+run/
+*.log
+.DS_Store
