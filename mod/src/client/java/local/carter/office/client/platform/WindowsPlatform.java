@@ -110,6 +110,25 @@ public final class WindowsPlatform implements Platform {
 		return new JavaDesktopSource();
 	}
 
+	/** Self-test: the webrtc-java natives load (64-bit Windows only) and the Win32 bindings work. */
+	@Override
+	public Readiness readiness() {
+		if (!WebRtcNatives.supported()) {
+			return new Readiness(true, false, false, (WebRtcNatives.isWindows() ? JavaDesktopSource.REASON_ARM
+					: JavaDesktopSource.REASON_NOT_WINDOWS) + " (" + System.getProperty("os.arch") + ")");
+		}
+		try {
+			long t0 = System.nanoTime();
+			WebRtcNatives.load();
+			long ms = (System.nanoTime() - t0) / 1_000_000;
+			Win32.get();
+			return new Readiness(true, true, true, "webrtc-java natives loaded (" + System.getProperty("os.arch") + ", " + ms
+					+ " ms), Win32 ready");
+		} catch (Throwable e) {
+			return new Readiness(true, false, false, e.getMessage() == null ? e.toString() : e.getMessage());
+		}
+	}
+
 	/** {@link JavaDesktopSource} paces itself (10 fps, 30 while the player works on that window). */
 	@Override
 	public boolean ownSourcePacesItself() {

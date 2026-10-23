@@ -229,12 +229,22 @@ Your starter kit also has an **Office Handbook** book with the basics.
 
 ## 10. Something wrong?
 
-1. Start Minecraft and press **Esc** to open the pause menu.
-2. Click **Screen self-test** and wait a few seconds.
-3. Click **Copy report**, then paste it into a message to **Carter**.
+Run the self-test while you are on the server:
 
-The report says what computer you have and which step failed. It has **no pictures of your screen** and no window
-titles, only app names. **Open folder** shows the saved report files if copying does not work.
+1. Press **Esc** to open the pause menu.
+2. Click **Screen self-test** (bottom-left corner). You can also type `/officeselftest` in chat.
+3. Optional: click **Test window** until it shows an app you have open (for example your browser). This lets the test
+   capture one frame of that window to check that capture works. Leave it on **None (skip)** to skip that check. The
+   test never captures a window you did not pick. On a Mac the list says **none yet (press Run test)** until the
+   first run, because the helper only starts when you press **Run test**. Run once, then pick a window and click
+   **Run again**.
+4. Click **Run test**. A checklist fills in: ✓ worked, ✗ failed, – skipped. It takes up to 30 seconds and the game
+   keeps running.
+5. Click **Copy report**, then paste it into a message to **Carter**.
+
+The report says what computer you have and which step failed. It has **no pictures of your screen**, no window
+titles (only app names) and no server address. Each run is also saved as a text file: **Open folder** shows them
+(`office-selftest` in your Minecraft folder) if copying does not work.
 
 Quick fixes:
 - Hologram says it needs the helper (Mac): redo the [Mac permissions](#mac) and restart Minecraft.

@@ -53,6 +53,13 @@ public final class UdpLink implements AutoCloseable {
 	private final Thread thread;
 	private volatile boolean bound;
 	private volatile boolean closed;
+	/** Self-test: start a fresh handshake at the next poll. */
+	private volatile boolean probe;
+	// self-test counters (written by the link thread only)
+	private volatile int hellos;
+	private volatile int challenges;
+	private volatile int binds;
+	private volatile long rttNanos = -1;
 
 	// link thread only
 	private Boolean reported;
@@ -60,6 +67,22 @@ public final class UdpLink implements AutoCloseable {
 	private long attemptStart;
 	private long nextHello;
 	private long nextKeepalive;
+	private long echoSentAt;
+
+	/**
+	 * Handshake counters for the self-test: HELLOs sent, challenges received, binds confirmed, and the last bind's round
+	 * trip (nonce echo → bound HELLO_ACK; -1 before the first bind). Never the token.
+	 */
+	public record Stats(int hellos, int challenges, int binds, long rttNanos) {}
+
+	public Stats stats() {
+		return new Stats(hellos, challenges, binds, rttNanos);
+	}
+
+	/** Runs a fresh handshake soon (any thread), like the 15 s keepalive does; the current binding stays meanwhile. */
+	public void probe() {
+		probe = true;
+	}
 
 	private UdpLink(final DatagramSocket socket, final long token, final Listener listener, final LongSupplier clock) {
 		this.socket = socket;
@@ -167,9 +190,13 @@ public final class UdpLink implements AutoCloseable {
 				// challenge: echo the nonce from this same socket
 				byte[] echo = ByteBuffer.allocate(StreamHeader.HEADER_BYTES + 2 * Packetizer.TOKEN_BYTES)
 						.put(hello()).put(token).put(d, StreamHeader.HEADER_BYTES, Packetizer.TOKEN_BYTES).array();
+				challenges++;
+				echoSentAt = clock.getAsLong();
 				send(echo);
 			} else if (d.length == StreamHeader.HEADER_BYTES) {
 				long now = clock.getAsLong();
+				rttNanos = now - echoSentAt;
+				binds++;
 				handshaking = false;
 				nextKeepalive = now + KEEPALIVE_NANOS;
 				bound = true;
@@ -181,6 +208,13 @@ public final class UdpLink implements AutoCloseable {
 	}
 
 	private void timers(final long now) {
+		if (probe) {
+			probe = false;
+			if (!handshaking) {
+				startHandshake(now);
+				return;
+			}
+		}
 		if (!handshaking) {
 			if (now - nextKeepalive >= 0) {
 				startHandshake(now);
@@ -204,6 +238,7 @@ public final class UdpLink implements AutoCloseable {
 
 	private void sendHello(final long now) {
 		nextHello = now + RETRY_NANOS;
+		hellos++;
 		send(ByteBuffer.allocate(StreamHeader.HEADER_BYTES + Packetizer.TOKEN_BYTES).put(hello()).put(token).array());
 	}
 
