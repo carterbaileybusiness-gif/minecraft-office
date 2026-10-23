@@ -193,6 +193,29 @@ class StreamPipelineTest {
 	}
 
 	@Test
+	void registryChangesRunOnTheClientThreadAndQueuedOnesCantUndoALaterOne() {
+		java.util.ArrayDeque<Runnable> clientThread = new java.util.ArrayDeque<>();
+		StreamReceiver receiver = new StreamReceiver(id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), jpeg, now::get,
+				clientThread::add);
+		receiver.onStart(SID, hologram);
+		assertFalse(ScreenTextureRegistry.get(hologram).isPresent(), "not touched off the client thread");
+		receiver.onEnded(SID);
+		receiver.onStart(SID + 1, hologram); // end + restart queued before the client thread runs anything
+		assertFalse(ScreenTextureRegistry.get(hologram).isPresent());
+		assertEquals(3, clientThread.size());
+		while (!clientThread.isEmpty()) {
+			clientThread.poll().run();
+		}
+		assertSame(receiver.textureOf(hologram), ScreenTextureRegistry.get(hologram).orElseThrow(),
+				"the newest wish wins: registered for the new stream");
+
+		receiver.onEnded(SID + 1);
+		assertTrue(ScreenTextureRegistry.get(hologram).isPresent(), "still registered until the client thread runs");
+		clientThread.poll().run();
+		assertFalse(ScreenTextureRegistry.get(hologram).isPresent());
+	}
+
+	@Test
 	void threeSecondsWithoutPacketsClearsTheTexture() {
 		StreamReceiver receiver = receiver();
 		Relay relay = new Relay(0, receiver);
@@ -449,12 +472,12 @@ class StreamPipelineTest {
 	}
 
 	private StreamReceiver receiver() {
-		return new StreamReceiver(id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), jpeg, now::get);
+		return new StreamReceiver(id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), jpeg, now::get, Runnable::run);
 	}
 
 	private StreamClient client(final RecordingPayloads payloads, final java.util.function.Supplier<InetAddress> host) {
 		return new StreamClient(payloads, UdpLink::open, host, jpeg, new FakeJpeg(), privacy::get, id -> null,
-				id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), Runnable::run, now::get);
+				id -> new ScreenTexture(ScreenTexture.idFor(id), new NoGpu()), Runnable::run, Runnable::run, now::get);
 	}
 
 	private void shareOneFrame(final StreamClient client) {

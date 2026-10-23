@@ -6,6 +6,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -33,7 +35,10 @@ import local.carter.office.core.TileCodec;
  * stream for a hologram replaces the old one (owner respawn = new stream id).
  *
  * <p>Thread-safe (all methods synchronized). Production calls everything from one receive thread, never the render
- * thread, so decoding never stalls a frame. Bad datagrams are dropped, never thrown.
+ * thread, so decoding never stalls a frame. Bad datagrams are dropped, never thrown. {@link ScreenTextureRegistry}
+ * changes are made on the client thread (the registry's contract): the receiver records which texture each hologram
+ * should show and posts a reconcile task to {@code clientThread}, which applies the <em>current</em> wish, so queued
+ * tasks can't undo a later change. Pixels are dropped at once ({@code texture.clear()} is safe off-thread).
  */
 public final class StreamReceiver {
 	public static final long TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(3);
@@ -42,6 +47,9 @@ public final class StreamReceiver {
 	private static final Logger LOGGER = LogUtils.getLogger();
 
 	private final Function<UUID, ScreenTexture> textureFactory;
+	private final Executor clientThread;
+	/** The texture each hologram should show right now; the client thread mirrors it (concurrent: no lock there). */
+	private final Map<UUID, ScreenTexture> wanted = new ConcurrentHashMap<>();
 	private final TileCodec.Jpeg jpeg;
 	private final LongSupplier clock;
 	private final Packetizer packetizer;
@@ -70,8 +78,13 @@ public final class StreamReceiver {
 		}
 	}
 
-	public StreamReceiver(final Function<UUID, ScreenTexture> textureFactory, final TileCodec.Jpeg jpeg, final LongSupplier clock) {
+	/**
+	 * @param clientThread runs registry changes on the client thread ({@code Minecraft::execute}; tests: direct)
+	 */
+	public StreamReceiver(final Function<UUID, ScreenTexture> textureFactory, final TileCodec.Jpeg jpeg, final LongSupplier clock,
+			final Executor clientThread) {
 		this.textureFactory = textureFactory;
+		this.clientThread = clientThread;
 		this.jpeg = jpeg;
 		this.clock = clock;
 		this.packetizer = new Packetizer(clock);
@@ -226,16 +239,36 @@ public final class StreamReceiver {
 
 	private void register(final Stream s) {
 		if (!s.registered) {
-			ScreenTextureRegistry.register(s.hologramId, s.texture);
 			s.registered = true;
+			wanted.put(s.hologramId, s.texture);
+			postReconcile(s.hologramId);
+		}
+	}
+
+	private void postReconcile(final UUID hologramId) {
+		try {
+			clientThread.execute(() -> reconcile(hologramId));
+		} catch (RuntimeException e) {
+			LOGGER.debug("[office] Registry update for {} not queued: {}", hologramId, e.toString());
+		}
+	}
+
+	/** Client thread: make the registry show what the receiver wants for this hologram now. */
+	private void reconcile(final UUID hologramId) {
+		ScreenTexture want = wanted.get(hologramId);
+		if (want != null) {
+			ScreenTextureRegistry.register(hologramId, want);
+		} else {
+			ScreenTextureRegistry.remove(hologramId);
 		}
 	}
 
 	/** Loses the picture (registry entry + pixels + reassembly state) but keeps the stream for when it resumes. */
 	private void drop(final Stream s) {
 		if (s.registered) {
-			ScreenTextureRegistry.remove(s.hologramId);
 			s.registered = false;
+			wanted.remove(s.hologramId, s.texture);
+			postReconcile(s.hologramId);
 		}
 		s.texture.clear();
 		s.sized = false;

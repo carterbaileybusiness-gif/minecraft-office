@@ -92,13 +92,13 @@ public final class StreamClient {
 	public StreamClient(final Payloads payloads, final UdpOpener opener, final Supplier<@Nullable InetAddress> serverHost,
 			final TileCodec.Jpeg sendJpeg, final TileCodec.Jpeg receiveJpeg, final Function<UUID, @Nullable Privacy> privacyOf,
 			final Function<UUID, @Nullable ScreenTexture> ownTexture, final Function<UUID, ScreenTexture> textureFactory,
-			final Executor receiveExecutor, final LongSupplier clock) {
+			final Executor receiveExecutor, final Executor clientThread, final LongSupplier clock) {
 		this.payloads = payloads;
 		this.opener = opener;
 		this.serverHost = serverHost;
 		this.receiveExecutor = receiveExecutor;
 		this.sender = new StreamSender(new Link(), sendJpeg, privacyOf, ownTexture, clock);
-		this.receiver = new StreamReceiver(textureFactory, receiveJpeg, clock);
+		this.receiver = new StreamReceiver(textureFactory, receiveJpeg, clock, clientThread);
 	}
 
 	public StreamSender sender() {
@@ -289,7 +289,7 @@ public final class StreamClient {
 				});
 			}
 		}, UdpLink::open, StreamClient::serverHost, new LazyJpeg(), new LazyJpeg(), PRIVACY::get, OwnScreens::texture,
-				ScreenTexture::forHologram, recv, System::nanoTime);
+				ScreenTexture::forHologram, recv, Minecraft.getInstance()::execute, System::nanoTime);
 		instance = c;
 		send.scheduleAtFixedRate(c::pump, 20, 20, TimeUnit.MILLISECONDS);
 		recv.scheduleAtFixedRate(c::tickReceiver, 500, 500, TimeUnit.MILLISECONDS);
