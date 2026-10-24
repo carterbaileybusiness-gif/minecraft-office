@@ -1083,7 +1083,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			if (context.computeOnClient(mc -> ChargeCircles.showing()) != 1) throw new AssertionError("one charging circle expected");
 			BufferedImage full = read(context.takeScreenshot("magic-charge-full"));
 			int[] r = context.computeOnClient(MagicClientGameTests::circleRect);
-			// Pixels inside the circle's projection: the ellipse inscribed in its rect.
+			// Pixels inside the circle's projection, the ellipse inscribed in its rect: a circle never reaches its rect's corners
+			// (controller ruling, Task 24 round 1: the brief's "rect" meant this; the limit stays 20 %).
 			double cx = (r[0] + r[2]) / 2.0, cy = (r[1] + r[3]) / 2.0, rx = (r[2] - r[0]) / 2.0, ry = (r[3] - r[1]) / 2.0;
 			int n = 0, diff = 0;
 			for (int y = r[1]; y < r[3]; y++) {
@@ -1194,12 +1195,17 @@ public class MagicClientGameTests implements FabricClientGameTest {
 	/**
 	 * An 854 × 480 window with the GUI scale set to 4 (the game caps it at the largest that window allows): the mana bar, the
 	 * wheel, the hand-sign prompt, the grimoire and the element choice all lie inside the screen, and each of their widgets is
-	 * drawn (at least 20 % non-background pixels in its rect). The background is one plain bright face filling the view (a white
-	 * concrete wall, night vision, FOV 30), sampled in each screenshot away from the widgets, so a dark panel or tile counts as drawn.
+	 * drawn (at least 20 % non-background pixels in its rect). The background is one plain bright face filling the view (the white
+	 * concrete floor seen straight down, its top face fully shaded, with night vision, full brightness and FOV 30), sampled in each
+	 * screenshot away from the widgets, so a dark panel or tile counts as drawn. Exempt from the pixel share (checked inside the
+	 * screen only): the wheel labels and the grimoire footer, whose rects are layout anchors much wider than the short text drawn
+	 * in them.
 	 */
 	private static void screensFitAtGuiScale4(ClientGameTestContext context, TestSingleplayerContext sp) {
 		int fov = context.computeOnClient(mc -> mc.options.fov().get());
-		wallTo(sp, Blocks.CONCRETE.white());
+		double gamma = context.computeOnClient(mc -> mc.options.gamma().get());
+		floorTo(sp, Blocks.CONCRETE.white());
+		context.runOnClient(mc -> mc.options.gamma().set(1.0));
 		sp.getServer().runOnServer(server -> player(server).addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, 20 * 120, 0, false, false)));
 		context.runOnClient(mc -> mc.options.fov().set(30));
 		context.getInput().resizeWindow(854, 480);
@@ -1209,10 +1215,17 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			int scale = context.computeOnClient(mc -> mc.getWindow().getGuiScale());
 			int w = context.computeOnClient(mc -> mc.getWindow().getGuiScaledWidth());
 			int h = context.computeOnClient(mc -> mc.getWindow().getGuiScaledHeight());
-			System.out.println("[magic] 854 x 480 at GUI scale option 4: scale " + scale + ", " + w + " x " + h + " GUI units");
-			lookEast(context);
+			// The largest scale the window allows (vanilla: at least 320 × 240 GUI units), capped by the option: 2 at 854 × 480.
+			int allowed = context.computeOnClient(mc -> {
+				int s = 1;
+				while (s < 4 && mc.getWindow().getWidth() / (s + 1) >= 320 && mc.getWindow().getHeight() / (s + 1) >= 240) s++;
+				return s;
+			});
+			System.out.println("[magic] 854 x 480 at GUI scale option 4: scale " + scale + " (allowed " + allowed + "), " + w + " x " + h + " GUI units");
+			if (scale != allowed) throw new AssertionError("GUI scale option 4 should give the largest the window allows, " + allowed + ", got " + scale);
+			lookDown(context);
 			refill(context, sp, TAP_PROBE);
-			// The ultimate's cast fx and the spell label gone, so the view is the plain wall.
+			// The ultimate's cast fx and the spell label gone, so the view is the plain floor.
 			context.waitTicks(100);
 			context.waitFor(mc -> ManaBarHud.labelTicks() <= 0, 200);
 			quietHud(context);
@@ -1220,7 +1233,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			BufferedImage world = read(context.takeScreenshot("magic-fit-world"));
 			int bg = backdrop(world, false);
 			int[] hue = {(bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF};
-			if (hue[0] < 60 || hue[1] < 60 || hue[2] < 60) throw new AssertionError("the backdrop should be the lit white wall, not near-black: " + Integer.toHexString(bg));
+			if (hue[0] < 120 || hue[1] < 120 || hue[2] < 120) throw new AssertionError("the backdrop should be the lit white floor: " + Integer.toHexString(bg));
 
 			// The mana bar (stance: off-hand grimoire, empty main hand).
 			ManaBarLayout.Layout bar = ManaBarLayout.layout(w, h);
@@ -1230,6 +1243,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			assertInside(bar.manaText(tw[0]), w, h, "mana number");
 			assertInside(bar.xpText(tw[1], false), w, h, "XP level");
 			assertDrawn(world, bar.bar(), scale, bg, "mana bar");
+			assertDrawn(world, bar.manaText(tw[0]), scale, bg, "mana number");
+			assertDrawn(world, bar.xpText(tw[1], false), scale, bg, "XP level");
 
 			// The wheel.
 			context.getInput().holdKey(MagicKeys.WHEEL);
@@ -1259,6 +1274,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			SignLayout.Layout sl = context.computeOnClient(mc -> ((HandSignScreen) mc.gui.screen()).layout());
 			assertInside(sl.panel(), w, h, "sign panel");
 			assertInside(sl.timer(), w, h, "sign timer");
+			assertDrawn(signs, sl.timer(), scale, signsBg, "sign timer");
 			for (int i = 0; i < sl.arrows().size(); i++) {
 				assertInside(sl.arrows().get(i), w, h, "sign arrow " + i);
 				assertDrawn(signs, sl.arrows().get(i), scale, signsBg, "sign arrow " + i);
@@ -1323,8 +1339,11 @@ public class MagicClientGameTests implements FabricClientGameTest {
 				p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
 				p.removeEffect(MobEffects.NIGHT_VISION);
 			});
-			wallTo(sp, Blocks.OBSIDIAN);
-			context.runOnClient(mc -> mc.options.fov().set(fov));
+			floorTo(sp, Blocks.OBSIDIAN);
+			context.runOnClient(mc -> {
+				mc.options.fov().set(fov);
+				mc.options.gamma().set(gamma);
+			});
 			context.getInput().resizeWindow(1920, 1080);
 			setGuiScale(context, 4);
 		}
@@ -1338,16 +1357,24 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		return beside ? img.getRGB(img.getWidth() / 50, img.getHeight() / 2) : img.getRGB(img.getWidth() / 2, img.getHeight() / 8);
 	}
 
-	/** Sets the room's east wall (the one {@link #lookEast} faces) to {@code b}. */
-	private static void wallTo(TestSingleplayerContext sp, net.minecraft.world.level.block.Block b) {
+	/** Sets the room's floor (under the player, inside the walls) to {@code b}. */
+	private static void floorTo(TestSingleplayerContext sp, net.minecraft.world.level.block.Block b) {
 		sp.getServer().runOnServer(server -> {
 			ServerPlayer p = player(server);
 			BlockPos stand = p.blockPosition();
-			for (int dy = -1; dy <= 4; dy++) {
-				for (int dz = -3; dz <= 3; dz++) p.level().setBlockAndUpdate(stand.offset(3, dy, dz), b.defaultBlockState());
+			for (int dx = -2; dx <= 2; dx++) {
+				for (int dz = -2; dz <= 2; dz++) p.level().setBlockAndUpdate(stand.offset(dx, -1, dz), b.defaultBlockState());
 			}
 		});
 		sp.getConnection().waitForChunksRender();
+	}
+
+	/** Points the client player's view straight down. */
+	private static void lookDown(ClientGameTestContext context) {
+		context.runOnClient(mc -> {
+			mc.player.setXRot(90f);
+			mc.player.xRotO = 90f;
+		});
 	}
 
 	// ---- helpers ----

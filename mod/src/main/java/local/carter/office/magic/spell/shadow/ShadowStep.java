@@ -85,7 +85,7 @@ public final class ShadowStep implements Spell {
 		Vec3 spot = Motion.fit(p, dest);
 		if (unsafe(level, spot != null ? spot : from)) return CastOutcome.fizzle(UNSAFE_KEY);
 		if (target.isPresent()) face(p, dest, target.get());
-		Vec3 at = Motion.teleportSafe(p, dest);
+		Vec3 at = Motion.place(p, spot); // Motion.teleportSafe(p, dest), with the spot already found
 		if (target.isPresent() && at.distanceToSqr(dest) > 1.0E-4 && at.distanceToSqr(from) > 1.0E-4) {
 			// It stepped back from a spot that did not fit: turn to the target again from where it really landed (same, safe spot).
 			face(p, at, target.get());

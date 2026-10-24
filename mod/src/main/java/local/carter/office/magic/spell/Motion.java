@@ -56,7 +56,16 @@ public final class Motion {
 	 * @return where the player ended up
 	 */
 	public static Vec3 teleportSafe(ServerPlayer p, Vec3 target) {
-		Vec3 at = fit(p, target);
+		return place(p, fit(p, target));
+	}
+
+	/**
+	 * The second half of {@link #teleportSafe}: teleports the player to {@code at} (a spot {@link #fit} found), dismounting them
+	 * first; with a null {@code at} (nothing fit) they stay put.
+	 *
+	 * @return where the player ended up
+	 */
+	public static Vec3 place(ServerPlayer p, @Nullable Vec3 at) {
 		if (at == null) return p.position();
 		ServerLevel level = p.level();
 		if (p.isPassenger()) p.stopRiding();

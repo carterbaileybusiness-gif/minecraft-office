@@ -621,9 +621,11 @@ public class WindGameTests {
 
 	/**
 	 * Chained Air Steps never add up to flight: trying a full-charge cast every tick for 400 ticks (level 10, the most mana and
-	 * regen), the cooldown lets one through every 40 ticks, and each one starts lower than the last. The server never moves a
-	 * mock player, so its height is integrated here as the client does it: each tick it moves by its velocity, then gravity
-	 * (the player's own attribute) and the 0.98 drag apply; a cast sets the velocity.
+	 * regen), the cooldown lets one through every 40 ticks, and each one starts lower than the last.
+	 *
+	 * <p>A model, not in-game motion: the server never moves a mock player, so the height is integrated here as the client would
+	 * (each tick it moves by its velocity, then gravity, the player's own attribute, and the 0.98 drag apply; a cast sets the
+	 * velocity). What is real is the cast pipeline: {@code AirStep}'s velocity, its cooldown and the mana it costs.
 	 */
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 440)
 	public void airStepChainNeverGivesEndlessFlight(GameTestHelper h) {

@@ -16,6 +16,7 @@ import local.carter.office.magic.spell.TargetFilter;
 
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffectUtil;
 import net.minecraft.world.effect.MobEffects;
@@ -32,7 +33,7 @@ import net.minecraft.world.phys.Vec3;
  * Water Prison (Water, slot 3, medium, lingering): trap a foe in a sphere of water.
  *
  * <p>The cast looks along the caster's view for the first hostile mob ({@link Enemy}, the lanes' ruling: control effects take
- * only foes, never livestock, golems or allays) within {@link WaterPrisonGeometry#RANGE}, in sight (the ray stops at the first
+ * only foes, never livestock, golems, allays or a boss) within {@link WaterPrisonGeometry#RANGE}, in sight (the ray stops at the first
  * solid block). A sphere of {@link WaterPrisonGeometry#RADIUS} forms about its middle for {@link WaterPrisonGeometry#duration}
  * ticks (100 + 40 × charge). If the ray finds no foe, the sphere forms where the ray ends (backed off a wall by its radius) and
  * takes the first foe that comes inside.
@@ -91,9 +92,12 @@ public final class WaterPrison implements Spell {
 		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withEntities(held).withData((float) WaterPrisonGeometry.RADIUS));
 	}
 
-	/** Whether the prison may take {@code e}: a foe the caster's spells may touch. */
-	static boolean takes(CastContext ctx, Entity e) {
-		return e instanceof Enemy && TargetFilter.affects(ctx.caster(), e);
+	/**
+	 * Whether the prison may take {@code e}: a foe the caster's spells may touch, never a boss (it roots and pulls, a control
+	 * effect: {@link TargetFilter#controllable}).
+	 */
+	public static boolean takes(ServerPlayer caster, Entity e) {
+		return e instanceof LivingEntity && TargetFilter.controllable(caster, e);
 	}
 
 	/** The nearest foe whose hitbox (inflated by {@link WaterPrisonGeometry#FORGIVENESS}) the ray {@code eye → end} passes through. */
@@ -101,7 +105,7 @@ public final class WaterPrison implements Spell {
 		AABB sweep = new AABB(eye, end).inflate(WaterPrisonGeometry.FORGIVENESS + 1);
 		LivingEntity best = null;
 		double bestDist = Double.MAX_VALUE;
-		for (LivingEntity e : ctx.level().getEntitiesOfClass(LivingEntity.class, sweep, e -> takes(ctx, e))) {
+		for (LivingEntity e : ctx.level().getEntitiesOfClass(LivingEntity.class, sweep, e -> takes(ctx.caster(), e))) {
 			AABB box = e.getBoundingBox().inflate(WaterPrisonGeometry.FORGIVENESS + e.getPickRadius());
 			double d;
 			if (box.contains(eye)) {
@@ -174,7 +178,7 @@ public final class WaterPrison implements Spell {
 			double r = WaterPrisonGeometry.RADIUS + WaterPrisonGeometry.HOLD;
 			LivingEntity best = null;
 			double bestDist = Double.MAX_VALUE;
-			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(centre, centre).inflate(r + 2), e -> takes(ctx, e))) {
+			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(centre, centre).inflate(r + 2), e -> takes(ctx.caster(), e))) {
 				Vec3 m = e.getBoundingBox().getCenter();
 				if (!WaterPrisonGeometry.inside(centre, m)) continue;
 				double d = m.distanceToSqr(centre);

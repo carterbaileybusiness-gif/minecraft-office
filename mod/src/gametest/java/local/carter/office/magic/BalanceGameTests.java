@@ -28,6 +28,7 @@ import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.spell.earth.EarthSpikes;
 import local.carter.office.magic.spell.earth.Quake;
+import local.carter.office.magic.spell.water.WaterPrison;
 import local.carter.office.magic.terrain.EditLog.LoggedCast;
 import local.carter.office.magic.terrain.EditLog.LoggedEdit;
 import local.carter.office.magic.terrain.EditTier;
@@ -493,10 +494,12 @@ public class BalanceGameTests {
 			h.assertFalse(TargetFilter.controllable(p, b), b.getType() + ": never pulled, lifted or chained");
 			h.assertFalse(Quake.pushes(p, b), b.getType() + ": Quake never throws it");
 			h.assertFalse(EarthSpikes.liftable(p, b), b.getType() + ": Earth Spikes never lift it");
+			h.assertFalse(WaterPrison.takes(p, b), b.getType() + ": Water Prison never holds or pulls it");
 		}
 		Zombie z = EntityTypes.ZOMBIE.create(level, EntitySpawnReason.COMMAND);
 		h.assertFalse(TargetFilter.isBoss(z), "positive control: a zombie is no boss");
 		h.assertTrue(TargetFilter.controllable(p, z) && Quake.pushes(p, z) && EarthSpikes.liftable(p, z), "positive control: a zombie is controlled");
+		h.assertTrue(WaterPrison.takes(p, z), "positive control: Water Prison takes a zombie");
 		h.succeed();
 	}
 
