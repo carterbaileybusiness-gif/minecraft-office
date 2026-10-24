@@ -5,7 +5,7 @@ Welcome! This is our private Minecraft server where you can put **hologram monit
 
 **Jump to:** [What you need](#1-what-you-need) · [Prism](#2-install-prism-launcher) · [Modpack](#3-add-the-modpack) ·
 [Memory](#4-memory) · [Join](#5-join-the-server) · [Your screens](#6-your-screens) ·
-[Holograms](#7-using-holograms) · [Voice, waystones, claims](#8-voice-chat-waystones-and-claims) ·
+[Holograms](#7-using-holograms) · [Voice and claims](#8-voice-chat-and-claims) ·
 [Magic](#9-magic) · [Problems](#10-something-wrong)
 
 ---
@@ -221,7 +221,7 @@ Good to know:
 <!-- screenshot: placed hologram with cyan corner drag outline -->
 <!-- screenshot: emitter settings screen -->
 
-## 8. Voice chat, waystones and claims
+## 8. Voice chat and claims
 
 - **Voice chat:** press **V** to open the voice chat menu. The first time you press it, a short setup asks you to
   pick your microphone and test it. Allow the microphone if your computer asks. Nearby friends hear you (about 48
@@ -229,8 +229,6 @@ Good to know:
   **voice activation** (your mic opens when you speak), or choose a key for push-to-talk under Options, Controls,
   Key Binds, Voice Chat, **Push To Talk**. Handy keys: **M** mutes your mic, **N** turns voice chat off, **H** hides
   the little voice icons.
-- **Waystones:** a Warp Stone (4 amethyst shards, 4 ender pearls, 1 gold ingot) turns stone bricks into a waystone.
-  Waystones you have visited let you teleport between them. Some sit in the wild too.
 - **Claims** (protect your office): press **'** (apostrophe) and claim the chunks around your office. Friends you add
   to your party can still build there.
 

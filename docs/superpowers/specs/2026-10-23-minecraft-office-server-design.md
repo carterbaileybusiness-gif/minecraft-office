@@ -222,8 +222,8 @@ All 26.3 Fabric builds verified on Modrinth 2026-10-23 unless noted. **(my call;
 - **Magic**: **Wizards + Spell Engine + Spell Power** (and required deps). It has its own **Spell Binding Table**
   workbench, spell books and wizard gear found and crafted in normal survival — matching Carter's "its own workbench or
   book" idea. Later: our own office/tech-themed spells as Spell Engine data, no new mod required.
-- **Hanging out**: **Simple Voice Chat** (proximity voice — talk to whoever is in the office with you), **Waystones**
-  (fast travel between friends' offices), **Open Parties and Claims** (protect each office from accidents).
+- **Hanging out**: **Simple Voice Chat** (proximity voice — talk to whoever is in the office with you), the grimoire's
+  **Recall** spell (travel home; Waystones was removed, Carter 2026-10-24), **Open Parties and Claims** (protect each office from accidents).
 - **Performance**: Sodium, Lithium, FerriteCore, ImmediatelyFast, Entity Culling, Dynamic FPS, Mod Menu. Optional per
   player: Iris shaders, Distant Horizons (off on Carter's 8 GB M1).
 - Builder may swap any pick for a better-fitting 26.3 mod if it serves the same purpose and the anti-goals.

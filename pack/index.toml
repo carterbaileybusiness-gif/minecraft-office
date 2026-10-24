@@ -15,11 +15,6 @@ hash = "ff675667f4c6924a9eaebc42dc2df5306dc5e8b005e931d9d8b73cebad67d5eb"
 metafile = true
 
 [[files]]
-file = "mods/balm.pw.toml"
-hash = "3f529d5fd5e99dbcba1364cfc68eefc9235e6956dcd05f4c6554116f89d9c9c9"
-metafile = true
-
-[[files]]
 file = "mods/chunky.pw.toml"
 hash = "c3e4fe1c4469a4cbad5fc201fe7083166b6bf3cab7edb23398a317b4c29bd727"
 metafile = true
@@ -90,11 +85,6 @@ hash = "6a9c2f3995f8bf6d9b5dc0f711f22665c3c0ad488b0f4f04cf423c6f1f305ba6"
 metafile = true
 
 [[files]]
-file = "mods/jei.pw.toml"
-hash = "b9aba92974f0d317a150c2040215772eee878b4f59e3c8f68d7a1e73a6527be9"
-metafile = true
-
-[[files]]
 file = "mods/lambdynamiclights.pw.toml"
 hash = "37338b87f401db170120d53ff7f485a7354ec53e995b2a1144a423234a693d8e"
 metafile = true
@@ -107,11 +97,6 @@ metafile = true
 [[files]]
 file = "mods/lithostitched.pw.toml"
 hash = "f4c7c038c07a70112f53d904eb730ce3ca2af7c6b8caba4437b1d88dc9df395b"
-metafile = true
-
-[[files]]
-file = "mods/mezzconfig.pw.toml"
-hash = "8257e769f3b2db4005d1eb546ba47f5f8aade30c8b23f0155be1ae40a46f0dfc"
 metafile = true
 
 [[files]]
@@ -132,11 +117,6 @@ metafile = true
 [[files]]
 file = "mods/placeholder-api.pw.toml"
 hash = "4d3d2ad41a037af6f78e2a6c2908c4098bb0b5c03ad0d2711a0c0c6df5e7a172"
-metafile = true
-
-[[files]]
-file = "mods/shogi.pw.toml"
-hash = "7dce4255d013864163503866db2a902f7071d64ef184c3d40189c1ac9641a7f2"
 metafile = true
 
 [[files]]
@@ -177,9 +157,4 @@ metafile = true
 [[files]]
 file = "mods/towns-and-towers.pw.toml"
 hash = "93e5f8e08798ba4f920dd308edbb05a3183717ccf53796331ddaa71265276a23"
-metafile = true
-
-[[files]]
-file = "mods/waystones.pw.toml"
-hash = "85e00f97c2d58db3167bb6608558aa956654f5b0570e0abac082a1d0d4e3c19d"
 metafile = true

@@ -36,7 +36,7 @@ Spec (verbatim values):
   (Open Parties and Claims; fallback: nothing within **32 blocks** of any hologram emitter or another player's bed/home), never
   in spawn protection. Op command **`/magic undo <player> [n]`**; edits logged to disk.
 - Recall: one home per player, any dimension. **Mark Home = Shift + cast Recall**. Recall = **3 s channel** with a circle
-  under you, **cancelled by taking damage**, **60 s cooldown**, **no mana**. Waystones stay.
+  under you, **cancelled by taking damage**, **60 s cooldown**, **no mana**. Waystones and JEI are removed from the pack (Carter, 2026-10-24).
 - Hand signs: **4–6 arrow prompts**, typed with arrow keys or WASD while the prompt is open (movement paused); miss →
   fizzle with a sound, mana partly spent. Ultimates also cost **XP levels**.
 - Input precedence: aiming at **any** hologram → clicks **and Shift + scroll** belong to the monitor; R still opens the wheel;
@@ -531,7 +531,7 @@ pack/mods/*.pw.toml (remove), pack/index.toml, pack/pack.toml, server/deploy.md,
   - `MinecraftUseItemMixin`: after `HologramInteractions.onUse` declines, `if (MagicInputGate.blocksUse(mc)) ci.cancel()`. Everything else stays vanilla, so
     main-hand block and entity interactions run before the off-hand grimoire.
   - `MagicKeys.WHEEL`: `KeyMapping("key.office.spell_wheel", KEYSYM, InputConstants.KEY_R, MagicKeys.CATEGORY)` with category
-    `KeyMapping.Category.register(OfficeMod.id("magic"))`, registered through `KeyMappingHelper` (26.3 keeps a list per key, so JEI's GUI-only R coexists).
+    `KeyMapping.Category.register(OfficeMod.id("magic"))`, registered through `KeyMappingHelper` (26.3 keeps a list per key).
   - `SpellWheel`: `open()`, `addMouse(double dx, double dy)`, `int hovered()`, `@Nullable Identifier releaseSelection()` (null = keep the current spell; never casts);
     eases open over 3 ticks. `MouseHandlerWheelMixin` (`turnPlayer` HEAD, cancellable): while the wheel is open, feed `accumulatedDX/DY` to `SpellWheel.addMouse`,
     zero them and cancel. WASD keeps working.

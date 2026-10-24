@@ -41,8 +41,9 @@ World (server side only, clients do not need them): Tectonic, Terralith, Lithost
 Taverns, Towns and Towers (+ Cristel Lib), Structory, Sparse Structures (spread factor 2 = structures twice as rare, left
 at the mod's default), Cloth Config API.
 Magic: Grimoire comes with the Office mod (not a separate pack mod; Wizards, Spell Engine and Spell Power were removed in pack 0.2.0).
-Hanging out (both): Simple Voice Chat, Waystones (+ Balm, Shogi), Open Parties and Claims (+ Forge Config API Port).
-QoL (both): JEI (+ MezzConfig), Jade, AppleSkin. Client: Mod Menu (+ Text Placeholder API).
+Travel: the grimoire's Recall spell (in the Office mod). Waystones was removed in pack 0.3.0.
+Hanging out (both): Simple Voice Chat, Open Parties and Claims (+ Forge Config API Port).
+QoL (both): Jade, AppleSkin. Client: Mod Menu (+ Text Placeholder API). JEI was removed in pack 0.3.0.
 Performance: Lithium, FerriteCore (both); Sodium, ImmediatelyFast, Entity Culling, Dynamic FPS (client).
 Optional client, off by default (Prism shows a checkbox): Iris, Distant Horizons, LambDynamicLights.
 Server tools (server only): Chunky (pregen), spark (`/spark tps`, profiler).
@@ -61,17 +62,30 @@ client-optional on Modrinth but kept `both` so friends get its claim UI (key `'`
 If a friend reports a missing-registry or "unknown biome" problem when joining, the first thing to try is changing the
 server-side world mods back to `both`.
 
+## Deploying pack 0.3.0 (Waystones and JEI removed)
+
+The server does not update itself from the pack. When this pack version is deployed, delete these jars from the Bloom
+server's `/mods` (exact filenames), then restart:
+
+- `waystones-fabric-26.3-26.3.0.1.jar` (Waystones; Recall in the grimoire replaces it)
+- `jei-26.3-fabric-31.14.0.72.jar` (JEI; it was only needed for the old Wizards recipes)
+- `balm-fabric-26.3-26.3.0.3.jar` (library, only Waystones needed it)
+- `shogi-fabric-26.3-26.3.0.3.jar` (library, only Waystones needed it)
+- `mezz_config-26.3-fabric-0.6.8.jar` (library, only JEI needed it)
+
+Leave every other jar alone. Any Waystone blocks or items already in the world (placed ones, and ones generated in the
+wild) will disappear with the mod; `config/waystones/` can stay or go. Back up the world first. After the restart, the log must show no "Incompatible mods" or missing-dependency
+errors.
+
 ## Beta mods to watch
 
 No stable release exists for 26.3 for these; the newest file is what the pack uses:
-- Incendium (alpha), Open Parties and Claims (beta), Simple Voice Chat (beta), Player Animation Library (beta),
-  MezzConfig (beta).
+- Incendium (alpha), Open Parties and Claims (beta), Simple Voice Chat (beta).
 
 Deliberately **not** on the newest beta (pinned with `packwiz pin`, so `packwiz update` will not move them):
 - **Tectonic 3.0.31** (release). 3.1.0+beta1 declares `"breaks": {"terralith": "*"}` and the server refuses to start with
   Terralith ("Terralith compatibility is temporarily disabled" in its changelog). Re-check when Tectonic 3.1 leaves beta.
 - **Sodium 0.9.2** (release). 0.9.3-beta.1 exists, but the pinned Iris 1.11.7 depends on exactly this Sodium version.
-- **JEI 31.14.0.72** (release); 31.16 is beta.
 
 ## Beta caveats for Carter
 
@@ -88,7 +102,7 @@ One-time, in Prism, **nothing else running** (no Gradle, no other game). This is
 1. Create a Prism instance: Minecraft 26.3, Fabric loader 0.20.1. Add the packwiz installer as a pre-launch command
    (`$INST_JAVA -jar packwiz-installer-bootstrap.jar <pack url>`), or until the URL exists use a local server:
    in `pack/` run `python3 -m http.server 8089` and use `http://127.0.0.1:8089/pack.toml`.
-2. Launch. Mods list (Mod Menu) should show Voice Chat, Waystones, JEI, Sodium.
+2. Launch. Mods list (Mod Menu) should show Voice Chat, Open Parties and Claims, Sodium (and no Waystones or JEI).
    Optional ones (Iris, Distant Horizons, LambDynamicLights) should be unchecked and absent.
 3. The world mods (Tectonic, Terralith, ...) are server-only in the pack, so a plain singleplayer world will look vanilla.
    To see the terrain, join a server that has them: the real one, or a local one (install the server side of the pack as
@@ -96,9 +110,8 @@ One-time, in Prism, **nothing else running** (no Gradle, no other game). This is
    biomes (Terralith).
 4. While joining, check: no red "mod mismatch" or "missing registry" screen. Take a screenshot if there is.
 5. Press `V`: the Voice Chat menu opens. (Push to talk key is under Controls -> Voice Chat.)
-6. Open a recipe in JEI (hover an item, press `R`): the recipe screen opens.
-7. Press `'` (apostrophe): the claims UI opens.
-8. Report anything that differs.
+6. Press `'` (apostrophe): the claims UI opens.
+7. Report anything that differs.
 
 ---
 
