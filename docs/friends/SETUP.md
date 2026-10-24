@@ -1,12 +1,12 @@
 # Minecraft Office: friend setup
 
 Welcome! This is our private Minecraft server where you can put **hologram monitors** in the world that show your
-**real computer**. Setup takes about 15 minutes. Stuck? Message Carter.
+**real computer**, and cast **magic** with a Grimoire. Setup takes about 15 minutes. Stuck? Message Carter.
 
 **Jump to:** [What you need](#1-what-you-need) · [Prism](#2-install-prism-launcher) · [Modpack](#3-add-the-modpack) ·
 [Memory](#4-memory) · [Join](#5-join-the-server) · [Your screens](#6-your-screens) ·
 [Holograms](#7-using-holograms) · [Voice and claims](#8-voice-chat-and-claims) ·
-[Magic](#9-magic) · [Problems](#10-something-wrong)
+[Magic](#9-magic-in-10-minutes) · [Problems](#10-something-wrong)
 
 ---
 
@@ -92,7 +92,7 @@ With 16 GB or more you can turn them on in the instance's **Mods** tab (Prism sh
 
 1. Double-click your instance to start Minecraft. The first start is slow. That is normal.
 2. Click **Multiplayer**, then **Add Server**.
-3. Server address: `TODO(controller): server address`
+3. Server address: **Carter will message it to you.** <!-- TODO(controller): never put the address in this file -->
 4. Join. If it says you are **not whitelisted**, send Carter your exact Minecraft username.
 
 If you see a red "mod mismatch" or "missing registry" screen, take a photo and send it to Carter.
@@ -163,12 +163,13 @@ Good to know on a Mac:
 A hologram is a glowing floating screen above a small **emitter**. Emitters are free, nobody needs to craft them.
 
 1. **Get emitters.** Your first-join starter kit has 4. Need more? Type `/emitter` in chat (limit: 8 holograms each).
-2. **Place it** like a block, on the floor, a desk, anywhere. The hologram appears above it. It can float mid-air.
-   On a Mac your first hologram is your own screen (**Mirror**, minus Minecraft), and each further one is a new
+2. **Place it** like a block. On the floor or a desk, the hologram floats above it, facing you. On a **wall**, it
+   hangs flat on the wall like a painting. Under a **ceiling**, it hangs below. On a Mac your first hologram is your own screen (**Mirror**, minus Minecraft), and each further one is a new
    screen (**Extend**), like plugging monitors #2, #3 into a laptop. On Windows every hologram is your screen
    (**Mirror**).
-3. **Resize.** Hold the emitter, point at a corner of the hologram, then **hold right-click and drag**. A cyan outline
-   shows the new size. Let go to set it. Anything from tiny to wall-sized.
+3. **Resize.** Hold an emitter and look at your hologram: glowing corners appear. Point at a corner, then **hold
+   right-click and drag**. A cyan outline shows the new size. Let go to set it. Or just **scroll** while looking at it.
+   Anything from tiny to wall-sized.
 4. **Settings.** Right-click the emitter itself:
    - **Shape:** widescreen 16:9, ultrawide 21:9, or tall 9:16.
    - **Shows:** **Mirror** (your screen, minus Minecraft), **Extend** (a new virtual screen, Mac only for now) or
@@ -177,7 +178,8 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
    - **Privacy:** **Public** (anyone nearby sees it, view-only), **Private** (only you; everyone else sees a frosted
      "Private" panel), or **Show to...** (pick specific players).
    - **Remove** to pick it back up.
-5. **Move it.** Hold **Shift**, then right-click the hologram and drag. **Scroll** while dragging to rotate it.
+5. **Move it.** Hold an emitter, hold **Shift**, then hold right-click on the hologram and drag. **Scroll** while
+   dragging to turn it. Wall holograms slide along their wall instead.
 6. **Use it (Mac): work mode.** With an empty hand (or anything but an emitter), **click** your hologram (your Mirror
    or any Extend screen). You are now working on your Mac: Minecraft shows "Working on your Mac — Esc (or ⌘-Tab) to
    return", the view stops turning, and **your mouse is your Mac's mouse**, starting where you clicked. The hologram
@@ -187,7 +189,7 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
      next to its monitor. So to move a window to another screen, drag its title bar over the edge.
    - Press **Esc** (the app never gets it) or **⌘-Tab** back to Minecraft to look around again. In a **password
      field** macOS hides Esc from everyone: Minecraft says so; press **⌘-Tab**.
-   - Not working: **scroll** while aiming at a screen scrolls the app there (your hotbar stays).
+   - Not in work mode: **scroll** while aiming at a screen scrolls the app there (your hotbar stays).
    - The Mirror needs Minecraft in a window: if you turned on Fullscreen in Options → Video, turn it off (Minecraft
      then fills the screen as a borderless window); chat reminds you.
    - Your windows stay where they are when you join or leave.
@@ -234,13 +236,55 @@ Good to know:
   Key Binds, Voice Chat, **Push To Talk**. Handy keys: **M** mutes your mic, **N** turns voice chat off, **H** hides
   the little voice icons.
 - **Claims** (protect your office): press **'** (apostrophe) and claim the chunks around your office. Friends you add
-  to your party can still build there.
+  to your party can still build there. Claims also keep other players' big spells from changing your land.
 
-## 9. Magic
+## 9. Magic in 10 minutes
 
-Magic: Grimoire (coming in the Office mod). Nothing to install separately; it arrives with a mod update.
+Magic is part of the Office mod, so there is nothing extra to install. Your starter kit's **Office Handbook** has
+the short version too.
 
-Your starter kit also has an **Office Handbook** book with the basics.
+**1. Make your Grimoire.** Craft a **book + feather + iron ingot** (any order; it is in your recipe book). Hold it in
+your **main hand** and right-click to open it.
+
+**2. Choose your element.** The first time you open it, pick **Fire, Water, Wind, Lightning, Earth or Shadow**. This
+choice is permanent. Changed your mind? Craft a **Rebinding Seal** (**nether star + book**) and you can choose again.
+
+**3. Cast.** Put the Grimoire in your **off hand** and keep your **main hand empty**.
+- **Tap right-click:** a quick cast.
+- **Hold right-click:** the magic circle grows. Let go for a stronger cast.
+- **Pick a spell:** hold **R** for the spell wheel, or **Shift + scroll**.
+- Your **mana** shows where the XP bar normally is while you hold your Grimoire.
+
+**4. Level up.** Casting levels up your Grimoire and unlocks more of your element's spells. **Ultimates** come at
+level 7 and need **hand signs**: press the arrows shown on screen with the **arrow keys** or your **movement keys**
+(W A S D), before the time runs out.
+
+**5. Recall (go home).** Every element has it.
+- **Shift + cast Recall:** marks this spot as home (anywhere, any dimension).
+- **Cast Recall:** after 3 seconds you are home. Taking damage cancels it. 60 second cooldown, no mana.
+
+**6. Travel to a friend.** Open your Grimoire, go to the **Friends** tab and click a friend. They accept in chat, and
+3 seconds later you are standing next to them. It shares Recall's cooldown. Don't want visitors? Type
+`/magic travel off` (and `/magic travel on` to allow them again).
+
+**7. Your office is safe.** Big spells change the land for good (craters, walls and so on), but **never inside other
+players' claims**. Claim your office (see [claims](#8-voice-chat-and-claims)) and it is protected.
+
+**What's in so far:** each element has its first 2 spells:
+
+| Element | Spells |
+|---|---|
+| Fire | Fire Bolt, Fire Wall |
+| Water | Water Bullet, Tidal Push |
+| Wind | Gust, Blade Wind |
+| Lightning | Spark, Chain Lightning |
+| Earth | Stone Bullet, Earth Wall |
+| Shadow | Shadow Bolt, Gravity Well |
+
+The rest, including the ultimates, arrive in updates over the next few days. You get them automatically when you
+press **Play**.
+
+**Old handbook?** Type `/handbook` and it is replaced with the latest one.
 
 ## 10. Something wrong?
 
