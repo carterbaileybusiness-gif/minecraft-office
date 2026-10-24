@@ -88,6 +88,46 @@ class CircleMathTest {
 		assertEquals(ChargeMath.FULL_TICKS, ChargeCircles.ringAppears(4));
 	}
 
+	@Test
+	void firstPersonClearRadiusIsAThirdOfTheFullCircle() {
+		assertEquals(0.35F * MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS), ChargeCircles.FIRST_PERSON_CLEAR, EPS);
+		assertEquals(0.3F, ChargeCircles.FIRST_PERSON_ALPHA, EPS);
+	}
+
+	@Test
+	void clipFindsTheStretchInsideTheClearMiddle() {
+		// Straight through the middle: inside from 0.4 to 0.6 of the way.
+		float[] t = MagicCircleRenderer.clip(-1, 0, 1, 0, 0.2F);
+		assertEquals(0.4F, t[0], 1e-5F);
+		assertEquals(0.6F, t[1], 1e-5F);
+		// Passing by outside, or stopping short of it: never inside.
+		assertEquals(null, MagicCircleRenderer.clip(-1, 0.5F, 1, 0.5F, 0.2F));
+		assertEquals(null, MagicCircleRenderer.clip(-1, 0, -0.5F, 0, 0.2F));
+		// Starting inside: clamped to 0.
+		t = MagicCircleRenderer.clip(0, 0, 1, 0, 0.2F);
+		assertEquals(0F, t[0], 1e-5F);
+		assertEquals(0.2F, t[1], 1e-5F);
+		// The hexagram's sides (triangles in ring 2) dip into the first-person clear middle (0.455): each loses a middle stretch, and
+		// what is kept lies outside it.
+		float r = MagicCircleRenderer.ringRadius(2) * 0.985F;
+		float clear = ChargeCircles.FIRST_PERSON_CLEAR;
+		for (int k = 0; k < 3; k++) {
+			double a0 = Math.PI / 2 + 2 * Math.PI * k / 3;
+			double a1 = Math.PI / 2 + 2 * Math.PI * (k + 1) / 3;
+			float u0 = (float) (Math.cos(a0) * r);
+			float v0 = (float) (Math.sin(a0) * r);
+			float u1 = (float) (Math.cos(a1) * r);
+			float v1 = (float) (Math.sin(a1) * r);
+			t = MagicCircleRenderer.clip(u0, v0, u1, v1, clear);
+			assertTrue(t != null && t[0] > 0 && t[1] < 1, "side " + k);
+			for (float s : new float[] {0F, t[0] - 1e-3F, t[1] + 1e-3F, 1F}) {
+				float u = u0 + (u1 - u0) * s;
+				float v = v0 + (v1 - v0) * s;
+				assertTrue(u * u + v * v >= clear * clear * 0.999F, "kept point inside the clear middle");
+			}
+		}
+	}
+
 	private static boolean hasNaN(Vector3f v) {
 		return Float.isNaN(v.x) || Float.isNaN(v.y) || Float.isNaN(v.z);
 	}

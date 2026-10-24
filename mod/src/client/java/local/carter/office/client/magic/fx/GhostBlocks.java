@@ -47,6 +47,8 @@ public final class GhostBlocks {
 	}
 
 	public static final int MAX_LIVE = 512;
+	/** Ghosts farther than this from the camera are not drawn. */
+	public static final double CULL_DISTANCE = 64;
 	private static final List<Ghost> LIVE = new ArrayList<>();
 	private static BlockModelResolver resolver;
 	private static ClientLevel seen;
@@ -131,8 +133,8 @@ public final class GhostBlocks {
 				resolver.update(g.model, g.state, BlockDisplayContext.create());
 				g.resolved = true;
 			}
-			if (g.model.isEmpty()) {
-				continue;
+			if (g.model.isEmpty() || g.base.distanceToSqr(cam) > CULL_DISTANCE * CULL_DISTANCE) {
+				continue; // too far to matter (a few pixels at most)
 			}
 			float t = g.age + partial;
 			float p = Mth.clamp(t / g.life, 0F, 1F);

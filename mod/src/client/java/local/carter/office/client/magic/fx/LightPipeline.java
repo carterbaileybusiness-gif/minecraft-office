@@ -64,6 +64,8 @@ public final class LightPipeline {
 	/**
 	 * Darkness is drawn with the solid particles: Improved Transparency can only add light, never take it away, so a translucent
 	 * darkness layer would have no pipeline there. It writes no depth, so it still never hides what is behind it.
+	 * <p><b>DARK is an opaque layer</b> (for the Shadow lane): it is drawn in the solid particle pass, before translucent things
+	 * (water, stained glass, clouds, every GLOW piece), which draw over it, and it has no OIT variant. Keep darkness small and short.
 	 */
 	public static final SingleQuadParticle.Layer DARK = new SingleQuadParticle.Layer(false, TextureAtlas.LOCATION_PARTICLES, DARK_PIPELINE);
 

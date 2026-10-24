@@ -25,6 +25,7 @@ public final class FxClient {
 
 	public static void register() {
 		LightPipeline.register();
+		MagicCircleRenderer.registerReload();
 		FxKit.register();
 		GhostBlocks.register();
 		ChargeCircles.register();

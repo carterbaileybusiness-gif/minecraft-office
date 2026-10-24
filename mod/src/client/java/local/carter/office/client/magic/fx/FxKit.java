@@ -44,6 +44,13 @@ public final class FxKit {
 	private final ClientLevel level;
 	private final FxBudget budget;
 	private final RandomSource random;
+	private int circles;
+
+	/** Most circles one event may draw. */
+	public static final int MAX_CIRCLES = 6;
+	/** Longest {@link #simulate} timer, in ticks, and most timers running at once across every event. */
+	public static final int MAX_SIMULATE_TICKS = 600;
+	public static final int MAX_SIMULATIONS = 64;
 
 	public FxKit(FxEvent event, ClientLevel level) {
 		this.event = event;
@@ -85,7 +92,9 @@ public final class FxKit {
 	 * (00 = full); an element's colour gives that element's glyph at the heart. Costs one particle.
 	 */
 	public void circle(Vec3 centre, Vec3 normal, int argb, float radius, int rings, int lifeTicks) {
-		if (budget.particles(1) == 0) return;
+		// A circle is thousands of quads: at most MAX_CIRCLES per event, whatever the particle budget says.
+		if (circles >= MAX_CIRCLES || budget.particles(1) == 0) return;
+		circles++;
 		CircleParticle.Fixed c = new CircleParticle.Fixed(level, centre, normal, argb, radius, rings, lifeTicks, event.casterId());
 		Minecraft.getInstance().particleEngine.add(c);
 		lasting(event.casterId(), c::fadeOut, c::isAlive);
@@ -164,7 +173,9 @@ public final class FxKit {
 	 * is logged and stopped.
 	 */
 	public void simulate(int everyTicks, int durationTicks, IntConsumer onTick) {
-		Sim sim = new Sim(event.casterId(), Math.max(1, everyTicks), durationTicks, onTick);
+		// At most MAX_SIMULATE_TICKS long, and none past MAX_SIMULATIONS running (that visual is skipped).
+		if (SIMS.size() >= MAX_SIMULATIONS) return;
+		Sim sim = new Sim(event.casterId(), Math.max(1, everyTicks), Math.min(durationTicks, MAX_SIMULATE_TICKS), onTick);
 		if (sim.step()) SIMS.add(sim);
 	}
 

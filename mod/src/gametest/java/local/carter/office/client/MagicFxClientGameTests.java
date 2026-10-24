@@ -62,6 +62,7 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 			BlockPos stand = setUpStage(context, sp);
 			chargeCircleGrowsRingByRing(context);
 			releaseDrawsTheCastCircle(context);
+			improvedTransparency(context);
 			recallCircles(context, sp, stand);
 			boltGhostBlocksAndShake(context, stand);
 			chargeInDaylight(context, sp);
@@ -117,7 +118,8 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 	}
 
 	private static void chargeCircleGrowsRingByRing(ClientGameTestContext context) {
-		BufferedImage before = read(context.takeScreenshot("magic-fx-idle"));
+		BufferedImage front = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-idle-third-front");
+		BufferedImage before = view(context, CameraType.FIRST_PERSON, "magic-fx-idle");
 		context.getInput().holdMouse(MOUSE_RIGHT);
 		int[] at = {4, 20, 28, 36, 46};
 		BufferedImage full = null;
@@ -129,17 +131,57 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 		}
 		int showing = context.computeOnClient(mc -> ChargeCircles.showing());
 		if (showing != 1) throw new AssertionError("one charging circle expected, got " + showing);
-		// The circle (radius 1.15 at 1.5 blocks) covers much of the middle of the view: a good share of it must have changed.
-		double changed = changedShare(before, full, 0.3, 0.2, 0.7, 0.8);
-		if (changed < 0.08) throw new AssertionError("the full charge circle barely shows: " + changed);
+		// First person (the ruling): the circle shows round the edges, but a box of 8 % of the screen's width and height around the
+		// crosshair stays as it was.
+		double rings = changedShare(before, full, 0.15, 0.05, 0.85, 0.95);
+		double crosshair = changedShare(before, full, 0.46, 0.46, 0.54, 0.54);
+		System.out.println(String.format(java.util.Locale.ROOT, "[fx] first person full charge: rings changed %.3f, crosshair box changed %.4f", rings, crosshair));
+		context.takeScreenshot("magic-fx-charge-full-first-person-crosshair");
+		if (rings < 0.03) throw new AssertionError("the first-person charge circle barely shows: " + rings);
+		if (crosshair > 0.01) throw new AssertionError("the crosshair box must stay clear in first person, changed " + crosshair);
 		context.runOnClient(mc -> mc.options.setCameraType(CameraType.THIRD_PERSON_BACK));
 		context.waitTicks(2);
 		context.takeScreenshot("magic-fx-charge-full-third-back");
-		context.runOnClient(mc -> mc.options.setCameraType(CameraType.THIRD_PERSON_FRONT));
-		context.waitTicks(2);
-		context.takeScreenshot("magic-fx-charge-full-third-front");
+		BufferedImage fullFront = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-charge-full-third-front");
+		// Seen from outside it is the full circle: a good share of the middle of the view changes.
+		double outside = changedShare(front, fullFront, 0.3, 0.2, 0.7, 0.8);
+		if (outside < 0.08) throw new AssertionError("the full charge circle barely shows from the front: " + outside);
 		context.runOnClient(mc -> mc.options.setCameraType(CameraType.FIRST_PERSON));
 		context.waitTicks(1);
+	}
+
+	/** Switches the camera, lets two frames pass, and takes a screenshot. */
+	private static BufferedImage view(ClientGameTestContext context, CameraType type, String name) {
+		context.runOnClient(mc -> mc.options.setCameraType(type));
+		context.waitTicks(2);
+		return read(context.takeScreenshot(name));
+	}
+
+	/**
+	 * Improved Transparency (order-independent transparency) draws translucent particles through their OIT pipelines: the circle
+	 * must still show. Seen from the front at full charge, against the same view idle.
+	 */
+	private static void improvedTransparency(ClientGameTestContext context) {
+		boolean was = context.computeOnClient(mc -> mc.options.improvedTransparency().get());
+		context.runOnClient(mc -> mc.options.improvedTransparency().set(true));
+		context.waitTicks(20);
+		try {
+			BufferedImage idle = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-oit-idle-third-front");
+			context.getInput().holdMouse(MOUSE_RIGHT);
+			context.waitFor(mc -> mc.player.getTicksUsingItem() >= 46, 200);
+			BufferedImage full = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-oit-charge-full-third-front");
+			context.getInput().releaseMouse(MOUSE_RIGHT);
+			double changed = changedShare(idle, full, 0.3, 0.2, 0.7, 0.8);
+			System.out.println(String.format(java.util.Locale.ROOT, "[fx] improved transparency: circle changed %.3f", changed));
+			if (changed < 0.08) throw new AssertionError("with Improved Transparency the charge circle barely shows: " + changed);
+			context.waitTicks(30);
+		} finally {
+			context.runOnClient(mc -> {
+				mc.options.improvedTransparency().set(was);
+				mc.options.setCameraType(CameraType.FIRST_PERSON);
+			});
+			context.waitTicks(20);
+		}
 	}
 
 	private static void releaseDrawsTheCastCircle(ClientGameTestContext context) {
@@ -248,6 +290,24 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 		context.waitTicks(45);
 		ghosts = context.computeOnClient(mc -> GhostBlocks.live());
 		if (ghosts != 0) throw new AssertionError("ghost blocks should be gone, " + ghosts + " left");
+
+		// Caps: one event draws at most 6 circles; timers are clamped to 600 ticks and 64 at once.
+		int before = context.computeOnClient(MagicFxClientGameTests::circles);
+		context.runOnClient(mc -> {
+			Vec3 o = Vec3.atBottomCenterOf(stand).add(0, 2, 6);
+			FxKit kit = new FxKit(new FxEvent(PROBE, -1, o, new Vec3(0, 0, 1), o, 0F, 1F, 9L, 0, new int[0], new float[0]), mc.level);
+			for (int i = 0; i < 10; i++) kit.circle(o, new Vec3(0, 0, -1), Element.WATER.argb(), 0.5F, 2, 20);
+			for (int i = 0; i < 80; i++) kit.simulate(1, 100_000, t -> { });
+		});
+		context.waitTicks(2); // the engine adds new particles on its next tick
+		int added = context.computeOnClient(MagicFxClientGameTests::circles) - before;
+		if (added != FxKit.MAX_CIRCLES) throw new AssertionError("one event should draw " + FxKit.MAX_CIRCLES + " circles, drew " + added);
+		int sims = context.computeOnClient(mc -> FxKit.simulations());
+		if (sims > FxKit.MAX_SIMULATIONS) throw new AssertionError("at most " + FxKit.MAX_SIMULATIONS + " timers, running " + sims);
+		context.runOnClient(mc -> FxKit.cancel(-1));
+		context.waitTicks(2);
+		sims = context.computeOnClient(mc -> FxKit.simulations());
+		if (sims != 0) throw new AssertionError("cancel should stop the timers, " + sims + " left");
 	}
 
 	/** The same full charge at noon: additive light must still read against a bright sky and grass. */
@@ -280,6 +340,8 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 		context.runOnClient(mc -> {
 			mc.options.enableVsync().set(false);
 			mc.options.framerateLimit().set(260);
+			// The test gives no input for a while: vanilla's AFK limiter would cap it at ~25 fps.
+			mc.options.inactivityFpsLimit().set(net.minecraft.client.InactivityFpsLimit.MINIMIZED);
 		});
 		context.waitTicks(40);
 		double idle = measure(context, "idle", 6000);
@@ -322,6 +384,7 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 		context.runOnClient(mc -> {
 			mc.options.enableVsync().set(true);
 			mc.options.framerateLimit().set(120);
+			mc.options.inactivityFpsLimit().set(net.minecraft.client.InactivityFpsLimit.AFK);
 		});
 	}
 
@@ -353,6 +416,12 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 			}
 		}
 		return n == 0 ? 0 : changed / (double) n;
+	}
+
+	/** Circles and bolts alive in the magic particle group ("OM n" in the engine's count). */
+	private static int circles(Minecraft mc) {
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("OM (\\d+)").matcher(mc.particleEngine.countParticles());
+		return m.find() ? Integer.parseInt(m.group(1)) : 0;
 	}
 
 	private static ServerPlayer player(MinecraftServer server) {

@@ -1,6 +1,9 @@
 // Adapted from Wildercord (MIT) https://github.com/defnotean/wildercord @9f5a21fe7964097492cd92ac64e4c4e05ef5236a
 package local.carter.office.client.magic.fx;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import org.joml.Matrix3f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
@@ -9,14 +12,22 @@ import local.carter.office.OfficeMod;
 import local.carter.office.magic.core.Element;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.SingleQuadParticle;
 import net.minecraft.client.renderer.state.level.QuadParticleRenderState;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.core.BlockPos;
 import net.minecraft.data.AtlasIds;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
+
+import net.fabricmc.fabric.api.resource.v1.ResourceLoader;
+import net.fabricmc.fabric.api.resource.v1.reloader.ResourceReloaderKeys;
 
 /**
  * A summoning circle, built every frame from thin pieces of light (Wildercord's SpellCircleParticle): every line is short
@@ -125,6 +136,13 @@ public final class MagicCircleRenderer {
 		public float time;
 		/** 0..1: a full charge's pulse (brighter, a little bigger, rays out). */
 		public float flare;
+		/**
+		 * Blocks around the centre kept empty (0 = none): no backdrop, glyph or centre glow, and no line inside it. The caster's own
+		 * first-person charge circle sets it so the crosshair and what it aims at stay clear.
+		 */
+		public float clear;
+		/** 0..1: a pulse of the outer frame only (the first-person full-charge cue). */
+		public float rimPulse;
 	}
 
 	// While drawing a frame.
@@ -134,6 +152,9 @@ public final class MagicCircleRenderer {
 	private final Vector3f axisV = new Vector3f();
 	private float lod = 1F;
 	private boolean cores = true;
+	/** The white core's brightness: full at night and indoors, dimmed in daylight so the element colour survives a bright sky. */
+	private float coreLight = 1F;
+	private float clear;
 	private float cx;
 	private float cy;
 	private float cz;
@@ -145,13 +166,39 @@ public final class MagicCircleRenderer {
 	private final TextureAtlasSprite[] runesBack = new TextureAtlasSprite[RUNES];
 	private final SingleQuadParticle.Layer layer = LightPipeline.GLOW;
 
-	/** One of the fx sprites ({@code office:fx/<name>} in the particle atlas). */
+	/** Looked-up fx sprites; emptied after every resource reload ({@link #registerReload}). Render thread only. */
+	private static final Map<String, TextureAtlasSprite> SPRITES = new HashMap<>();
+	/** Bumped by a reload, so a renderer re-reads its sprites. */
+	private static int generation;
+	private int seenGeneration = -1;
+
+	/** One of the fx sprites ({@code office:fx/<name>} in the particle atlas), cached until the next resource reload. */
 	public static TextureAtlasSprite sprite(String name) {
-		TextureAtlas atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.PARTICLES);
-		return atlas.getSprite(OfficeMod.id("fx/" + name));
+		TextureAtlasSprite s = SPRITES.get(name);
+		if (s == null) {
+			TextureAtlas atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.PARTICLES);
+			s = atlas.getSprite(OfficeMod.id("fx/" + name));
+			SPRITES.put(name, s);
+		}
+		return s;
+	}
+
+	/** Drops the cached sprites after every client resource reload, ordered after the atlases are stitched (client init). */
+	public static void registerReload() {
+		Identifier id = OfficeMod.id("magic_fx_sprites");
+		ResourceLoader loader = ResourceLoader.get(PackType.CLIENT_RESOURCES);
+		loader.registerReloadListener(id, (ResourceManagerReloadListener) manager -> {
+			SPRITES.clear();
+			generation++;
+		});
+		loader.addListenerOrdering(ResourceReloaderKeys.Client.ATLAS, id);
 	}
 
 	private void sprites() {
+		if (seenGeneration == generation && line != null) {
+			return;
+		}
+		seenGeneration = generation;
 		line = sprite("line");
 		core = sprite("core");
 		glow = sprite("glow");
@@ -179,6 +226,8 @@ public final class MagicCircleRenderer {
 		float distance = Mth.sqrt(cx * cx + cy * cy + cz * cz);
 		lod = Mth.clamp(distance / 6F, 1F, 4F);
 		cores = distance < 16F;
+		coreLight = 1F - 0.75F * daylight(f);
+		clear = f.clear;
 		float s = f.scale * (1F + 0.04F * f.flare);
 		float a0 = f.alpha * (1F + 0.35F * f.flare);
 		int rgb = f.rgb & 0xFFFFFF;
@@ -191,7 +240,7 @@ public final class MagicCircleRenderer {
 			open += ringAlpha(f.ringAge[i]);
 		}
 		float reach = ringRadius(rings) * s;
-		piece(soft, 0, 0, 0, reach * 1.1F, light(f.alpha * (0.16F + 0.06F * open / MAX_RINGS + 0.12F * f.flare), rgb));
+		if (clear <= 0) piece(soft, 0, 0, 0, reach * 1.1F, light(f.alpha * (0.16F + 0.06F * open / MAX_RINGS + 0.12F * f.flare), rgb));
 
 		for (int i = 0; i < rings; i++) {
 			float shown = ringAlpha(f.ringAge[i]);
@@ -209,8 +258,10 @@ public final class MagicCircleRenderer {
 				case 0 -> {
 					stroke(0, 0, r, HEAVY * s, from, to, rgb, a);
 					stroke(0, 0, r * 0.84F, FINE * s * 0.8F, from, to, rgb, a * 0.8F);
-					glyph(f.glyph, r * 0.66F * (0.8F + 0.2F * grow), FINE * s, rgb, a * grow);
-					piece(glow, 0, 0, 0, r * 0.35F, light(a * 0.45F, hot));
+					if (clear <= 0) {
+						glyph(f.glyph, r * 0.66F * (0.8F + 0.2F * grow), FINE * s, rgb, a * grow);
+						piece(glow, 0, 0, 0, r * 0.35F, light(a * 0.45F, hot));
+					}
 				}
 				case 1, 3 -> {
 					float band = (i == 1 ? 0.045F : 0.05F) * s;
@@ -230,6 +281,7 @@ public final class MagicCircleRenderer {
 					}
 				}
 				default -> {
+					a *= 1F + 0.6F * f.rimPulse;
 					stroke(0, 0, r, HEAVY * s, from, to, rgb, a);
 					stroke(0, 0, r - 0.045F * s, FINE * s * 0.8F, from, to, rgb, a * 0.7F);
 					// Ticks between the frame's two lines, and rays out past it.
@@ -303,14 +355,14 @@ public final class MagicCircleRenderer {
 
 	/** An arc around ({@code u}, {@code v}) from angle {@code from} to {@code to}: glow and core. */
 	private void stroke(float u, float v, float rad, float width, float from, float to, int rgb, float a) {
-		if (a <= 0.01F || rad <= 0 || from == to) {
+		if (a <= 0.01F || rad <= 0 || from == to || clear > 0 && Math.hypot(u, v) + rad - width < clear) {
 			return;
 		}
 		float length = Math.abs(to - from) * rad;
 		int n = Math.max(6, Mth.ceil(length / (width * lod / BAND)));
 		float half = length / n / 2 * 1.04F;
 		int glowInk = light(a, rgb);
-		int coreInk = light(a * 0.9F, lighter(rgb, 0.8F));
+		int coreInk = light(a * 0.9F * coreLight, lighter(rgb, 0.8F));
 		float step = (to - from) / n;
 		for (int i = 0; i < n; i++) {
 			float ang = from + step * (i + 0.5F);
@@ -323,6 +375,48 @@ public final class MagicCircleRenderer {
 
 	/** A straight line from ({@code u0}, {@code v0}) to ({@code u1}, {@code v1}): glow and core. */
 	private void segment(float u0, float v0, float u1, float v1, float width, int rgb, float a) {
+		if (clear > 0) {
+			// Only the parts outside the clear middle.
+			float[] t = clip(u0, v0, u1, v1, clear + width * 0.5F); // the glow too
+			if (t == null) {
+				line(u0, v0, u1, v1, width, rgb, a);
+			} else {
+				if (t[0] > 0) line(u0, v0, u0 + (u1 - u0) * t[0], v0 + (v1 - v0) * t[0], width, rgb, a);
+				if (t[1] < 1) line(u0 + (u1 - u0) * t[1], v0 + (v1 - v0) * t[1], u1, v1, width, rgb, a);
+			}
+			return;
+		}
+		line(u0, v0, u1, v1, width, rgb, a);
+	}
+
+	/**
+	 * Where the segment from ({@code u0}, {@code v0}) to ({@code u1}, {@code v1}) is inside the circle of radius {@code r} about the
+	 * centre, as {t0, t1} (clamped to 0..1), or null when it never enters it. Pure (the unit tests use it).
+	 */
+	public static float @org.jspecify.annotations.Nullable [] clip(float u0, float v0, float u1, float v1, float r) {
+		float du = u1 - u0;
+		float dv = v1 - v0;
+		float a = du * du + dv * dv;
+		if (a < 1.0E-12F) {
+			return u0 * u0 + v0 * v0 < r * r ? new float[] {0F, 1F} : null;
+		}
+		float b = 2 * (u0 * du + v0 * dv);
+		float c = u0 * u0 + v0 * v0 - r * r;
+		float disc = b * b - 4 * a * c;
+		if (disc <= 0) {
+			return null;
+		}
+		float sq = Mth.sqrt(disc);
+		float t0 = (-b - sq) / (2 * a);
+		float t1 = (-b + sq) / (2 * a);
+		if (t1 <= 0 || t0 >= 1) {
+			return null;
+		}
+		return new float[] {Math.max(0F, t0), Math.min(1F, t1)};
+	}
+
+	/** A straight line piece by piece: glow and core. */
+	private void line(float u0, float v0, float u1, float v1, float width, int rgb, float a) {
 		float du = u1 - u0;
 		float dv = v1 - v0;
 		float length = Mth.sqrt(du * du + dv * dv);
@@ -333,7 +427,7 @@ public final class MagicCircleRenderer {
 		float half = length / n / 2;
 		float rot = (float) Mth.atan2(dv, du);
 		int glowInk = light(a, rgb);
-		int coreInk = light(a * 0.9F, lighter(rgb, 0.8F));
+		int coreInk = light(a * 0.9F * coreLight, lighter(rgb, 0.8F));
 		for (int i = 0; i < n; i++) {
 			float t = (i + 0.5F) / n;
 			piece(line, u0 + du * t, v0 + dv * t, rot, half, glowInk);
@@ -347,7 +441,7 @@ public final class MagicCircleRenderer {
 		n = Math.max(sprites.length, Math.round(n / (float) sprites.length) * sprites.length);
 		int count = Math.round(n * shown);
 		int ink = light(a * 0.95F, lighter(rgb, 0.3F));
-		int white = light(a * 0.45F, 0xFFFFFF);
+		int white = light(a * 0.45F * coreLight, 0xFFFFFF);
 		for (int i = 0; i < count; i++) {
 			float ang = angle + Mth.HALF_PI + Mth.TWO_PI * i / n;
 			float u = Mth.cos(ang) * rad;
@@ -375,6 +469,19 @@ public final class MagicCircleRenderer {
 		float qw = plane.w * c - plane.z * s;
 		state.add(layer, cx + axisU.x * u + axisV.x * v, cy + axisU.y * u + axisV.y * v, cz + axisU.z * u + axisV.z * v, qx, qy, qz, qw, half,
 				sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1(), argb, LightCoordsUtil.FULL_BRIGHT);
+	}
+
+	/**
+	 * How much daylight the circle stands in, 0..1: the sky light where it stands, times how bright the sky is now (0 at night,
+	 * underground or indoors).
+	 */
+	private static float daylight(Frame f) {
+		ClientLevel level = Minecraft.getInstance().level;
+		if (level == null) {
+			return 0F;
+		}
+		int sky = LightCoordsUtil.sky(LightCoordsUtil.getLightCoords(level, BlockPos.containing(f.x, f.y, f.z)));
+		return Mth.clamp(sky / 15F * (1F - level.getSkyDarken() / 11F), 0F, 1F);
 	}
 
 	/**

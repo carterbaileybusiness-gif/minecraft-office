@@ -29,6 +29,9 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
  * ticks as the charge reaches it, turning opposite ways, runes on rings 2 and 4; radius {@code 0.55 + 0.15 × rings}, alpha
  * {@link #ALPHA}, in the grimoire's element colour. At full charge it pulses, and a local {@code BEACON_POWER_SELECT} (pitch 1.6)
  * plays once. The local player charging Recall gets a gold circle at their feet instead (other players' selections are not synced).
+ * Seen by the caster in first person it is dimmed to {@link #FIRST_PERSON_ALPHA} with no flare, and nothing is drawn within
+ * {@link #FIRST_PERSON_CLEAR} of its middle (no backdrop, glyph or centre glow; lines clipped), so aiming stays clear; full charge
+ * there is the sound plus a gentle pulse of the outer frame.
  * Letting go fades it out in a few ticks.
  */
 public final class ChargeCircles {
@@ -37,6 +40,9 @@ public final class ChargeCircles {
 	public static final double AHEAD = 1.5;
 	public static final double BELOW = 0.25;
 	public static final float ALPHA = 0.55F;
+	/** The caster's own circle in first person: dimmer, and empty in the middle so the crosshair and its target stay clear. */
+	public static final float FIRST_PERSON_ALPHA = 0.3F;
+	public static final float FIRST_PERSON_CLEAR = 0.35F * MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS);
 
 	/** The charging circle shown for each player, by entity id. */
 	private static final Map<Integer, Circle> SHOWN = new HashMap<>();
@@ -119,6 +125,12 @@ public final class ChargeCircles {
 			}
 		}
 
+		/** Whether this is the camera's own player, seen in first person. */
+		private boolean ownFirstPerson() {
+			Minecraft mc = Minecraft.getInstance();
+			return player == mc.getCameraEntity() && mc.options.getCameraType().isFirstPerson();
+		}
+
 		@Override
 		protected boolean pose(float partial, Frame f) {
 			if (!released) {
@@ -145,11 +157,21 @@ public final class ChargeCircles {
 			f.z = at.z;
 			float now = age + partial;
 			boolean full = fullAt >= 0;
-			// At full charge: a swell as it lands, then a steady pulse.
-			float swell = full ? Math.max(0F, 1F - (now - fullAt) / 6F) : 0F;
-			f.flare = full ? Math.max(swell, 0.5F + 0.5F * Mth.sin(now * 0.45F)) : 0F;
-			f.scale = 1F + 0.08F * swell;
-			f.alpha = ALPHA * leaving(partial);
+			if (!feet && ownFirstPerson()) {
+				f.flare = 0F;
+				f.scale = 1F;
+				f.clear = FIRST_PERSON_CLEAR;
+				f.rimPulse = full ? 0.5F + 0.5F * Mth.sin(now * 0.45F) : 0F;
+				f.alpha = FIRST_PERSON_ALPHA * leaving(partial);
+			} else {
+				// At full charge: a swell as it lands, then a steady pulse.
+				float swell = full ? Math.max(0F, 1F - (now - fullAt) / 6F) : 0F;
+				f.flare = full ? Math.max(swell, 0.5F + 0.5F * Mth.sin(now * 0.45F)) : 0F;
+				f.scale = 1F + 0.08F * swell;
+				f.clear = 0F;
+				f.rimPulse = 0F;
+				f.alpha = ALPHA * leaving(partial);
+			}
 			f.time = now;
 			return f.alpha > 0.01F;
 		}
