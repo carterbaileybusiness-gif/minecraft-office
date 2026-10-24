@@ -110,6 +110,11 @@ hash = "aeb3af5723d5e979645709325f52b030b4b3198af83ed2c77d37dfd90b1508f6"
 metafile = true
 
 [[files]]
+file = "mods/office.pw.toml"
+hash = "17f38b88549857a6fa91063cef85b5ca112ea22d398aee29f2d2bd752472c434"
+metafile = true
+
+[[files]]
 file = "mods/open-parties-and-claims.pw.toml"
 hash = "825b9fd49fb38d13523f9abc9bc9d0e4933f10fe12979c7a3caa15d1121b3cbc"
 metafile = true
