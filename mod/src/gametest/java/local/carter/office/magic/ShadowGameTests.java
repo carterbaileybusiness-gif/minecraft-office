@@ -1,12 +1,21 @@
 package local.carter.office.magic;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.SpellRegistry;
+import local.carter.office.magic.spell.shadow.BindGeometry;
+import local.carter.office.magic.spell.shadow.BlackHole;
+import local.carter.office.magic.spell.shadow.BlackHoleGeometry;
+import local.carter.office.magic.spell.shadow.ShadowBind;
 import local.carter.office.magic.spell.shadow.ShadowBolt;
+import local.carter.office.magic.spell.shadow.ShadowStep;
 import local.carter.office.magic.spell.shadow.WellGeometry;
 
 import net.minecraft.core.BlockPos;
@@ -21,15 +30,17 @@ import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.animal.chicken.Chicken;
 import net.minecraft.world.entity.animal.sheep.Sheep;
 import net.minecraft.world.entity.animal.wolf.Wolf;
+import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 
-/** Server GameTests for the Shadow lane: Shadow Bolt and Gravity Well (Task 22). */
+/** Server GameTests for the Shadow lane: Shadow Bolt and Gravity Well (Task 22); Shadow Step, Shadow Bind and Black Hole (Task 23). */
 public class ShadowGameTests {
 	// ---- Shadow Bolt ----
 
@@ -328,6 +339,397 @@ public class ShadowGameTests {
 		double start = MagicTestKit.dist(z, c);
 		h.runAfterDelay(30, () -> {
 			h.assertTrue(MagicTestKit.dist(z, c) < start - 2, "pulls there: " + MagicTestKit.dist(z, c));
+			h.succeed();
+		});
+	}
+
+	// ---- Task 23: registration ----
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void shadowM3SpellsRegisteredInTheirSlots(GameTestHelper h) {
+		Spell step = SpellRegistry.at(Element.SHADOW, Slots.SMALL_B).orElseThrow(() -> new AssertionError("no shadow slot 2"));
+		Spell bind = SpellRegistry.at(Element.SHADOW, Slots.MEDIUM_B).orElseThrow(() -> new AssertionError("no shadow slot 3"));
+		Spell hole = SpellRegistry.at(Element.SHADOW, Slots.ULTIMATE).orElseThrow(() -> new AssertionError("no shadow slot 4"));
+		h.assertTrue(step instanceof ShadowStep && step.id().equals(SpellIds.SHADOW_STEP), "slot 2 is Shadow Step: " + step);
+		h.assertTrue(bind instanceof ShadowBind && bind.id().equals(SpellIds.SHADOW_BIND), "slot 3 is Shadow Bind: " + bind);
+		h.assertTrue(hole instanceof BlackHole && hole.id().equals(SpellIds.BLACK_HOLE), "slot 4 is Black Hole: " + hole);
+		h.assertValueEqual(hole.cost().xpLevels(), 3, "the ultimate costs XP levels");
+		h.succeed();
+	}
+
+	// ---- Shadow Step ----
+
+	/** Whether {@code p} looks at {@code e}'s eyes (within about 18°). */
+	private static boolean facing(ServerPlayer p, LivingEntity e) {
+		Vec3 to = e.getEyePosition().subtract(p.getEyePosition()).normalize();
+		return p.getLookAngle().dot(to) > 0.95;
+	}
+
+	private static void assertStepped(GameTestHelper h, ServerPlayer p) {
+		h.assertTrue(h.getLevel().noCollision(p, p.getBoundingBox()), "never inside a block: " + h.relativeVec(p.position()));
+		MobEffectInstance inv = p.getEffect(MobEffects.INVISIBILITY);
+		h.assertTrue(inv != null && inv.getDuration() <= ShadowStep.INVISIBLE_TICKS && inv.getDuration() > 15, "invisible for 20: " + inv);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
+	public void shadowStepLandsBehindZombie(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 3);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 4, 12));
+		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		long hash = MagicTestKit.blockHash(h);
+		Vec3 start = p.position();
+		h.assertTrue(start.z < z.getZ(), "starts on the near side");
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.CAST, "result");
+		Vec3 at = p.position();
+		h.assertTrue(at.z > z.getZ() + 0.5, "ends on the far side: " + h.relativeVec(at) + ", zombie at " + h.relativeVec(z.position()));
+		h.assertTrue(at.distanceTo(z.position()) <= 2, "within 2 of the zombie: " + at.distanceTo(z.position()));
+		h.assertTrue(facing(p, z), "facing it: look " + p.getLookAngle());
+		assertStepped(h, p);
+		FxEvent fx = rec.fx(p).getLast();
+		h.assertTrue(fx.target().distanceTo(at) < 1.0E-6, "fx lands where the caster did");
+		h.assertValueEqual(fx.entities().length, 1, "the target in the fx");
+		h.assertValueEqual(fx.entities()[0], z.getId(), "the target in the fx");
+		h.assertTrue(at.add(fx.data()[0], fx.data()[1], fx.data()[2]).distanceTo(start) < 1.0E-3, "fx knows where it left");
+		h.assertValueEqual(z.getHealth(), 20f, "a step does no damage");
+		h.assertValueEqual(MagicTestKit.blockHash(h), hash, "a small spell changes no block");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
+	public void shadowStepWithoutTargetGoesEightAhead(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 3);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		MagicTestKit.aim(p, new BlockPos(16, 6, 28));
+		Vec3 start = p.position();
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.CAST, "result");
+		Vec3 moved = p.position().subtract(start);
+		h.assertTrue(Math.abs(moved.z - ShadowStep.AHEAD) < 1.0E-3 && Math.abs(moved.x) < 1.0E-3 && Math.abs(moved.y) < 1.0E-3,
+				"8 ahead along the ground: " + moved);
+		h.assertValueEqual(MagicTestKit.recorder(h).fx(p).getLast().entities().length, 0, "no target");
+		assertStepped(h, p);
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
+	public void shadowStepNeedsLineOfSight(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 3);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		// A wall with a zombie pressed against its far side: aim assist (1.5) alone would reach it through the wall.
+		MagicTestKit.fill(h, new BlockPos(12, 4, 8), new BlockPos(20, 9, 8), Blocks.STONE);
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 4, 9));
+		MagicTestKit.aim(p, new BlockPos(16, 5, 9));
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.CAST, "result");
+		h.assertTrue(p.getZ() < h.absoluteVec(new Vec3(0, 0, 8)).z, "still on this side of the wall: " + h.relativeVec(p.position()));
+		h.assertTrue(p.getZ() > h.absoluteVec(new Vec3(0, 0, 6)).z, "stepped ahead, up to the wall: " + h.relativeVec(p.position()));
+		h.assertValueEqual(MagicTestKit.recorder(h).fx(p).getLast().entities().length, 0, "the hidden zombie is no target");
+		assertStepped(h, p);
+		h.assertTrue(z.isAlive(), "zombie there");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
+	public void shadowStepBesideATargetWithItsBackToAWall(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 3);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		MagicTestKit.fill(h, new BlockPos(13, 4, 13), new BlockPos(19, 8, 13), Blocks.STONE);
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 4, 12));
+		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.CAST, "result");
+		Vec3 at = p.position();
+		h.assertTrue(at.z < h.absoluteVec(new Vec3(0, 0, 13)).z, "never through the wall: " + h.relativeVec(at));
+		h.assertTrue(at.distanceTo(z.position()) <= 2 && at.distanceTo(z.position()) > 1, "beside the zombie: " + at.distanceTo(z.position()));
+		h.assertTrue(facing(p, z), "facing it: look " + p.getLookAngle());
+		assertStepped(h, p);
+		h.succeed();
+	}
+
+	// ---- Shadow Bind ----
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 100)
+	public void shadowBindRootsZombie(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 5);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 12));
+		Zombie control = MagicTestKit.movableDummy(h, new BlockPos(22, 4, 12));
+		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		long hash = MagicTestKit.blockHash(h);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_BIND, 0f), Result.CAST, "result");
+		FxEvent fx = rec.fx(p).getLast();
+		h.assertValueEqual(fx.duration(), 60, "rooted for 60 at charge 0");
+		h.assertValueEqual(fx.data()[0], 1f, "rooted");
+		h.assertValueEqual(fx.entities()[0], z.getId(), "the zombie in the fx");
+		// Level 5, charge 0: P = 1.2, so 4.8 damage.
+		h.assertTrue(z.getHealth() <= 20 - 4.8f + 1.0E-3 && z.getHealth() > 14, "hurt once: " + z.getHealth());
+		MobEffectInstance slow = z.getEffect(MobEffects.SLOWNESS);
+		h.assertTrue(slow != null && slow.getAmplifier() == BindGeometry.SLOWNESS_AMPLIFIER, "Slowness VI: " + slow);
+		Vec3 zAt = z.position();
+		Vec3 controlAt = control.position();
+		// Both are shoved east every tick; only the free one goes anywhere.
+		h.onEachTick(() -> {
+			z.setDeltaMovement(0.25, z.getDeltaMovement().y, 0);
+			control.setDeltaMovement(0.25, control.getDeltaMovement().y, 0);
+		});
+		h.runAfterDelay(30, () -> h.assertTrue(z.position().subtract(zAt).horizontalDistance() < 0.5, "held at 30: " + z.position().subtract(zAt)));
+		h.runAfterDelay(58, () -> {
+			h.assertTrue(z.position().subtract(zAt).horizontalDistance() < 0.5, "moved " + z.position().subtract(zAt) + " in 60 ticks");
+			h.assertTrue(control.position().subtract(controlAt).horizontalDistance() > 3, "the free zombie is shoved: "
+					+ control.position().subtract(controlAt));
+			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "no block changes");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 120)
+	public void shadowBindLetsGoAfterItsLife(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 5);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 12));
+		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
+		long t0 = h.getTick();
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_BIND, 1f), Result.CAST, "result");
+		h.assertValueEqual(MagicTestKit.recorder(h).fx(p).getLast().duration(), 100, "rooted for 100 at full charge");
+		Vec3[] at = new Vec3[1];
+		h.onEachTick(() -> {
+			if (h.getTick() >= t0 + 20) z.setDeltaMovement(0.25, z.getDeltaMovement().y, 0);
+		});
+		h.runAtTickTime(t0 + 20, () -> at[0] = z.position());
+		h.runAtTickTime(t0 + 95, () -> h.assertTrue(z.position().subtract(at[0]).horizontalDistance() < 0.5, "still held at 95: "
+				+ z.position().subtract(at[0])));
+		h.runAtTickTime(t0 + 115, () -> {
+			h.assertTrue(z.position().subtract(at[0]).horizontalDistance() > 2, "free after 100: " + z.position().subtract(at[0]));
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 60)
+	public void shadowBindOnlyRootsFoes(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 5);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		Sheep sheep = still(h, EntityTypes.SHEEP, new BlockPos(16, 4, 12));
+		MagicTestKit.aim(p, new BlockPos(16, 4, 12));
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_BIND, 0f), Result.CAST, "result");
+		FxEvent fx = MagicTestKit.recorder(h).fx(p).getLast();
+		h.assertValueEqual(fx.entities()[0], sheep.getId(), "the sheep was the target");
+		h.assertValueEqual(fx.data()[0], 0f, "not rooted");
+		h.assertTrue(sheep.getHealth() < sheep.getMaxHealth(), "the damage goes through TargetFilter: " + sheep.getHealth());
+		h.assertTrue(!sheep.hasEffect(MobEffects.SLOWNESS), "no slowness on livestock");
+		Vec3 at = sheep.position();
+		h.onEachTick(() -> sheep.setDeltaMovement(0.25, sheep.getDeltaMovement().y, 0));
+		h.runAfterDelay(40, () -> {
+			h.assertTrue(sheep.position().subtract(at).horizontalDistance() > 2, "not held: " + sheep.position().subtract(at));
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
+	public void shadowBindNeedsLineOfSight(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 5);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		MagicTestKit.fill(h, new BlockPos(12, 4, 8), new BlockPos(20, 9, 8), Blocks.STONE);
+		Zombie hidden = MagicTestKit.dummy(h, new BlockPos(16, 4, 9));
+		MagicTestKit.aim(p, new BlockPos(16, 5, 9));
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_BIND, 0f), Result.CAST, "result");
+		FxEvent fx = MagicTestKit.recorder(h).fx(p).getLast();
+		h.assertValueEqual(fx.entities().length, 0, "no target through the wall");
+		h.assertValueEqual(hidden.getHealth(), 20f, "unhurt");
+		h.assertTrue(!hidden.hasEffect(MobEffects.SLOWNESS), "not slowed");
+		h.succeed();
+	}
+
+	// ---- Black Hole ----
+
+	/** Glass round the arena's edge, so debris flung out at the collapse stays in this test's arena. */
+	private static void fence(GameTestHelper h) {
+		int mx = MagicTestKit.SIZE_X - 1;
+		int mz = MagicTestKit.SIZE_Z - 1;
+		int top = 20;
+		MagicTestKit.fill(h, new BlockPos(0, 4, 0), new BlockPos(mx, top, 0), Blocks.GLASS);
+		MagicTestKit.fill(h, new BlockPos(0, 4, mz), new BlockPos(mx, top, mz), Blocks.GLASS);
+		MagicTestKit.fill(h, new BlockPos(0, 4, 0), new BlockPos(0, top, mz), Blocks.GLASS);
+		MagicTestKit.fill(h, new BlockPos(mx, 4, 0), new BlockPos(mx, top, mz), Blocks.GLASS);
+	}
+
+	/** Casts Black Hole (signs answered) at the floor ahead; returns its centre, test-relative (2 above the floor). */
+	private static Vec3 castHole(GameTestHelper h, ServerPlayer p) {
+		MagicTestKit.aim(p, new BlockPos(16, 3, 18));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.BLACK_HOLE), Result.CAST, "result");
+		FxEvent fx = rec.fx(p).getLast();
+		h.assertTrue(fx.spell().equals(SpellIds.BLACK_HOLE), "the black hole's fx");
+		h.assertValueEqual(fx.duration(), BlackHoleGeometry.LIFE, "life");
+		h.assertValueEqual(fx.data()[1], (float) BlackHoleGeometry.PULL_RADIUS, "pull radius");
+		Vec3 c = h.relativeVec(fx.target());
+		h.assertTrue(Math.abs(c.y - (MagicTestKit.FLOOR_TOP + 1 + BlackHoleGeometry.HEIGHT)) < 1.0E-6, "2 above the floor: " + c);
+		h.assertTrue(Math.abs(c.x - 16.5) < 0.01 && c.z > 11 && c.z < 17, "where the look meets the floor: " + c);
+		return c;
+	}
+
+	/** Every non-air cell in the arena's lower part (test-relative). */
+	private static List<BlockPos> solidCells(GameTestHelper h) {
+		List<BlockPos> out = new ArrayList<>();
+		for (int y = 0; y <= 12; y++) {
+			for (int z = 0; z < MagicTestKit.SIZE_Z; z++) {
+				for (int x = 0; x < MagicTestKit.SIZE_X; x++) {
+					BlockPos c = new BlockPos(x, y, z);
+					if (!h.getBlockState(c).isAir()) out.add(c);
+				}
+			}
+		}
+		return out;
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 180)
+	public void blackHoleDevoursSphereWithinCap(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 7);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		fence(h);
+		// A mound to devour as well as the floor.
+		MagicTestKit.fill(h, new BlockPos(14, 4, 13), new BlockPos(18, 5, 17), Blocks.STONE);
+		List<BlockPos> before = solidCells(h);
+		long t0 = h.getTick();
+		Vec3 c = castHole(h, p);
+		h.assertValueEqual(MagicTestKit.recorder(h).fx(p).getLast().data()[0], 6f, "radius 6 at level 7");
+		// Halfway, it has eaten only what its sphere has reached so far.
+		h.runAtTickTime(t0 + 50, () -> {
+			int eaten = 0;
+			double r = BlackHoleGeometry.radius(52, 6);
+			for (BlockPos b : before) {
+				if (!h.getBlockState(b).isAir()) continue;
+				eaten++;
+				double d = Vec3.atCenterOf(b).distanceTo(c);
+				h.assertTrue(d <= r + 1.0E-6, "at tick 50 nothing past " + r + " is eaten: " + b + " at " + d);
+			}
+			h.assertTrue(eaten > 20, "it is eating by tick 50: " + eaten);
+		});
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 3, () -> {
+			// This arena only (other terrain tests fling debris in theirs).
+			AABB arena = new AABB(h.absoluteVec(Vec3.ZERO), h.absoluteVec(new Vec3(MagicTestKit.SIZE_X, MagicTestKit.SIZE_Y, MagicTestKit.SIZE_Z)));
+			int flying = h.getLevel().getEntitiesOfClass(FallingBlockEntity.class, arena).size();
+			h.assertTrue(flying > 0 && flying <= 48, "the lip is flung out at the collapse: " + flying + " falling blocks");
+		});
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 6, () -> {
+			int removed = 0;
+			double far = 0;
+			for (BlockPos b : before) {
+				if (!h.getBlockState(b).isAir()) continue;
+				removed++;
+				double d = Vec3.atCenterOf(b).distanceTo(c);
+				far = Math.max(far, d);
+				h.assertTrue(d <= 6.5, "removed beyond 6.5 from the centre: " + b + " at " + d);
+			}
+			h.assertTrue(removed >= 200, "blocks removed " + removed);
+			h.assertTrue(far > 5.5, "it reached its cap: " + far);
+			h.assertTrue(MagicTestKit.count(h, Blocks.BLACKSTONE) + MagicTestKit.count(h, Blocks.AMETHYST_BLOCK) > 0, "a scorched rim");
+		});
+		// Let the debris land in this arena before it is torn down.
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 50, h::succeed);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 180)
+	public void blackHoleSparesBlockEntities(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 7);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		fence(h);
+		long t0 = h.getTick();
+		Vec3 c = castHole(h, p);
+		// A furnace in the floor right under the centre (about 2.5 below it) and a chest beside it.
+		BlockPos furnace = BlockPos.containing(c.x, MagicTestKit.FLOOR_TOP, c.z);
+		h.setBlock(furnace, Blocks.FURNACE);
+		MagicTestKit.chest(h, furnace.east());
+		BlockPos stone = furnace.west();
+		h.assertTrue(h.getBlockState(stone).is(Blocks.STONE), "stone beside it");
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 6, () -> {
+			h.assertTrue(h.getBlockState(furnace).is(Blocks.FURNACE), "the furnace is still there");
+			h.assertTrue(h.getBlockState(furnace.east()).is(Blocks.CHEST), "the chest is still there");
+			h.assertTrue(h.getBlockState(stone).isAir(), "the stone beside them is eaten");
+			h.assertTrue(h.getBlockState(furnace.below()).isAir(), "and under them");
+		});
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 50, h::succeed);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 180)
+	public void blackHolePullsFoesAndItemsNotFriends(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 7);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		fence(h);
+		long t0 = h.getTick();
+		Vec3 c = castHole(h, p);
+		// All beyond the devoured sphere (6), within the pull (12).
+		Zombie z = MagicTestKit.movableDummy(h, floor(c, -9, 0));
+		ItemEntity item = MagicTestKit.item(h, floor(c, 0, 8));
+		ServerPlayer other = MagicTestKit.otherPlayer(h, floor(c, 8, 0));
+		Villager villager = MagicTestKit.villager(h, floor(c, -7, 4));
+		Sheep sheep = still(h, EntityTypes.SHEEP, floor(c, 7, -4));
+		double zStart = MagicTestKit.dist(z, c);
+		double itemStart = MagicTestKit.dist(item, c);
+		Vec3 otherAt = other.position();
+		Vec3 villagerAt = villager.position();
+		Vec3 sheepAt = sheep.position();
+		h.runAtTickTime(t0 + 40, () -> {
+			h.assertTrue(MagicTestKit.dist(z, c) < zStart - 2.5, "zombie dragged in: " + zStart + " -> " + MagicTestKit.dist(z, c));
+			h.assertTrue(MagicTestKit.dist(item, c) < itemStart - 2.5, "item dragged in: " + itemStart + " -> " + MagicTestKit.dist(item, c));
+			h.assertTrue(other.position().distanceTo(otherAt) < 1.0E-6, "player not moved: " + other.position());
+			h.assertTrue(villager.position().distanceTo(villagerAt) < 1.0E-6, "villager not moved");
+			h.assertTrue(sheep.position().subtract(sheepAt).horizontalDistance() < 0.1, "sheep not moved");
+		});
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE - 5, () -> {
+			h.assertTrue(MagicTestKit.dist(item, c) < 1.5, "the item reached the core: " + MagicTestKit.dist(item, c));
+			h.assertValueEqual(other.getHealth(), other.getMaxHealth(), "player health");
+			h.assertValueEqual(villager.getHealth(), villager.getMaxHealth(), "villager health");
+		});
+		// At the collapse what it pulled is thrown back out.
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 12, () -> {
+			h.assertTrue(item.isRemoved() || MagicTestKit.dist(item, c) > 4, "the item is thrown out: " + MagicTestKit.dist(item, c));
+		});
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 50, h::succeed);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 180)
+	public void blackHoleHurtsTheCoreAndBlastsAtTheEnd(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 7);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		fence(h);
+		long t0 = h.getTick();
+		Vec3 c = castHole(h, p);
+		// NoAI dummies stay where they are put: one in the core, one 4 out (blast only), one 9 out (neither).
+		Zombie core = MagicTestKit.dummy(h, floor(c, 0, 0));
+		core.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.MAX_HEALTH).setBaseValue(100);
+		core.setHealth(100);
+		Zombie near = MagicTestKit.dummy(h, floor(c, 4, 0));
+		Zombie far = MagicTestKit.dummy(h, floor(c, -9, 0));
+		h.runAtTickTime(t0 + 25, () -> h.assertTrue(core.getHealth() <= 92 && core.getHealth() >= 91.9f, "two core hits by 25: " + core.getHealth()));
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE - 3, () -> {
+			h.assertValueEqual(near.getHealth(), 20f, "4 out: nothing until the collapse");
+			h.assertValueEqual(far.getHealth(), 20f, "9 out: untouched");
+		});
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 3, () -> {
+			// Level 7, ultimate: P = 2 × 1.3 = 2.6, so the blast deals 26.
+			h.assertTrue(!near.isAlive(), "the blast kills the zombie 4 out: " + near.getHealth());
+			h.assertValueEqual(far.getHealth(), 20f, "9 out: beyond the blast");
+		});
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 50, h::succeed);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = "office-test:magic_terrain_emitter", maxTicks = 160)
+	public void blackHoleRespectsClaimFallback(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 7);
+		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
+		// An emitter about 20 from the centre: the fallback claim rule protects everything within 32 of it.
+		BlockPos emitter = new BlockPos(2, 4, 0);
+		MagicTestKit.emitter(h, emitter, p);
+		long before = MagicTestKit.blockHash(h);
+		long t0 = h.getTick();
+		Vec3 c = castHole(h, p);
+		double fromEmitter = Vec3.atBottomCenterOf(emitter).distanceTo(c);
+		h.assertTrue(fromEmitter > 18 && fromEmitter < 22, "the emitter is about 20 from the centre: " + fromEmitter);
+		Zombie z = MagicTestKit.dummy(h, floor(c, 0, 0));
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 6, () -> {
+			h.assertValueEqual(MagicTestKit.blockHash(h), before, "no block changed");
+			h.assertTrue(z.getHealth() < 20, "the zombie in the core is still hurt: " + z.getHealth());
+			h.assertTrue(MagicTestKit.recorder(h).messageKeys(p).contains("magic.office.protected"), "told the land is protected");
 			h.succeed();
 		});
 	}

@@ -9,5 +9,8 @@ public final class ShadowSpells {
 	public static void register() {
 		SpellRegistry.register(new ShadowBolt());
 		SpellRegistry.register(new GravityWell());
+		SpellRegistry.register(new ShadowStep());
+		SpellRegistry.register(new ShadowBind());
+		SpellRegistry.register(new BlackHole());
 	}
 }

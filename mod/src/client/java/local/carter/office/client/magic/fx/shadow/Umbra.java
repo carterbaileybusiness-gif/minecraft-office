@@ -63,6 +63,16 @@ final class Umbra {
 		return cam;
 	}
 
+	/** The camera's left this frame (the screen's x axis, pointing left). */
+	Vec3 left() {
+		return new Vec3(left.x(), left.y(), left.z());
+	}
+
+	/** The camera's up this frame (the screen's y axis). */
+	Vec3 up() {
+		return new Vec3(up.x(), up.y(), up.z());
+	}
+
 	/** How much daylight {@code at} stands in, 0..1: its sky light times how bright the sky is now (0 at night or indoors). */
 	static float daylight(Vec3 at) {
 		ClientLevel level = Minecraft.getInstance().level;
@@ -86,8 +96,16 @@ final class Umbra {
 	 */
 	void haze(Vec3 at, float radius, float intensity) {
 		if (intensity <= 0.004F || radius <= 0) return;
-		add(LightPipeline.dark(), at, Math.min(radius, MAX_HAZE), glow, ink(intensity));
+		// Three nested pieces sharing the strength: the 32-px sprite's texel steps fall in different places on each, so where the
+		// haze meets a lit wall up close no single step shows at full contrast (Task 22's parked polish).
+		float r = Math.min(radius, MAX_HAZE);
+		add(LightPipeline.dark(), at, r, glow, ink(intensity * 0.45F));
+		add(LightPipeline.dark(), at, r * 0.78F, glow, ink(intensity * 0.33F));
+		add(LightPipeline.dark(), at, r * 0.57F, glow, ink(intensity * 0.27F));
 	}
+
+	/** Pieces one {@link #haze} lays. */
+	static final int HAZE_PIECES = 3;
 
 	/** A round piece of light in {@code rgb}. */
 	void light(Vec3 at, float radius, float intensity, int rgb) {
@@ -144,7 +162,7 @@ final class Umbra {
 
 	/** Pieces {@link #orb} lays with {@code n} rim pieces. */
 	static int orbPieces(int n) {
-		return 4 + n + 2 * ((n + 1) / 2);
+		return 3 + HAZE_PIECES + n + 2 * ((n + 1) / 2);
 	}
 
 	/** Fx-budget particles a visual laying {@code quads} pieces a frame costs: one per {@value #QUADS_PER_PARTICLE}, at least one. */

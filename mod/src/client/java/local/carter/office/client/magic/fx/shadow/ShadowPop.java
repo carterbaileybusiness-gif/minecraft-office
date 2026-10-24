@@ -40,7 +40,7 @@ final class ShadowPop extends SingleQuadParticle implements LightPipeline.Extent
 
 	/** Fx-budget particles it costs (its pieces a frame, per 50). */
 	static int cost() {
-		return Umbra.budgetCost(4 + RIM + RIM / 2);
+		return Umbra.budgetCost(2 + Umbra.HAZE_PIECES + RIM + RIM / 2);
 	}
 
 	@Override
