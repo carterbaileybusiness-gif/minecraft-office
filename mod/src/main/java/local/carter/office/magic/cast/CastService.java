@@ -135,7 +135,8 @@ public final class CastService {
 	 * on cooldown, or not enough mana for the base cost (creative players never lack mana). Null = may charge.
 	 */
 	public static @Nullable Component chargeBlocker(Player p, MagicData d, Spell spell) {
-		long left = d.cooldownLeft(spell.id(), p.level().getGameTime());
+		if (p instanceof ServerPlayer sp && channeling.test(sp)) return Component.translatable(BUSY_KEY);
+		long left = d.cooldownLeft(spell.cooldownKey(p), p.level().getGameTime());
 		if (left > 0) return cooldownMessage(spell, left);
 		int mana = MagicAttachments.mana(p);
 		int base = spell.cost().mana();
@@ -237,7 +238,7 @@ public final class CastService {
 		if (d.level() < unlock) return Checked.fail(Result.LOCKED, Component.translatable("magic.office.locked", name(spell), unlock));
 		if (channeling.test(p)) return Checked.fail(Result.BUSY, Component.translatable(BUSY_KEY));
 		if (SignChallenges.pending(p)) return Checked.fail(Result.BUSY, Component.translatable("magic.office.signs"));
-		long left = d.cooldownLeft(spell.id(), p.level().getGameTime());
+		long left = d.cooldownLeft(spell.cooldownKey(p), p.level().getGameTime());
 		if (left > 0) return Checked.fail(Result.COOLDOWN, cooldownMessage(spell, left));
 
 		SpellCost cost = spell.cost();
@@ -300,7 +301,8 @@ public final class CastService {
 		if (progress.level() > oldLevel) levelUp(p, d, oldLevel);
 
 		MagicServer.sender().fx(level, done.fx(), isUltimate(spell) ? FX_RANGE_ULTIMATE : FX_RANGE);
-		LAST_CAST.put(p.getUUID(), now);
+		// Recall (and Mark Home) cost no mana, so they must not pause regen.
+		if (spell.slot() != Slots.RECALL) LAST_CAST.put(p.getUUID(), now);
 		return Result.CAST;
 	}
 

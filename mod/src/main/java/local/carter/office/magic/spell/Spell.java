@@ -5,6 +5,7 @@ import org.jspecify.annotations.Nullable;
 import local.carter.office.magic.core.Element;
 
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.entity.player.Player;
 
 /**
  * One spell (server side). {@code CastService} has already checked element, unlock, cooldown, mana and XP levels when
@@ -13,6 +14,14 @@ import net.minecraft.resources.Identifier;
  */
 public interface Spell {
 	Identifier id();
+
+	/**
+	 * The {@code MagicData.readyAt} key this cast waits on and (for spells that manage their own cooldown) writes: {@link #id()}
+	 * unless a spell has a second action with its own cooldown (Recall's Mark Home while sneaking).
+	 */
+	default Identifier cooldownKey(Player p) {
+		return id();
+	}
 
 	/** Null for spells every element has (Recall). */
 	@Nullable Element element();
