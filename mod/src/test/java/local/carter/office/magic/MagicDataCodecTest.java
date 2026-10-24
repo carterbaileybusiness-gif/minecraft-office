@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
 import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,30 @@ class MagicDataCodecTest {
 		assertEquals(d, MagicData.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow());
 		JsonElement empty = MagicData.CODEC.encodeStart(JsonOps.INSTANCE, MagicData.EMPTY).getOrThrow();
 		assertEquals(MagicData.EMPTY, MagicData.CODEC.parse(JsonOps.INSTANCE, empty).getOrThrow());
+	}
+
+	@Test void badFieldsFallBackOneByOne() {
+		JsonObject json = MagicData.CODEC.encodeStart(JsonOps.INSTANCE, full()).getOrThrow().getAsJsonObject();
+		json.addProperty("element", "plasma");
+		json.addProperty("level", "high");
+		json.addProperty("selected", "Not An Id!");
+		JsonObject ready = new JsonObject();
+		ready.addProperty("office:spark", 5L);
+		ready.addProperty("BAD ID", 3L);
+		json.add("ready_at", ready);
+		MagicData d = MagicData.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(Optional.empty(), d.element());
+		assertEquals(1, d.level());
+		assertEquals(Optional.empty(), d.selected());
+		assertEquals(33, d.xp(), "good fields survive");
+		assertEquals(full().home(), d.home(), "good fields survive");
+		assertEquals(Map.of(SpellIds.SPARK, 5L), d.readyAt(), "a bad cooldown key drops only that entry");
+	}
+
+	@Test void badElementOrdinalFailsToDecode() {
+		FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+		buf.writeVarInt(Element.values().length + 1);
+		assertThrows(io.netty.handler.codec.DecoderException.class, () -> MagicData.STREAM_CODEC.decode(buf));
 	}
 
 	@Test void roundTripsThroughStreamCodec() {

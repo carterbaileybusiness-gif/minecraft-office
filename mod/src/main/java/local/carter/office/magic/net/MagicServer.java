@@ -7,7 +7,9 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.cast.ElementChoice;
+import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
+import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.net.MagicPayloads.CastFx;
 import local.carter.office.magic.net.MagicPayloads.ChooseElement;
@@ -67,8 +69,14 @@ public final class MagicServer {
 	}
 
 	public static void registerReceivers() {
-		ServerPlayNetworking.registerGlobalReceiver(ChooseElement.TYPE, (p, ctx) -> ElementChoice.choose(ctx.player(), p.element()));
+		ServerPlayNetworking.registerGlobalReceiver(ChooseElement.TYPE, (p, ctx) -> chooseElement(ctx.player(), p.element()));
 		ServerPlayNetworking.registerGlobalReceiver(SelectSpell.TYPE, (p, ctx) -> select(ctx.player(), p.spell()));
+	}
+
+	/** The {@code ChooseElement} receiver: only while a grimoire is in either hand (the choice screen is opened from one). */
+	public static boolean chooseElement(ServerPlayer p, Element e) {
+		boolean holding = GrimoireItem.isGrimoire(p.getMainHandItem()) || GrimoireItem.isGrimoire(p.getOffhandItem());
+		return holding && ElementChoice.choose(p, e);
 	}
 
 	/** Selects {@code spell} if it is one of the player's unlocked spells; anything else is ignored. */

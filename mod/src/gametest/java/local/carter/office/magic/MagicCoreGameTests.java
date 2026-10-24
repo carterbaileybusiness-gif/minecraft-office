@@ -23,7 +23,9 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.players.PlayerList;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
@@ -147,7 +149,10 @@ public class MagicCoreGameTests {
 	public void chooseElementBindsOnce(GameTestHelper h) {
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		ServerPlayer p = MagicTestKit.otherPlayer(h, MagicTestKit.STAND);
-		h.assertTrue(ElementChoice.choose(p, Element.FIRE), "first choice binds");
+		h.assertFalse(MagicServer.chooseElement(p, Element.WIND), "ChooseElement without a grimoire in hand is ignored");
+		h.assertValueEqual(MagicAttachments.get(p).element(), Optional.<Element>empty(), "still unbound");
+		p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
+		h.assertTrue(MagicServer.chooseElement(p, Element.FIRE), "first choice binds");
 		h.assertFalse(ElementChoice.choose(p, Element.WATER), "second choice refused");
 		MagicData d = MagicAttachments.get(p);
 		h.assertValueEqual(d.element(), Optional.of(Element.FIRE), "still fire");
@@ -224,6 +229,36 @@ public class MagicCoreGameTests {
 		h.assertFalse(MagicServer.select(p, SpellIds.WATER_BULLET), "another element's spell refused");
 		h.assertTrue(MagicServer.select(p, open.id()), "an unlocked spell is selectable");
 		h.assertValueEqual(MagicAttachments.get(p).selected(), Optional.of(open.id()), "selected");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void kitPlayersAreRealPlayers(GameTestHelper h) {
+		ServerLevel level = h.getLevel();
+		PlayerList list = level.getServer().getPlayerList();
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 2);
+		ServerPlayer other = MagicTestKit.otherPlayer(h, new BlockPos(20, 4, 10));
+		h.assertTrue(list.getPlayer(p.getUUID()) == p && list.getPlayer(other.getUUID()) == other, "in the player list");
+		List<Player> inBounds = level.getEntitiesOfClass(Player.class, h.getBounds());
+		h.assertTrue(inBounds.contains(p) && inBounds.contains(other), "found by level entity queries");
+		h.assertTrue(p.connection != null, "has a connection");
+
+		MagicTestKit.teleportTo(p, new BlockPos(8, 4, 20));
+		h.assertValueEqual(p.blockPosition(), h.absolutePos(new BlockPos(8, 4, 20)), "teleported");
+		h.assertTrue(p.hurtServer(level, level.damageSources().generic(), 2f), "can be hurt");
+		h.assertValueEqual(p.getHealth(), 18f, "health after 2 damage");
+
+		MagicData d = MagicAttachments.get(other).withLevel(6);
+		MagicAttachments.set(other, d);
+		MagicTestKit.kill(other);
+		h.assertFalse(other.isAlive(), "died without throwing");
+		ServerPlayer back = MagicTestKit.respawn(h, other);
+		h.assertTrue(back != other && back.isAlive() && list.getPlayer(other.getUUID()) == back, "respawned through the player list");
+		h.assertValueEqual(MagicAttachments.get(back).level(), 6, "magic survives a real respawn");
+
+		MagicTestKit.disconnect(p);
+		h.assertTrue(list.getPlayer(p.getUUID()) == null, "disconnect removes it from the player list");
+		h.assertTrue(p.isRemoved(), "and from the level");
 		h.succeed();
 	}
 

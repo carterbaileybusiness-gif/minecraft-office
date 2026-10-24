@@ -91,6 +91,30 @@ class PayloadCapsTest {
 		assertThrows(IllegalArgumentException.class, () -> new SignAnswer(1, new byte[MagicPayloads.MAX_SIGNS + 1]));
 	}
 
+	@Test void badEnumOrdinalsFailToDecode() {
+		FriendlyByteBuf b = buf();
+		b.writeVarInt(Element.values().length);
+		assertThrows(DecoderException.class, () -> MagicPayloads.ChooseElement.CODEC.decode(b));
+		FriendlyByteBuf c = buf();
+		c.writeVarInt(-1);
+		assertThrows(DecoderException.class, () -> MagicPayloads.ChooseElement.CODEC.decode(c));
+		FriendlyByteBuf d = buf();
+		d.writeVarInt(MagicPayloads.OpenGrimoire.Mode.values().length);
+		assertThrows(DecoderException.class, () -> MagicPayloads.OpenGrimoire.CODEC.decode(d));
+	}
+
+	@Test void signChallengeLengthIsChecked() {
+		assertThrows(IllegalArgumentException.class, () -> new MagicPayloads.SignChallenge(1, SpellIds.METEOR, 1L, 0, 20));
+		assertThrows(IllegalArgumentException.class, () -> new MagicPayloads.SignChallenge(1, SpellIds.METEOR, 1L, MagicPayloads.MAX_SIGNS + 1, 20));
+		FriendlyByteBuf bad = buf();
+		bad.writeVarInt(1);
+		bad.writeIdentifier(SpellIds.METEOR);
+		bad.writeLong(1L);
+		bad.writeVarInt(MagicPayloads.MAX_SIGNS + 1);
+		bad.writeVarInt(20);
+		assertThrows(DecoderException.class, () -> MagicPayloads.SignChallenge.CODEC.decode(bad));
+	}
+
 	@Test void otherPayloadsRoundTrip() {
 		FriendlyByteBuf b = buf();
 		MagicPayloads.ChooseElement.CODEC.encode(b, new MagicPayloads.ChooseElement(Element.SHADOW));

@@ -33,13 +33,30 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 			k -> Element.byKey(k).map(DataResult::success).orElseGet(() -> DataResult.error(() -> "unknown element " + k)),
 			Element::key);
 
+	/** Cooldowns keyed by id strings; entries whose key is not a valid id are dropped instead of failing the whole map. */
+	private static final Codec<Map<Identifier, Long>> READY_AT_CODEC = Codec.unboundedMap(Codec.STRING, Codec.LONG).xmap(
+			m -> {
+				Map<Identifier, Long> out = new HashMap<>();
+				m.forEach((k, v) -> {
+					Identifier id = Identifier.tryParse(k);
+					if (id != null) out.put(id, v);
+				});
+				return out;
+			},
+			m -> {
+				Map<String, Long> out = new HashMap<>();
+				m.forEach((k, v) -> out.put(k.toString(), v));
+				return out;
+			});
+
+	/** Every field is lenient: a bad value falls back to that field's default and the other fields still load. */
 	public static final Codec<MagicData> CODEC = RecordCodecBuilder.create(i -> i.group(
 			ELEMENT_CODEC.lenientOptionalFieldOf("element").forGetter(MagicData::element),
-			Codec.INT.optionalFieldOf("level", 1).forGetter(MagicData::level),
-			Codec.INT.optionalFieldOf("xp", 0).forGetter(MagicData::xp),
+			Codec.INT.lenientOptionalFieldOf("level", 1).forGetter(MagicData::level),
+			Codec.INT.lenientOptionalFieldOf("xp", 0).forGetter(MagicData::xp),
 			Identifier.CODEC.lenientOptionalFieldOf("selected").forGetter(MagicData::selected),
 			GlobalPos.CODEC.lenientOptionalFieldOf("home").forGetter(MagicData::home),
-			Codec.unboundedMap(Identifier.CODEC, Codec.LONG).optionalFieldOf("ready_at", Map.of()).forGetter(MagicData::readyAt)
+			READY_AT_CODEC.lenientOptionalFieldOf("ready_at", Map.of()).forGetter(MagicData::readyAt)
 	).apply(i, MagicData::new));
 
 	public static final StreamCodec<FriendlyByteBuf, MagicData> STREAM_CODEC = StreamCodec.of(MagicData::write, MagicData::read);

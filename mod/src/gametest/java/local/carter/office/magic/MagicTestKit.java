@@ -42,7 +42,9 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.gametest.framework.GameTestInfo;
 import net.minecraft.gametest.framework.GameTestListener;
 import net.minecraft.gametest.framework.GameTestRunner;
+import net.minecraft.network.DisconnectionDetails;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -68,10 +70,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.Vec3;
 
-import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
-
 /**
- * Everything the magic GameTests share (complete in Task 3: element lanes never edit it). Positions are relative to the test
+ * Everything the magic GameTests share. It is complete for the element lanes, which never edit it; only M1 tasks (1–11) may
+ * extend it. Players are real: in the player list and the level, with a connection, so death, respawn, teleport,
+ * disconnect, player ticks and level entity queries behave as on a server. Positions are relative to the test
  * unless named {@code abs}. Use {@code @GameTest(structure = MagicTestKit.ARENA)}: a 32 × 24 × 32 arena, stone at y 0–3,
  * air above; the caster stands at {@link #STAND} facing +Z.
  *
@@ -117,31 +119,66 @@ public final class MagicTestKit {
 	}
 
 	/**
-	 * The player {@code dead} respawns as, the way {@code PlayerList.respawn} makes it: a new mock at the same spot,
-	 * {@code restoreFrom(dead, false)}, then {@code AFTER_RESPAWN} (where Fabric copies {@code copyOnDeath} attachments).
+	 * Real respawn of a dead kit player ({@code PlayerList.respawn}, which fires {@code AFTER_RESPAWN}, where Fabric copies
+	 * {@code copyOnDeath} attachments). The new player stands at the world spawn (respawn configs are cleared); it is a kit
+	 * player too and is disconnected when the test ends. If {@code dead} is still alive it is killed first.
 	 */
 	public static ServerPlayer respawn(GameTestHelper h, ServerPlayer dead) {
-		ServerPlayer p = (ServerPlayer) h.makeMockServerPlayer(GameType.SURVIVAL);
-		p.setPos(dead.getX(), dead.getY(), dead.getZ());
-		face(p, dead.getYRot(), dead.getXRot());
-		p.restoreFrom(dead, false);
-		ServerPlayerEvents.AFTER_RESPAWN.invoker().afterRespawn(dead, p, false);
-		own(h, p);
-		state(h).players.add(p.getId());
+		if (dead.isAlive()) kill(dead);
+		ServerPlayer p = dead.level().getServer().getPlayerList().respawn(dead, false, Entity.RemovalReason.KILLED);
+		p.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+		track(h, p);
 		return p;
 	}
 
+	/** Kills {@code p} the vanilla way ({@code ServerPlayer.die} runs: drops, death message, Fabric death events). */
+	public static void kill(ServerPlayer p) {
+		p.kill(p.level());
+	}
+
+	/** Disconnects {@code p} the way a lost connection does (Fabric {@code DISCONNECT} fires, the player leaves the list and level). */
+	public static void disconnect(ServerPlayer p) {
+		if (p.level().getServer().getPlayerList().getPlayer(p.getUUID()) != p) return;
+		p.connection.onDisconnect(new DisconnectionDetails(Component.literal("MagicTestKit disconnect")));
+	}
+
+	/** Teleports {@code p} to the bottom centre of {@code rel} in its test (keeps the rotation). */
+	public static void teleportTo(ServerPlayer p, BlockPos rel) {
+		GameTestHelper h = helperOf(p);
+		teleportTo(p, h.getLevel(), h.absoluteVec(Vec3.atBottomCenterOf(rel)));
+	}
+
+	/** Teleports {@code p} to absolute {@code abs} in {@code level} (any dimension; keeps the rotation). */
+	public static void teleportTo(ServerPlayer p, ServerLevel level, Vec3 abs) {
+		p.teleportTo(level, abs.x, abs.y, abs.z, Set.of(), p.getYRot(), p.getXRot(), true);
+	}
+
+	/**
+	 * A real player for {@code h}: in the player list and the level, with an embedded-channel connection, marked as loaded
+	 * (so it can be hurt), survival, inventory cleared (the join starter kit), no respawn point, at {@code rel} facing +Z.
+	 * Kit players are disconnected when the test ends. The server never simulates a player's movement, so dashes and
+	 * knockback on a player show in {@code getDeltaMovement()}, not in its position.
+	 */
+	@SuppressWarnings("removal") // the only GameTest helper that makes an in-level player with a connection on 26.3
 	private static ServerPlayer mock(GameTestHelper h, BlockPos rel) {
-		ServerPlayer p = (ServerPlayer) h.makeMockServerPlayer(GameType.SURVIVAL);
-		Vec3 at = h.absoluteVec(Vec3.atBottomCenterOf(rel));
-		p.setPos(at.x, at.y, at.z);
-		float yaw = h.getTestRotation().rotate(Direction.SOUTH).toYRot();
-		face(p, yaw, 0);
-		p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+		ServerPlayer p = h.makeMockServerPlayerInLevel();
+		p.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+		p.setGameMode(GameType.SURVIVAL);
+		p.getInventory().clearContent();
 		p.setRespawnPosition(null, false);
-		own(h, p);
-		state(h).players.add(p.getId());
+		Vec3 at = h.absoluteVec(Vec3.atBottomCenterOf(rel));
+		float yaw = h.getTestRotation().rotate(Direction.SOUTH).toYRot();
+		p.teleportTo(h.getLevel(), at.x, at.y, at.z, Set.of(), yaw, 0, true);
+		face(p, yaw, 0);
+		track(h, p);
 		return p;
+	}
+
+	private static void track(GameTestHelper h, ServerPlayer p) {
+		own(h, p);
+		TestState s = state(h);
+		s.players.add(p.getId());
+		s.playerObjects.add(p);
 	}
 
 	private static void face(Entity e, float yaw, float pitch) {
@@ -456,6 +493,7 @@ public final class MagicTestKit {
 	private static final class TestState {
 		final GameTestHelper helper;
 		final Set<Integer> players = new HashSet<>();
+		final List<ServerPlayer> playerObjects = new ArrayList<>();
 		final List<AutoCloseable> cleanups = new ArrayList<>();
 		@Nullable Recorder recorder;
 
@@ -472,6 +510,8 @@ public final class MagicTestKit {
 				}
 			}
 			cleanups.clear();
+			for (ServerPlayer p : playerObjects) disconnect(p);
+			playerObjects.clear();
 			TESTS.remove(helper);
 			boolean anyRecorder = TESTS.values().stream().anyMatch(s -> s.recorder != null);
 			if (!anyRecorder) MagicServer.setSenderForTesting(null);

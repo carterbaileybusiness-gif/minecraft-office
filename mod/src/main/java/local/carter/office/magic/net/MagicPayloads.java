@@ -1,6 +1,7 @@
 package local.carter.office.magic.net;
 
 import io.netty.handler.codec.DecoderException;
+import io.netty.handler.codec.EncoderException;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.OfficeMod;
@@ -24,6 +25,14 @@ public final class MagicPayloads {
 
 	private MagicPayloads() {}
 
+	/** {@code readEnum} that rejects an out-of-range ordinal with a {@link DecoderException}. */
+	static <E extends Enum<E>> E readEnum(FriendlyByteBuf buf, Class<E> type) {
+		int i = buf.readVarInt();
+		E[] all = type.getEnumConstants();
+		if (i < 0 || i >= all.length) throw new DecoderException("bad " + type.getSimpleName() + " ordinal " + i);
+		return all[i];
+	}
+
 	// ---- Server to client ----
 
 	/** Opens the element choice (unbound) or the grimoire info screen. */
@@ -33,7 +42,7 @@ public final class MagicPayloads {
 		public static final Type<OpenGrimoire> TYPE = new Type<>(OfficeMod.id("open_grimoire"));
 		public static final StreamCodec<FriendlyByteBuf, OpenGrimoire> CODEC = StreamCodec.of(
 				(buf, p) -> buf.writeEnum(p.mode),
-				buf -> new OpenGrimoire(buf.readEnum(Mode.class)));
+				buf -> new OpenGrimoire(readEnum(buf, Mode.class)));
 
 		@Override
 		public Type<OpenGrimoire> type() {
@@ -70,6 +79,7 @@ public final class MagicPayloads {
 		public static final Type<SignChallenge> TYPE = new Type<>(OfficeMod.id("sign_challenge"));
 		public static final StreamCodec<FriendlyByteBuf, SignChallenge> CODEC = StreamCodec.of(
 				(buf, p) -> {
+					if (p.length < 1 || p.length > MAX_SIGNS) throw new EncoderException("bad sign length " + p.length);
 					buf.writeVarInt(p.id);
 					buf.writeIdentifier(p.spell);
 					buf.writeLong(p.seed);
@@ -85,6 +95,11 @@ public final class MagicPayloads {
 					return new SignChallenge(id, spell, seed, length, buf.readVarInt());
 				});
 
+		/** @throws IllegalArgumentException unless {@code length} is 1..{@link #MAX_SIGNS} (caught where it is made, not in the pipeline) */
+		public SignChallenge {
+			if (length < 1 || length > MAX_SIGNS) throw new IllegalArgumentException("bad sign length " + length);
+		}
+
 		@Override
 		public Type<SignChallenge> type() {
 			return TYPE;
@@ -97,7 +112,7 @@ public final class MagicPayloads {
 		public static final Type<ChooseElement> TYPE = new Type<>(OfficeMod.id("choose_element"));
 		public static final StreamCodec<FriendlyByteBuf, ChooseElement> CODEC = StreamCodec.of(
 				(buf, p) -> buf.writeEnum(p.element),
-				buf -> new ChooseElement(buf.readEnum(Element.class)));
+				buf -> new ChooseElement(readEnum(buf, Element.class)));
 
 		@Override
 		public Type<ChooseElement> type() {
