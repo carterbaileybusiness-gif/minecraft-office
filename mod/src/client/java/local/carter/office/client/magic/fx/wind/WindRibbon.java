@@ -95,8 +95,10 @@ final class WindRibbon {
 				float w = Math.max(0.02F, width[i] + (width[i + 1] - width[i]) * f);
 				float a = (alpha[i] + (alpha[i + 1] - alpha[i]) * f) * light;
 				float advance = Math.max(MIN_STEP, w * step);
-				// Centred on its own stretch even past the corner, so it meets the next stretch's first piece with no gap.
+				// Centred on its own stretch even past a corner, so it meets the next stretch's first piece with no gap; on the last
+				// stretch it is pulled back so the stroke never runs past its end.
 				float at = s + advance / 2;
+				if (i + 2 == pts.length) at = Math.min(at, Math.max(0F, length - advance / 2));
 				if (a > 0.004F) {
 					float mx = (float) (p0.x - cam.x) + dir.x * at;
 					float my = (float) (p0.y - cam.y) + dir.y * at;

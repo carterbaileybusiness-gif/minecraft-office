@@ -11,7 +11,6 @@ import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
-import local.carter.office.magic.core.Shapes.Cell;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
@@ -50,32 +49,42 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  *
  * <p><b>Dash.</b> Then the caster's velocity is set to the cast's look × {@link DrillGeometry#SPEED} every tick for at most
  * {@link DrillGeometry#DASH_TICKS} ticks (synced: the client does the moving), with no fall damage until
- * {@link #NO_FALL_TICKS} after the cast. The sphere rides {@link DrillGeometry#LEAD} ahead of the eye ({@link DrillGeometry#sphere}).
- * Each tick the server checks the stretch the sphere covers next ({@link #step}): the first creature whose box comes within
- * {@link DrillGeometry#TOUCH} of it ({@link TargetFilter#affects}), or the first block collider it meets, sets it off. That tick's
- * velocity is cut short to end the move at the hit, and the next tick stops the caster: the dash never carries them on into
- * the hit (the client owns movement and its collisions keep them out of blocks). If the caster moves more than
- * {@link #TELEPORT} in a tick (a teleport) or leaves, dies or changes dimension, the dash ends with nothing set off.
- * Running out of dash sets it off in the air at the end.
+ * {@link #NO_FALL_TICKS} after the cast. The plan is the straight line along the look ({@link DrillGeometry#sphere}); the body
+ * travels it too. Each tick the server checks what comes next ({@link #step}): the first creature whose box comes within
+ * {@link DrillGeometry#TOUCH} of the sphere ({@link TargetFilter#affects}), or the first block collider on the sphere's line or on
+ * the body's centre line ({@link DrillGeometry#body}: a knee-high wall the sphere would fly over stops the body). The body
+ * really moving is checked as well ({@link #stalled}): if the caster's real progress along the look trails the plan by more
+ * than {@link #TRAIL} and their body is pressed against something, the sphere goes off right there, {@link DrillGeometry#LEAD}
+ * ahead of where they actually are. On a hit, that tick's velocity is cut short to end the move at it and the next tick stops
+ * the caster: the dash never carries them on (the client owns movement, and its collisions keep them out of blocks).
+ *
+ * <p>The dash ends with nothing set off if the caster is more than {@link #TELEPORT} off the planned path so far (a teleport:
+ * measured against the plan, not one tick's move, so a lag spike or bunched movement packets, which leave them behind on the path, never cancel a paid ultimate) or
+ * leaves, dies or changes dimension. Running out of dash sets it off in the air at the end.
  *
  * <p><b>Detonation.</b> The creature struck takes {@code 22 × P} and is knocked {@link DrillGeometry#KNOCK} (along the look,
  * a little away, {@link #KNOCK_UP} up); hostile mobs ({@link Enemy}) within {@link DrillGeometry#BLAST} of the blast that it can
  * reach (no block collider in between) take the same. Livestock, golems, pets, villagers and players are never hurt or thrown
- * by the blast (the lane ruling for area effects). Only a <b>block</b> hit drills: one ULTIMATE batch at the struck block
- * removes {@link DrillGeometry#cells} (a cone along the look, radius 3 → 1, {@code min(12, 8 + (level − 7))} long), the first
- * {@link DrillGeometry#LAUNCH} of the mouth's off-axis blocks {@code launch}ed spinning out ({@link DrillGeometry#debris}).
- * A creature or air detonation leaves the land alone.
+ * by the blast (the lane ruling for area effects). Only a <b>block</b> hit drills: one ULTIMATE batch at the drill's start (on
+ * the body's centre line) removes {@link DrillGeometry#blocks} (a cone along the look, radius 3 → 1, {@code min(12, 8 + (level −
+ * 7))} long, the floor under the path kept), the first {@link DrillGeometry#LAUNCH} of the mouth's off-axis blocks
+ * {@code launch}ed spinning out ({@link DrillGeometry#debris}; the core lands them only where the caster could build). A creature
+ * or air detonation leaves the land alone.
  *
  * <p>Fx: {@code target} = the predicted detonation point, {@code duration} = the windup plus the predicted dash ticks
  * (rounded up), {@code entities} = the creature predicted to be struck (if any), {@code data} = {@code {drill length,
  * predicted dash ticks (fractional), kind}} with kind 0 = air, 1 = block, 2 = creature. The prediction is the same
- * {@link #step} sweep over the whole dash at cast time; the client repeats {@link #step} live, so a creature stepping in sets
- * the picture off where the server sets the blast off.
+ * {@link #step} sweep over the whole dash at cast time; the client repeats {@link #step} and {@link #stalled} live, so the
+ * picture goes off where the server sets the blast off.
  */
 public final class WindSphere implements Spell {
 	public static final int NO_FALL_TICKS = DrillGeometry.WINDUP + DrillGeometry.DASH_TICKS + 40;
-	/** A caster move longer than this in one tick is a teleport: the dash ends. */
+	/** The caster this far off the planned path so far has been teleported: the dash ends. */
 	public static final double TELEPORT = 4;
+	/** Real progress trailing the plan by more than this, body blocked: the sphere goes off where the caster is. */
+	public static final double TRAIL = 2;
+	/** How far ahead of the body {@link #stalled} looks for what stopped it. */
+	static final double PRESS = 0.3;
 	public static final double KNOCK_UP = 0.5;
 
 	/** What set the sphere off. */
@@ -87,9 +96,9 @@ public final class WindSphere implements Spell {
 
 	/**
 	 * Where and when the sphere goes off: {@code t} = dash ticks (fractional), {@code at} = the point, {@code entity} for a
-	 * creature, {@code block} for a block hit.
+	 * creature, {@code drill} (where the drill's axis starts, on the body's centre line) for a block hit.
 	 */
-	public record Strike(Kind kind, double t, Vec3 at, @Nullable Entity entity, @Nullable BlockPos block) {}
+	public record Strike(Kind kind, double t, Vec3 at, @Nullable Entity entity, @Nullable Vec3 drill) {}
 
 	@Override
 	public Identifier id() {
@@ -132,17 +141,23 @@ public final class WindSphere implements Spell {
 	}
 
 	/**
-	 * What the sphere meets on dash tick {@code k} (1..{@link DrillGeometry#DASH_TICKS}): the stretch from
-	 * {@code sphere(k − 1)} to {@code sphere(k)} (on the first tick from the eye, so nothing between the eye and the hand is
-	 * skipped). The nearest of: an entity {@code touches} accepts whose box comes within {@link DrillGeometry#TOUCH}, or a block
-	 * collider (fluids pass). Null if neither. Shared by the server and the client fx.
+	 * What the dash meets on dash tick {@code k} (1..{@link DrillGeometry#DASH_TICKS}): the stretch from {@code sphere(k − 1)} to
+	 * {@code sphere(k)} (on the first tick from the eye, so nothing between the eye and the hand is skipped), and the same stretch
+	 * of the body's centre line under it. The nearest of: an entity {@code touches} accepts whose box comes within
+	 * {@link DrillGeometry#TOUCH} of the sphere, or a block collider on either line (fluids pass). Null if none. Shared by the
+	 * server and the client fx.
 	 */
 	public static @Nullable Strike step(Level level, Vec3 eye, Vec3 look, int k, Predicate<Entity> touches) {
 		Vec3 u = DrillGeometry.unit(look);
 		Vec3 a = k <= 1 ? eye : DrillGeometry.sphere(eye, u, k - 1);
 		Vec3 b = DrillGeometry.sphere(eye, u, k);
-		BlockHitResult block = level.clip(new ClipContext(a, b, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
-		double blockDist = block.getType() == HitResult.Type.MISS ? Double.MAX_VALUE : a.distanceTo(block.getLocation());
+		double len = a.distanceTo(b);
+		// The sphere's line and the body's: the nearer hit (as a share of the stretch) wins.
+		BlockHitResult high = clip(level, a, b);
+		BlockHitResult low = clip(level, DrillGeometry.body(a), DrillGeometry.body(b));
+		double highAt = high.getType() == HitResult.Type.MISS ? Double.MAX_VALUE : a.distanceTo(high.getLocation());
+		double lowAt = low.getType() == HitResult.Type.MISS ? Double.MAX_VALUE : DrillGeometry.body(a).distanceTo(low.getLocation());
+		double blockAt = Math.min(highAt, lowAt);
 		Entity best = null;
 		Vec3 bestAt = null;
 		double bestDist = Double.MAX_VALUE;
@@ -164,11 +179,38 @@ public final class WindSphere implements Spell {
 				bestAt = at;
 			}
 		}
-		if (best != null && bestDist <= blockDist) return new Strike(Kind.CREATURE, tAt(eye, u, bestAt), bestAt, best, null);
-		if (block.getType() != HitResult.Type.MISS) {
-			return new Strike(Kind.BLOCK, tAt(eye, u, block.getLocation()), block.getLocation(), null, block.getBlockPos());
-		}
-		return null;
+		if (best != null && bestDist <= blockAt) return new Strike(Kind.CREATURE, tAt(eye, u, bestAt), bestAt, best, null);
+		if (blockAt > len + 1.0E-6) return null;
+		// The sphere's point level with the hit, and the drill's start on the body's line under it.
+		Vec3 at = a.add(b.subtract(a).scale(len < 1.0E-9 ? 0 : blockAt / len));
+		return new Strike(Kind.BLOCK, tAt(eye, u, at), at, null, DrillGeometry.body(at));
+	}
+
+	/**
+	 * The body stopped short of the plan: when the {@code caster}'s real progress along the look from {@code eye} trails the plan
+	 * after {@code plannedT} dash ticks by more than {@link #TRAIL} and their box is pressed against a block collider just ahead
+	 * (along the level and upward part of the look: the floor under a downward dash doesn't count), the sphere goes off
+	 * {@link DrillGeometry#LEAD} ahead of where they actually are, as a block hit (the drill starts at their body's centre, so it takes what stopped them). Null
+	 * otherwise: a body that is merely behind (lag, bunched movement) keeps going. Shared by the server and the client fx.
+	 */
+	public static @Nullable Strike stalled(Level level, Entity caster, Vec3 eye, Vec3 look, double plannedT) {
+		Vec3 u = DrillGeometry.unit(look);
+		Vec3 real = caster.getEyePosition();
+		double behind = DrillGeometry.SPEED * Math.max(0, plannedT) - real.subtract(eye).dot(u);
+		if (behind <= TRAIL) return null;
+		Vec3 nudge = new Vec3(u.x, Math.max(0, u.y), u.z).scale(PRESS);
+		if (level.noCollision(caster, caster.getBoundingBox().move(nudge))) return null;
+		Vec3 at = real.add(u.scale(DrillGeometry.LEAD));
+		return new Strike(Kind.BLOCK, plannedT, at, null, DrillGeometry.body(real));
+	}
+
+	private static BlockHitResult clip(Level level, Vec3 a, Vec3 b) {
+		return level.clip(new ClipContext(a, b, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
+	}
+
+	/** Where the plan has the caster's feet {@code t} dash ticks in, from feet {@code feet} at the cast. */
+	public static Vec3 plannedFeet(Vec3 feet, Vec3 look, double t) {
+		return feet.add(DrillGeometry.unit(look).scale(DrillGeometry.SPEED * Math.max(0, t)));
 	}
 
 	/** The dash time at which the sphere is at {@code p} (on its line), at least 0. */
@@ -181,10 +223,7 @@ public final class WindSphere implements Spell {
 		Vec3 c = box.getCenter();
 		for (Vec3 to : new Vec3[] {c, new Vec3(c.x, box.minY + 0.1, c.z), new Vec3(c.x, box.maxY - 0.1, c.z)}) {
 			if (from.distanceToSqr(to) < 1.0E-8) return true;
-			if (level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()))
-					.getType() == HitResult.Type.MISS) {
-				return true;
-			}
+			if (clip(level, from, to).getType() == HitResult.Type.MISS) return true;
 		}
 		return false;
 	}
@@ -193,19 +232,19 @@ public final class WindSphere implements Spell {
 	static final class Dash implements LingeringEffect {
 		private final CastContext ctx;
 		private final Vec3 eye;
+		private final Vec3 feet;
 		private final Vec3 look;
 		private final int length;
 		private final ServerLevel home;
-		private Vec3 last;
 		private boolean detonated;
 
 		Dash(CastContext ctx, Vec3 eye, Vec3 look, int length) {
 			this.ctx = ctx;
 			this.eye = eye;
+			this.feet = ctx.caster().position();
 			this.look = look;
 			this.length = length;
 			this.home = ctx.level();
-			this.last = ctx.caster().position();
 		}
 
 		@Override
@@ -216,21 +255,26 @@ public final class WindSphere implements Spell {
 				if (present(p)) Motion.dash(p, Vec3.ZERO, NO_FALL_TICKS - age);
 				return false;
 			}
-			if (!present(p) || p.position().distanceTo(last) > TELEPORT) return false;
-			last = p.position();
-			if (age <= DrillGeometry.WINDUP) {
+			if (!present(p)) return false;
+			int k = age - DrillGeometry.WINDUP;
+			// Measured against the plan (where it has them now, before this tick's move), never one tick's move: anywhere on the
+			// path so far is lag or bunched packets; far off it is a teleport.
+			if (DrillGeometry.offPath(p.position(), feet, plannedFeet(feet, look, k - 1)) > TELEPORT) return false;
+			if (k <= 0) {
 				Motion.dash(p, Vec3.ZERO, NO_FALL_TICKS - age);
 				return true;
 			}
-			int k = age - DrillGeometry.WINDUP;
-			Strike s = step(level, eye, look, k, e -> TargetFilter.affects(p, e));
+			Predicate<Entity> touches = e -> TargetFilter.affects(p, e);
+			Strike s = stalled(level, p, eye, look, k - 1);
+			boolean stopped = s != null;
+			if (s == null) s = step(level, eye, look, k, touches);
 			if (s == null && k < DrillGeometry.DASH_TICKS) {
 				Motion.dash(p, look.scale(DrillGeometry.SPEED), NO_FALL_TICKS - age);
 				return true;
 			}
 			if (s == null) s = new Strike(Kind.AIR, k, DrillGeometry.sphere(eye, look, k), null, null);
-			// This tick's move ends at the hit.
-			double share = Math.max(0, Math.min(1, s.t() - (k - 1)));
+			// This tick's move ends at the hit (no move at all when the body is already stopped).
+			double share = stopped ? 0 : Math.max(0, Math.min(1, s.t() - (k - 1)));
 			Motion.dash(p, look.scale(DrillGeometry.SPEED * share), NO_FALL_TICKS - age);
 			detonate(level, s);
 			detonated = true;
@@ -243,7 +287,7 @@ public final class WindSphere implements Spell {
 
 		private void detonate(ServerLevel level, Strike s) {
 			blast(level, s);
-			if (s.kind() == Kind.BLOCK && s.block() != null) drill(s.block());
+			if (s.kind() == Kind.BLOCK && s.drill() != null) drill(s.drill());
 		}
 
 		private void blast(ServerLevel level, Strike s) {
@@ -271,19 +315,17 @@ public final class WindSphere implements Spell {
 			Hurt.knock(e, dir, DrillGeometry.KNOCK, KNOCK_UP);
 		}
 
-		private void drill(BlockPos origin) {
-			List<Cell> cells = DrillGeometry.cells(look, length);
-			List<Integer> thrown = DrillGeometry.thrown(cells, look, DrillGeometry.LAUNCH);
+		private void drill(Vec3 start) {
+			List<BlockPos> blocks = DrillGeometry.blocks(start, look, length);
+			List<Integer> thrown = DrillGeometry.thrown(blocks, start, look, DrillGeometry.LAUNCH);
 			Random r = new Random(ctx.seed());
-			boolean[] launched = new boolean[cells.size()];
-			try (EditBatch b = ctx.kit().terrain().begin(ctx, origin, EditTier.ULTIMATE)) {
+			boolean[] launched = new boolean[blocks.size()];
+			try (EditBatch b = ctx.kit().terrain().begin(ctx, BlockPos.containing(start), EditTier.ULTIMATE)) {
 				for (int i : thrown) {
-					Cell c = cells.get(i);
-					if (b.launch(origin.offset(c.x(), c.y(), c.z()), DrillGeometry.debris(c, look, r))) launched[i] = true;
+					if (b.launch(blocks.get(i), DrillGeometry.debris(blocks.get(i), start, look, r))) launched[i] = true;
 				}
-				for (int i = 0; i < cells.size(); i++) {
-					Cell c = cells.get(i);
-					if (!launched[i]) b.remove(origin.offset(c.x(), c.y(), c.z()));
+				for (int i = 0; i < blocks.size(); i++) {
+					if (!launched[i]) b.remove(blocks.get(i));
 				}
 			}
 		}

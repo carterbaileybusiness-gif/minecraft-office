@@ -18,6 +18,15 @@ class WindFxBudgetTest {
 	}
 
 	@Test
+	void sphereFitsItsShareEveryStep() {
+		// The sphere pays its cost each 10-tick step out of half its share (it lives at most two steps).
+		for (long seed = 0; seed < 64; seed++) {
+			int cost = new WindSphereFx.Shape(seed * 7919L).cost();
+			assertTrue(cost > 0 && cost <= WindSphereFx.ORB_SHARE / 2, "seed " + seed + ": cost " + cost);
+		}
+	}
+
+	@Test
 	void windSphereShakesAtLeastPointEightWithin32() {
 		for (double d = 0; d <= 32; d += 0.5) {
 			assertTrue(WindSphereFx.shake(d) >= 0.8F - 1.0E-6F, "shake at " + d + " = " + WindSphereFx.shake(d));

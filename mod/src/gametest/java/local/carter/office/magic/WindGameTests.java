@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import local.carter.office.magic.cast.CastService.Result;
+import local.carter.office.magic.command.MagicCommand;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.Motion;
@@ -11,12 +12,14 @@ import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.wind.DrillGeometry;
 import local.carter.office.magic.spell.wind.TornadoGeometry;
 import local.carter.office.magic.spell.wind.WindSphere;
+import local.carter.office.magic.terrain.EditLog;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.entity.animal.cow.Cow;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -375,6 +378,42 @@ public class WindGameTests {
 		return out;
 	}
 
+	/** Cells whose block differs between two snapshots. */
+	private static List<BlockPos> changed(List<BlockState> a, List<BlockState> b) {
+		List<BlockPos> out = new ArrayList<>();
+		int i = 0;
+		for (BlockPos q : BlockPos.betweenClosed(BlockPos.ZERO, new BlockPos(MagicTestKit.SIZE_X - 1, MagicTestKit.SIZE_Y - 1, MagicTestKit.SIZE_Z - 1))) {
+			if (a.get(i) != b.get(i)) out.add(q.immutable());
+			i++;
+		}
+		return out;
+	}
+
+	/**
+	 * Moves {@code p} by its velocity every tick, collisions included, as its client would (the server never moves a player
+	 * itself, so without this a dashing caster stands still and trails the plan).
+	 */
+	private static void drive(GameTestHelper h, ServerPlayer p) {
+		h.onEachTick(() -> p.move(MoverType.SELF, p.getDeltaMovement()));
+	}
+
+	/**
+	 * As {@link #drive}, but the server hears of the moves only every {@code every} ticks, all at once: a lag spike bunching the
+	 * movement packets. {@code jump[0]} records the longest single jump the server saw.
+	 */
+	private static void driveBunched(GameTestHelper h, ServerPlayer p, int every, double[] jump) {
+		Vec3[] pending = {Vec3.ZERO};
+		int[] n = {0};
+		h.onEachTick(() -> {
+			pending[0] = pending[0].add(p.getDeltaMovement());
+			if (++n[0] % every != 0) return;
+			Vec3 from = p.position();
+			p.move(MoverType.SELF, pending[0]);
+			pending[0] = Vec3.ZERO;
+			jump[0] = Math.max(jump[0], p.position().distanceTo(from));
+		});
+	}
+
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
 	public void windSphereDrillsTunnel(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 7);
@@ -384,6 +423,7 @@ public class WindGameTests {
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		double[] fastest = {0};
 		h.onEachTick(() -> fastest[0] = Math.max(fastest[0], p.getDeltaMovement().dot(ahead(h))));
+		drive(h, p);
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
 		FxEvent fx = rec.fx(p).getFirst();
 		float[] data = fx.data();
@@ -409,13 +449,105 @@ public class WindGameTests {
 				h.assertTrue(d <= 12 + 0.87, "block removed " + d + " from the impact at " + q);
 			}
 			h.assertTrue(removed >= 20, "blocks drilled: " + removed);
-			// The tunnel runs along the look: the cells straight down the axis are open.
-			for (int z = 10; z < 18; z++) h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 5, z));
+			// The tunnel runs along the look: the cells straight down the axis are open, and the floor under the path stays.
+			for (int z = 10; z < 18; z++) {
+				h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 4, z));
+				h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 5, z));
+				h.assertBlockPresent(Blocks.STONE, new BlockPos(16, 3, z));
+			}
 			h.assertBlockPresent(Blocks.STONE, new BlockPos(16, 5, 18));
 			h.assertTrue(thrown[0] >= 10 && thrown[0] <= DrillGeometry.LAUNCH, "debris thrown: " + thrown[0]);
 			h.assertTrue(fastest[0] > 1.79, "the caster dashed at 1.8 " + fastest[0]);
 			h.assertTrue(p.getDeltaMovement().length() < 1.0E-9, "the caster is stopped after the hit " + p.getDeltaMovement());
+			h.assertTrue(h.relativeVec(p.position()).z < 10, "the caster stops short of the wall " + h.relativeVec(p.position()));
 			h.assertTrue(Motion.noFall(p), "no fall damage after the dash");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
+	public void windSphereStopsAtKneeHighWall(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 7);
+		// A one-high wall 4 ahead: the sphere's line (eye height) clears it, the body's line does not.
+		MagicTestKit.fill(h, new BlockPos(10, 4, 8), new BlockPos(22, 4, 8), Blocks.STONE);
+		// Where the sphere would have flown on to, over the wall.
+		Zombie beyond = MagicTestKit.dummy(h, new BlockPos(16, 4, 15));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		drive(h, p);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
+		FxEvent fx = rec.fx(p).getFirst();
+		h.assertValueEqual(fx.data()[2], (float) WindSphere.Kind.BLOCK.ordinal(), "the body's line hits the wall");
+		h.assertTrue(Math.abs(h.relativeVec(fx.target()).z - 8) < 1.0E-6, "goes off at the wall's face " + h.relativeVec(fx.target()));
+		h.runAfterDelay(40, () -> {
+			h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 4, 8));
+			// No trench: the floor under the path stays.
+			for (int z = 8; z < 15; z++) h.assertBlockPresent(Blocks.STONE, new BlockPos(16, 3, z));
+			h.assertValueEqual(beyond.getHealth(), 20f, "the zombie the sphere would have reached over the wall");
+			h.assertTrue(h.relativeVec(p.position()).z < 8, "the caster stops at the wall " + h.relativeVec(p.position()));
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
+	public void windSphereGoesOffWhereTheBodyStops(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 7);
+		// A chest-high beam (bottom slabs at y 5: 1.0 to 1.5 over the floor) that both lines pass: the sphere's over, the
+		// body's under. Only the body hits it.
+		for (int x = 10; x <= 22; x++) h.setBlock(new BlockPos(x, 5, 9), Blocks.SMOOTH_STONE_SLAB);
+		// Far down the plan: the sphere would reach it if it ignored where the body really is.
+		Zombie far = MagicTestKit.dummy(h, new BlockPos(16, 4, 20));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		drive(h, p);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
+		h.assertValueEqual(rec.fx(p).getFirst().data()[2], (float) WindSphere.Kind.CREATURE.ordinal(), "the plan alone would reach the far zombie");
+		h.runAfterDelay(40, () -> {
+			h.assertTrue(h.relativeVec(p.position()).z < 9, "the body stopped at the beam " + h.relativeVec(p.position()));
+			h.assertValueEqual(far.getHealth(), 20f, "it went off at the beam, not at the far zombie");
+			h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 5, 9));
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
+	public void windSphereSurvivesBunchedMoves(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 7);
+		MagicTestKit.fill(h, new BlockPos(9, 4, 16), new BlockPos(23, 10, 20), Blocks.STONE);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		double[] jump = {0};
+		driveBunched(h, p, 4, jump);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
+		h.assertValueEqual(rec.fx(p).getFirst().data()[2], (float) WindSphere.Kind.BLOCK.ordinal(), "predicted to hit the wall");
+		h.runAfterDelay(40, () -> {
+			// The server saw the caster jump more than 4 at once: a per-tick check would have cancelled the dash.
+			h.assertTrue(jump[0] > WindSphere.TELEPORT, "bunched jump " + jump[0]);
+			h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 5, 16));
+			h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 5, 19));
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 140)
+	public void windSphereDebrisLandsAndUndoes(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 7);
+		MagicTestKit.fill(h, new BlockPos(9, 4, 10), new BlockPos(23, 12, 23), Blocks.STONE);
+		List<BlockState> before = snapshot(h);
+		drive(h, p);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
+		AABB arena = new AABB(h.absoluteVec(Vec3.ZERO), h.absoluteVec(new Vec3(MagicTestKit.SIZE_X, MagicTestKit.SIZE_Y, MagicTestKit.SIZE_Z)));
+		int[] thrown = {0};
+		h.runAfterDelay(DrillGeometry.WINDUP + 5, () -> thrown[0] = h.getLevel().getEntitiesOfClass(FallingBlockEntity.class, arena).size());
+		h.runAfterDelay(100, () -> {
+			h.assertTrue(thrown[0] >= 10, "debris thrown: " + thrown[0]);
+			h.assertValueEqual(h.getLevel().getEntitiesOfClass(FallingBlockEntity.class, arena).size(), 0, "debris still in flight");
+			// The core lands debris only where the caster could build, never on a player: the caster's own cells stay clear.
+			BlockPos feet = BlockPos.containing(h.relativeVec(p.position()));
+			h.assertBlockPresent(Blocks.AIR, feet);
+			h.assertBlockPresent(Blocks.AIR, feet.above());
+			// The landings are logged with the cast: one undo puts the arena back as it was, debris and tunnel alike.
+			EditLog.UndoReport report = MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
+			h.assertTrue(report.restored() > 0, "undo restored " + report);
+			List<BlockPos> left = changed(before, snapshot(h));
+			h.assertTrue(left.isEmpty(), "cells still changed after the undo: " + left.size() + " e.g. " + (left.isEmpty() ? "" : left.getFirst()));
 			h.succeed();
 		});
 	}
@@ -427,6 +559,7 @@ public class WindGameTests {
 		MagicTestKit.fill(h, new BlockPos(10, 4, 12), new BlockPos(22, 10, 13), Blocks.STONE);
 		long hash = MagicTestKit.blockHash(h);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		drive(h, p);
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
 		FxEvent fx = rec.fx(p).getFirst();
 		h.assertValueEqual(fx.data()[2], (float) WindSphere.Kind.CREATURE.ordinal(), "predicted to strike a creature");
@@ -451,6 +584,7 @@ public class WindGameTests {
 		cow.setNoAi(true);
 		cow.setPersistenceRequired();
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		drive(h, p);
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
 		h.assertValueEqual(rec.fx(p).getFirst().data()[2], (float) WindSphere.Kind.BLOCK.ordinal(), "hits the wall");
 		h.runAfterDelay(30, () -> {
@@ -469,6 +603,8 @@ public class WindGameTests {
 		ServerPlayer q = MagicTestKit.caster(h, Element.WIND, 7);
 		MagicTestKit.teleportTo(q, new BlockPos(5, 4, 4));
 		Zombie zq = MagicTestKit.dummy(h, new BlockPos(5, 4, 8));
+		drive(h, p);
+		drive(h, q);
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
 		h.assertValueEqual(MagicTestKit.castUltimate(q, SpellIds.WIND_SPHERE), Result.CAST, "control result");
 		// Mid-form, the caster is teleported away (an ender pearl, Recall...): the sphere is gone, nothing is struck.

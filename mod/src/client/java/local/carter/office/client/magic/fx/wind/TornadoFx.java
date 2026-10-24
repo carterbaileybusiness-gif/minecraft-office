@@ -68,7 +68,7 @@ public final class TornadoFx implements SpellFx {
 		int[] left = {0};
 		RandomSource r = kit.random();
 		kit.simulate(1, life, t -> {
-			funnel.keep(t);
+			funnel.keep();
 			if (t % STEP == 0) {
 				int paid = kit.budget().particles(Math.min(share, funnelCost));
 				funnel.paid(paid >= funnelCost);
@@ -110,13 +110,21 @@ public final class TornadoFx implements SpellFx {
 	}
 
 	/**
-	 * The funnel: {@code strands} streaks of wind, each a stretch of a helix round the axis that rises as the whole funnel spins
-	 * (anticlockwise from above, as the server's wind turns). Radius {@link #R0} at the ground flaring to {@link #R_TOP} at
-	 * {@link TornadoGeometry#HEIGHT}; the upper part sways. It lives while its fx timer keeps it ({@link #keep}), then fades out.
+	 * The funnel, three layers spinning anticlockwise from above (as the server's wind turns), radius {@link #R0} at the ground
+	 * flaring to {@link #R_TOP} at {@link TornadoGeometry#HEIGHT}, the upper part swaying gently:
+	 * <ul>
+	 * <li>soft streaks of wind ({@code strands}), each a rising stretch of a helix round the axis, thin at the foot and broad
+	 * at the top;</li>
+	 * <li>{@link #BASE_STRANDS} thin crisp streaks whirling tight round the foot, so the funnel is densest where it touches down;</li>
+	 * <li>a faint shell of {@link #RINGS} stacked rings along the cone, drifting up, so it reads as a funnel at any light (noon
+	 * included).</li>
+	 * </ul>
+	 * It lives while its fx timer keeps it ({@link #keep}), then fades out.
 	 */
 	static final class Funnel extends SingleQuadParticle implements LightPipeline.Extent {
 		static final int FADE = 12;
 		private static final int POINTS = 24;
+		private static final int RING_POINTS = 33;
 		private static final double R0 = 0.45;
 		private static final double R_TOP = 3.7;
 		/** Height a streak covers. */
@@ -127,9 +135,13 @@ public final class TornadoFx implements SpellFx {
 		private static final double RISE = 0.22;
 		/** Glow blobs spaced this many times wider than a near stroke: the funnel is big and seen from afar. */
 		private static final float COARSE = 4.5F;
-		/** Streaks drawn with a crisp white line over their glow (the rest are soft glow only). */
-		private static final int CRISP = 2;
-		private static final float CRISP_COARSE = 2.5F;
+		/** The thin streaks at the foot: how many, how high they reach, how long each is. */
+		private static final int BASE_STRANDS = 6;
+		private static final double BASE_TOP = 3.2;
+		private static final double BASE_LENGTH = 2.2;
+		private static final float BASE_COARSE = 2.5F;
+		/** Shell rings stacked along the cone. */
+		private static final int RINGS = 8;
 
 		private final TornadoGeometry geo;
 		private final int strands;
@@ -142,6 +154,9 @@ public final class TornadoFx implements SpellFx {
 		private final Vec3[] pts = new Vec3[POINTS];
 		private final float[] width = new float[POINTS];
 		private final float[] alpha = new float[POINTS];
+		private final Vec3[] ringPts = new Vec3[RING_POINTS];
+		private final float[] ringWidth = new float[RING_POINTS];
+		private final float[] ringAlpha = new float[RING_POINTS];
 		private Vec3 base;
 		private Vec3 prevBase;
 		private int kept;
@@ -153,21 +168,21 @@ public final class TornadoFx implements SpellFx {
 			this.geo = geo;
 			this.base = geo.origin();
 			this.prevBase = base;
-			this.strands = CRISP + 14 + Math.round(4 * charge);
+			this.strands = BASE_STRANDS + 14 + Math.round(4 * charge);
 			RandomSource r = RandomSource.create(seed ^ 0x7A11L);
 			phase = new double[strands];
 			offset = new double[strands];
 			colour = new int[strands];
 			thick = new float[strands];
 			for (int i = 0; i < strands; i++) {
-				phase[i] = Mth.TWO_PI * (i + 0.4 * r.nextDouble()) / strands;
-				offset[i] = r.nextDouble() * (TornadoGeometry.HEIGHT + LENGTH);
+				phase[i] = Mth.TWO_PI * (i + 0.4 * r.nextDouble()) / (i < BASE_STRANDS ? BASE_STRANDS : strands - BASE_STRANDS);
+				offset[i] = r.nextDouble() * (i < BASE_STRANDS ? BASE_TOP + BASE_LENGTH : TornadoGeometry.HEIGHT + LENGTH);
 				colour[i] = switch (i % 3) {
 					case 0 -> 0xFFFFFF;
 					case 1 -> PALE;
 					default -> 0xB8C8C0;
 				};
-				thick[i] = i < CRISP ? 0.35F + 0.15F * r.nextFloat() : 0.8F + 0.6F * r.nextFloat();
+				thick[i] = i < BASE_STRANDS ? 0.55F + 0.2F * r.nextFloat() : 0.8F + 0.6F * r.nextFloat();
 			}
 			this.sway = r.nextDouble() * Mth.TWO_PI;
 			this.lifetime = FxKit.MAX_SIMULATE_TICKS + FADE;
@@ -178,8 +193,8 @@ public final class TornadoFx implements SpellFx {
 			this.zd = 0;
 		}
 
-		/** The fx timer is still running at its tick {@code t}. */
-		void keep(int t) {
+		/** The fx timer is still running. */
+		void keep() {
 			kept = age;
 		}
 
@@ -213,7 +228,11 @@ public final class TornadoFx implements SpellFx {
 			int quads = 0;
 			for (int i = 0; i < strands; i++) {
 				lay(i, Vec3.ZERO, 20, TornadoGeometry.HEIGHT, 1, 1);
-				quads += i < CRISP ? WindRibbon.pieces(pts, width, CRISP_COARSE, true) : WindRibbon.pieces(pts, width, COARSE, false);
+				quads += i < BASE_STRANDS ? WindRibbon.pieces(pts, width, BASE_COARSE, true) : WindRibbon.pieces(pts, width, COARSE, false);
+			}
+			for (int j = 0; j < RINGS; j++) {
+				ring(j, Vec3.ZERO, 0, TornadoGeometry.HEIGHT, 1);
+				quads += WindRibbon.pieces(ringPts, ringWidth, COARSE, false);
 			}
 			return WindRibbon.budgetCost(quads);
 		}
@@ -225,38 +244,74 @@ public final class TornadoFx implements SpellFx {
 			float fade = ended < 0 ? 1F : Mth.clamp(1F - (now - ended) / FADE, 0F, 1F);
 			if (fade <= 0.01F) return;
 			Vec3 at = prevBase.lerp(base, partial);
+			Vec3 cam = camera.position();
 			float bright = (paid ? 1F : 0.3F) * fade * grow;
 			int every = paid ? 1 : 3;
+			double top = TornadoGeometry.HEIGHT * (0.25 + 0.75 * grow);
+			for (int j = 0; j < RINGS; j += every) {
+				ring(j, at, now, top, bright);
+				ribbon.draw(state, cam, ringPts, ringWidth, ringAlpha, PALE, -1F, 0, COARSE);
+			}
 			for (int i = 0; i < strands; i += every) {
-				lay(i, at, now, TornadoGeometry.HEIGHT * (0.25 + 0.75 * grow), bright, paid ? 1F : 0.6F);
-				if (i < CRISP) {
-					ribbon.draw(state, camera.position(), pts, width, alpha, PALE, 0.7F, 0xFFFFFF, CRISP_COARSE);
+				lay(i, at, now, top, bright, paid ? 1F : 0.6F);
+				if (i < BASE_STRANDS) {
+					ribbon.draw(state, cam, pts, width, alpha, PALE, 0.7F, 0xFFFFFF, BASE_COARSE);
 				} else {
-					ribbon.draw(state, camera.position(), pts, width, alpha, colour[i], -1F, 0, COARSE);
+					ribbon.draw(state, cam, pts, width, alpha, colour[i], -1F, 0, COARSE);
 				}
 			}
 		}
 
+		/** The funnel's radius at height {@code h} above its base. */
+		private static double radius(double h) {
+			return R0 + (R_TOP - R0) * Math.pow(Mth.clamp(h / TornadoGeometry.HEIGHT, 0, 1), 1.4);
+		}
+
+		/** The axis's sway at height {@code h} (none at the foot, most at the top). */
+		private Vec3 sway(double h, float now) {
+			double f = Mth.clamp(h / TornadoGeometry.HEIGHT, 0, 1);
+			double sw = f * f;
+			return new Vec3(Math.sin(now * 0.045 + sway) * 0.3 * sw, 0, Math.cos(now * 0.037 + sway * 1.7) * 0.25 * sw);
+		}
+
 		/** Strand {@code i} at time {@code now} into the scratch arrays: a rising stretch of helix under {@code top}. */
 		private void lay(int i, Vec3 at, float now, double top, float bright, float slim) {
-			double cycle = TornadoGeometry.HEIGHT + LENGTH;
-			double head = (offset[i] + now * RISE) % cycle;
-			double tail = head - LENGTH;
-			double spin = phase[i] + now * SPIN;
+			boolean low = i < BASE_STRANDS;
+			double length = low ? BASE_LENGTH : LENGTH;
+			double cap = low ? Math.min(top, BASE_TOP) : top;
+			double cycle = (low ? BASE_TOP : TornadoGeometry.HEIGHT) + length;
+			double head = (offset[i] + now * (low ? RISE * 1.5 : RISE)) % cycle;
+			double tail = head - length;
+			double spin = phase[i] + now * (low ? SPIN * 1.6 : SPIN);
 			for (int k = 0; k < POINTS; k++) {
 				double s = k / (double) (POINTS - 1);
-				double h = Mth.clamp(tail + LENGTH * s, 0, top);
+				double h = Mth.clamp(tail + length * s, 0, cap);
 				double f = h / TornadoGeometry.HEIGHT;
-				double rad = R0 + (R_TOP - R0) * Math.pow(f, 1.4);
+				double rad = radius(h) * (low ? 0.8 : 1);
 				double a = spin + TWIST * h;
-				double sw = f * f;
-				double ox = Math.sin(now * 0.045 + sway) * 0.6 * sw;
-				double oz = Math.cos(now * 0.037 + sway * 1.7) * 0.5 * sw;
-				pts[k] = at.add(ox + Math.sin(a) * rad, h, oz + Math.cos(a) * rad);
+				pts[k] = at.add(sway(h, now)).add(Math.sin(a) * rad, h, Math.cos(a) * rad);
 				float edge = (float) Math.min(1, Math.min(s, 1 - s) * 4);
-				boolean inside = tail + LENGTH * s >= 0 && tail + LENGTH * s <= top;
-				width[k] = slim * thick[i] * (float) (0.16 + 0.4 * f);
+				boolean inside = tail + length * s >= 0 && tail + length * s <= cap;
+				width[k] = slim * thick[i] * (float) (low ? 0.07 + 0.08 * f : 0.08 + 0.5 * f);
 				alpha[k] = inside ? bright * edge * (float) (1.0 - 0.3 * f) : 0F;
+			}
+		}
+
+		/** Shell ring {@code j} into the ring arrays: a loop round the cone at its height, drifting up, brighter on its turning side. */
+		private void ring(int j, Vec3 at, float now, double top, float bright) {
+			double spacing = TornadoGeometry.HEIGHT / RINGS;
+			double h = (0.4 + j * spacing + now * 0.04) % TornadoGeometry.HEIGHT;
+			double rad = radius(h) * 1.06;
+			Vec3 c = at.add(sway(h, now)).add(0, h, 0);
+			// Rings fade in at the foot and out at the top, so the drift never pops.
+			float life = (float) Math.min(1, Math.min(h / 1.2, (TornadoGeometry.HEIGHT - h) / 1.5));
+			float a = h > top ? 0F : bright * 0.4F * Math.max(0F, life);
+			for (int k = 0; k < RING_POINTS; k++) {
+				double ang = Mth.TWO_PI * k / (RING_POINTS - 1);
+				ringPts[k] = c.add(Math.sin(ang) * rad, 0, Math.cos(ang) * rad);
+				float shade = 0.4F + 0.6F * (float) Math.max(0, Math.sin(ang - now * SPIN));
+				ringWidth[k] = (float) (0.1 + 0.05 * rad) * (0.7F + 0.3F * shade);
+				ringAlpha[k] = a * shade;
 			}
 		}
 

@@ -11,7 +11,6 @@ import local.carter.office.client.magic.fx.LightPipeline;
 import local.carter.office.client.magic.fx.MagicCircleRenderer;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
-import local.carter.office.magic.core.Shapes.Cell;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.wind.BladeWindGeometry;
@@ -132,11 +131,14 @@ public final class WindSphereFx implements SpellFx {
 				motes[0] -= n;
 				kit.motes(at, k % 2 == 0 ? CORE : BAND, n, 0.3, look.scale(-0.08), 0.05, GlowMote.Drift.SWIRL, 0.08F, 8);
 			}
-			// The live sweep, as the server's: a creature stepping in sets it off; else the prediction.
-			WindSphere.Strike s = WindSphere.step(level, eye, look, k, x -> x.getId() != caster && TargetFilter.affects(null, x));
+			// The live sweep, as the server's: the body stopped short (where this client sees the caster), a creature stepping in,
+			// a block on the sphere's or the body's line; else the prediction.
+			Entity body = level.getEntity(caster);
+			WindSphere.Strike s = body == null ? null : WindSphere.stalled(level, body, eye, look, k - 1);
+			if (s == null) s = WindSphere.step(level, eye, look, k, x -> x.getId() != caster && TargetFilter.affects(null, x));
 			if (s == null && k >= Math.ceil(predictedT)) {
 				Vec3 p = e.target();
-				s = new WindSphere.Strike(predictedKind, predictedT, p, null, predictedKind == WindSphere.Kind.BLOCK ? BlockPos.containing(p.add(look.scale(0.05))) : null);
+				s = new WindSphere.Strike(predictedKind, predictedT, p, null, predictedKind == WindSphere.Kind.BLOCK ? DrillGeometry.body(p) : null);
 			}
 			if (s == null) return;
 			done[0] = true;
@@ -171,12 +173,12 @@ public final class WindSphereFx implements SpellFx {
 		kit.fovKick(0.14F);
 
 		// The spiral shockwave across the hit, and for a block hit the vortex down the drill.
-		Spiral wave = new Spiral(level, at, look, size, block ? length : 0, e.seed());
+		Spiral wave = new Spiral(level, at, block && s.drill() != null ? s.drill() : at, look, size, block ? length : 0, e.seed());
 		int waveCost = wave.cost();
 		if (waveCost <= BURST_SHARE + (block ? DRILL_SHARE : 0) && kit.budget().particles(waveCost) >= waveCost) {
 			Minecraft.getInstance().particleEngine.add(wave);
 		}
-		if (block && s.block() != null) rock(level, kit, s.block(), look, length, r);
+		if (block && s.drill() != null) rock(level, kit, s.drill(), look, length, r);
 		// Wind lines thrown back out of the hit, spiralling.
 		BladeWindGeometry.Frame back = BladeWindGeometry.frame(look.reverse());
 		int lines = air ? 10 : 18;
@@ -195,17 +197,16 @@ public final class WindSphereFx implements SpellFx {
 	}
 
 	/** The drilled rock bursting out spinning: block particles from the drill's cells, as this client sees them now. */
-	private static void rock(ClientLevel level, FxKit kit, BlockPos origin, Vec3 look, int length, RandomSource r) {
-		List<Cell> cells = DrillGeometry.cells(look, length);
+	private static void rock(ClientLevel level, FxKit kit, Vec3 start, Vec3 look, int length, RandomSource r) {
+		List<BlockPos> blocks = DrillGeometry.blocks(start, look, length);
 		int spent = 0;
-		for (int i = 0; i < cells.size() && spent < ROCK_SHARE; i += 2) {
-			Cell c = cells.get(i);
-			BlockPos p = origin.offset(c.x(), c.y(), c.z());
+		for (int i = 0; i < blocks.size() && spent < ROCK_SHARE; i += 2) {
+			BlockPos p = blocks.get(i);
 			BlockState st = level.getBlockState(p);
 			if (st.isAir() || st.getRenderShape() == RenderShape.INVISIBLE || !st.getFluidState().isEmpty()) continue;
 			int n = kit.budget().particles(i < 60 ? 3 : 2);
 			spent += n;
-			Vec3 v0 = DrillGeometry.debris(c, look, new java.util.Random(r.nextLong()));
+			Vec3 v0 = DrillGeometry.debris(p, start, look, new java.util.Random(r.nextLong()));
 			BlockParticleOption opt = new BlockParticleOption(ParticleTypes.BLOCK, st);
 			for (int j = 0; j < n; j++) {
 				Vec3 v = v0.scale(0.6 + 0.6 * r.nextDouble()).add((r.nextDouble() - 0.5) * 0.2, r.nextDouble() * 0.2, (r.nextDouble() - 0.5) * 0.2);
@@ -236,30 +237,134 @@ public final class WindSphereFx implements SpellFx {
 	 * faster mint-and-cyan arcs that flicker. It sits in the caster's right hand while forming and dashing, then bursts where it
 	 * struck: it swells, flares and its bands fly apart. It lives while its fx timer keeps it.
 	 */
+	/**
+	 * The sphere's shape, pure (no world, no sprites): its bands and shell arcs from the seed, and the rim and inflow strands, laid
+	 * into scratch arrays for {@link WindRibbon} to draw. {@link #cost} is what the sphere pays its fx budget per 10-tick step: its
+	 * quads a frame at their most, per 50.
+	 */
+	static final class Shape {
+		static final int BANDS = 11;
+		static final int SHELL = 8;
+		static final int POINTS = 22;
+		static final int RIM_POINTS = 41;
+		static final int INFLOW = 8;
+
+		final Vec3[] normal = new Vec3[BANDS + SHELL];
+		final Vec3[] precess = new Vec3[BANDS + SHELL];
+		final double[] speed = new double[BANDS + SHELL];
+		final double[] phase = new double[BANDS + SHELL];
+		final double[] span = new double[BANDS + SHELL];
+		final double[] scale = new double[BANDS + SHELL];
+		final Vec3[] pts = new Vec3[POINTS];
+		final float[] width = new float[POINTS];
+		final float[] alpha = new float[POINTS];
+		final Vec3[] rimPts = new Vec3[RIM_POINTS];
+		final float[] rimWidth = new float[RIM_POINTS];
+		final float[] rimAlpha = new float[RIM_POINTS];
+
+		Shape(long seed) {
+			RandomSource r = RandomSource.create(seed ^ 0x5A5EL);
+			for (int i = 0; i < BANDS + SHELL; i++) {
+				normal[i] = WindSphereFx.sphere(r);
+				precess[i] = WindSphereFx.sphere(r);
+				boolean shell = i >= BANDS;
+				speed[i] = (shell ? 0.9 : 0.6) + r.nextDouble() * (shell ? 0.7 : 0.6);
+				if (r.nextBoolean()) speed[i] = -speed[i];
+				phase[i] = r.nextDouble() * Mth.TWO_PI;
+				span[i] = shell ? Math.toRadians(80 + r.nextDouble() * 70) : Math.toRadians(190 + r.nextDouble() * 110);
+				scale[i] = shell ? 1.3 + r.nextDouble() * 0.3 : 0.9 + r.nextDouble() * 0.16;
+			}
+		}
+
+		/** Fx-budget particles per step: every band, the rim, the thrust collar and the inflow at their largest, per 50 quads. */
+		int cost() {
+			int quads = 8;
+			for (int i = 0; i < BANDS + SHELL; i++) {
+				lay(i, Vec3.ZERO, 0, RADIUS, 1, 0.07F);
+				quads += WindRibbon.pieces(pts, width);
+			}
+			rim(Vec3.ZERO, new Vec3(1, 0, 0), new Vec3(0, 1, 0), 0, RADIUS, 1);
+			quads += WindRibbon.pieces(rimPts, rimWidth);
+			// The thrust collar is the same ring, 1.6 times wider round a sphere swollen 1.3 times.
+			rim(Vec3.ZERO, new Vec3(1, 0, 0), new Vec3(0, 1, 0), 0, RADIUS * 1.3F * 1.6F, 1);
+			quads += WindRibbon.pieces(rimPts, rimWidth);
+			for (int j = 0; j < INFLOW; j++) {
+				inflow(j, Vec3.ZERO, 0, RADIUS, 1);
+				quads += WindRibbon.pieces(pts, width);
+			}
+			return WindRibbon.budgetCost(quads);
+		}
+
+		/** Band {@code i} at time {@code now} into the scratch arrays: an arc of its great circle round {@code c}, radius {@code r}. */
+		void lay(int i, Vec3 c, float now, float r, float a, float w) {
+			Vec3 n = rotate(normal[i], precess[i], now * 0.07);
+			Vec3 b1 = n.cross(Math.abs(n.y) < 0.9 ? new Vec3(0, 1, 0) : new Vec3(1, 0, 0)).normalize();
+			Vec3 b2 = n.cross(b1);
+			double head = phase[i] + speed[i] * now;
+			double sp = span[i];
+			double rr = r * scale[i];
+			for (int k = 0; k < POINTS; k++) {
+				double s = k / (double) (POINTS - 1);
+				double th = head - Math.signum(speed[i]) * sp * (1 - s);
+				pts[k] = c.add(b1.scale(Math.cos(th) * rr)).add(b2.scale(Math.sin(th) * rr));
+				float taper = (float) Math.sin(Math.PI * Math.pow(s, 0.7));
+				width[k] = w * (0.25F + 0.75F * taper) * (float) (rr / RADIUS);
+				alpha[k] = a * taper;
+			}
+		}
+
+		/** The edge ring round {@code c} in the camera's plane ({@code left}, {@code up}), radius {@code r}, into the rim arrays. */
+		void rim(Vec3 c, Vec3 left, Vec3 up, float now, float r, float a) {
+			for (int k = 0; k < RIM_POINTS; k++) {
+				double th = Mth.TWO_PI * k / (RIM_POINTS - 1);
+				double wob = 1 + 0.05 * Math.sin(th * 3 + now * 1.7) + 0.03 * Math.sin(th * 5 - now * 2.3);
+				double rr = r * 1.02 * wob;
+				rimPts[k] = c.add(left.scale(Math.cos(th) * rr)).add(up.scale(Math.sin(th) * rr));
+				float shade = 0.6F + 0.4F * (float) Math.sin(th * 2 - now * 1.1);
+				rimWidth[k] = 0.075F * (r / RADIUS) * (0.7F + 0.3F * shade);
+				rimAlpha[k] = a * 0.75F * shade;
+			}
+		}
+
+		/**
+		 * Inflow strand {@code j} into the scratch arrays: a spiral of wind on a tilted plane through {@code c}, winding in from
+		 * about 3.4 radii to the sphere's edge, drawn in tighter and fading as the sphere forms.
+		 */
+		void inflow(int j, Vec3 c, float now, float r, float a) {
+			Vec3 n = normal[j];
+			Vec3 b1 = n.cross(Math.abs(n.y) < 0.9 ? new Vec3(0, 1, 0) : new Vec3(1, 0, 0)).normalize();
+			Vec3 b2 = n.cross(b1);
+			float form = Mth.clamp(now / DrillGeometry.WINDUP, 0F, 1F);
+			double outer = 3.6 - 2.2 * form;
+			double turn = phase[j] + now * 0.9;
+			float fade = a * (1 - form * form * 0.85F);
+			for (int k = 0; k < POINTS; k++) {
+				double s = k / (double) (POINTS - 1);
+				double rr = r * (outer + (1.05 - outer) * s);
+				double th = turn + 2.6 * s;
+				pts[k] = c.add(b1.scale(Math.cos(th) * rr)).add(b2.scale(Math.sin(th) * rr));
+				float taper = (float) Math.sin(Math.PI * s);
+				width[k] = 0.05F * (0.3F + 0.7F * (float) s) * (r / RADIUS);
+				alpha[k] = fade * taper * (float) s;
+			}
+		}
+
+		static Vec3 rotate(Vec3 v, Vec3 axis, double ang) {
+			double cos = Math.cos(ang);
+			double sin = Math.sin(ang);
+			return v.scale(cos).add(axis.cross(v).scale(sin)).add(axis.scale(axis.dot(v) * (1 - cos))).normalize();
+		}
+
+	}
+
 	static final class Orb extends SingleQuadParticle implements LightPipeline.Extent {
-		private static final int BANDS = 11;
-		private static final int SHELL = 8;
-		private static final int POINTS = 22;
 		private static final int BURST = 7;
-		private static final int RIM_POINTS = 41;
-		private static final int INFLOW = 8;
 
 		private final int casterId;
 		private final Vec3 eye;
 		private final Vec3 look;
-		private final Vec3[] normal = new Vec3[BANDS + SHELL];
-		private final Vec3[] precess = new Vec3[BANDS + SHELL];
-		private final double[] speed = new double[BANDS + SHELL];
-		private final double[] phase = new double[BANDS + SHELL];
-		private final double[] span = new double[BANDS + SHELL];
-		private final double[] scale = new double[BANDS + SHELL];
+		private final Shape shape;
 		private final WindRibbon ribbon = new WindRibbon();
-		private final Vec3[] pts = new Vec3[POINTS];
-		private final float[] width = new float[POINTS];
-		private final float[] alpha = new float[POINTS];
-		private final Vec3[] rimPts = new Vec3[RIM_POINTS];
-		private final float[] rimWidth = new float[RIM_POINTS];
-		private final float[] rimAlpha = new float[RIM_POINTS];
 		private final TextureAtlasSprite glow = MagicCircleRenderer.sprite("glow");
 		private final TextureAtlasSprite soft = MagicCircleRenderer.sprite("soft");
 		private int kept;
@@ -274,17 +379,7 @@ public final class WindSphereFx implements SpellFx {
 			this.casterId = casterId;
 			this.eye = eye;
 			this.look = look;
-			RandomSource r = RandomSource.create(seed ^ 0x5A5EL);
-			for (int i = 0; i < BANDS + SHELL; i++) {
-				normal[i] = WindSphereFx.sphere(r);
-				precess[i] = WindSphereFx.sphere(r);
-				boolean shell = i >= BANDS;
-				speed[i] = (shell ? 0.9 : 0.6) + r.nextDouble() * (shell ? 0.7 : 0.6);
-				if (r.nextBoolean()) speed[i] = -speed[i];
-				phase[i] = r.nextDouble() * Mth.TWO_PI;
-				span[i] = shell ? Math.toRadians(80 + r.nextDouble() * 70) : Math.toRadians(190 + r.nextDouble() * 110);
-				scale[i] = shell ? 1.3 + r.nextDouble() * 0.3 : 0.9 + r.nextDouble() * 0.16;
-			}
+			this.shape = new Shape(seed);
 			this.lifetime = 200;
 			this.hasPhysics = false;
 			this.gravity = 0;
@@ -346,23 +441,9 @@ public final class WindSphereFx implements SpellFx {
 			return mc.player != null && mc.player.getId() == casterId && mc.getCameraEntity() == mc.player && mc.options.getCameraType().isFirstPerson();
 		}
 
-		/** Fx-budget particles the sphere costs per step: its quads a frame at their most (fully grown), per 50. */
+		/** Fx-budget particles the sphere costs per step ({@link Shape#cost}). */
 		int cost() {
-			int quads = 8;
-			for (int i = 0; i < BANDS + SHELL; i++) {
-				lay(i, Vec3.ZERO, 0, RADIUS, 1, 0.07F);
-				quads += WindRibbon.pieces(pts, width);
-			}
-			rim(Vec3.ZERO, new Vec3(1, 0, 0), new Vec3(0, 1, 0), 0, RADIUS, 1);
-			quads += WindRibbon.pieces(rimPts, rimWidth);
-			// The thrust collar is the same ring, 1.6 times wider.
-			rim(Vec3.ZERO, new Vec3(1, 0, 0), new Vec3(0, 1, 0), 0, RADIUS * 1.3F * 1.6F, 1);
-			quads += WindRibbon.pieces(rimPts, rimWidth);
-			for (int j = 0; j < INFLOW; j++) {
-				inflow(j, Vec3.ZERO, 0, RADIUS, 1);
-				quads += WindRibbon.pieces(pts, width);
-			}
-			return WindRibbon.budgetCost(quads);
+			return shape.cost();
 		}
 
 		@Override
@@ -405,92 +486,32 @@ public final class WindSphereFx implements SpellFx {
 			// The sphere's edge: a ring facing the camera, wobbling with the wind inside.
 			Vec3 left = new Vec3(camera.leftVector().x(), camera.leftVector().y(), camera.leftVector().z());
 			Vec3 up = new Vec3(camera.upVector().x(), camera.upVector().y(), camera.upVector().z());
-			rim(c, left, up, now, rad * spread, bright * k);
-			ribbon.draw(state, cam, rimPts, rimWidth, rimAlpha, HALO, 0.55F, CORE);
+			shape.rim(c, left, up, now, rad * spread, bright * k);
+			ribbon.draw(state, cam, shape.rimPts, shape.rimWidth, shape.rimAlpha, HALO, 0.55F, CORE);
 			// While forming: wind spiralling in from all round.
 			if (burstAt < 0 && now < DrillGeometry.WINDUP + 2) {
-				for (int j = 0; j < INFLOW; j++) {
-					inflow(j, c, now, rad, k);
-					ribbon.draw(state, cam, pts, width, alpha, j % 2 == 0 ? CORE : BAND, 0.6F, CORE);
+				for (int j = 0; j < Shape.INFLOW; j++) {
+					shape.inflow(j, c, now, rad, k);
+					ribbon.draw(state, cam, shape.pts, shape.width, shape.alpha, j % 2 == 0 ? CORE : BAND, 0.6F, CORE);
 				}
 			}
 			// Thrust: a collar of pressed air just ahead of the sphere, across the dash (not in the caster's own view).
 			if (burstAt < 0 && dashAt >= 0 && !fp) {
 				float push = Mth.clamp((now - dashAt) / 2F, 0F, 1F);
 				BladeWindGeometry.Frame f = BladeWindGeometry.frame(look);
-				rim(c.add(look.scale(rad * 0.7)), f.side(), f.up(), now * 2, rad * 1.6F, bright * k * push);
-				ribbon.draw(state, cam, rimPts, rimWidth, rimAlpha, BAND, 0.5F, CORE);
+				shape.rim(c.add(look.scale(rad * 0.7)), f.side(), f.up(), now * 2, rad * 1.6F, bright * k * push);
+				ribbon.draw(state, cam, shape.rimPts, shape.rimWidth, shape.rimAlpha, BAND, 0.5F, CORE);
 			}
 			// Bands and shell.
 			int every = paid ? 1 : 3;
-			for (int i = 0; i < BANDS + SHELL; i += every) {
-				boolean shell = i >= BANDS;
-				float a = bright * k * (shell ? 0.55F + 0.45F * Mth.sin(now * 3.1F + (float) phase[i]) : 1F);
+			for (int i = 0; i < Shape.BANDS + Shape.SHELL; i += every) {
+				boolean shell = i >= Shape.BANDS;
+				float a = bright * k * (shell ? 0.55F + 0.45F * Mth.sin(now * 3.1F + (float) shape.phase[i]) : 1F);
 				if (a <= 0.02F) continue;
-				lay(i, c, now, rad * spread, a, shell ? 0.045F : 0.065F);
-				ribbon.draw(state, cam, pts, width, alpha, shell ? (i % 2 == 0 ? MINT : HALO) : BAND, shell ? 0.3F : 0.8F, CORE);
+				shape.lay(i, c, now, rad * spread, a, shell ? 0.045F : 0.065F);
+				ribbon.draw(state, cam, shape.pts, shape.width, shape.alpha, shell ? (i % 2 == 0 ? MINT : HALO) : BAND, shell ? 0.3F : 0.8F, CORE);
 			}
 			last = c;
-		}
-
-		/** Band {@code i} at time {@code now} into the scratch arrays: an arc of its great circle round {@code c}, radius {@code r}. */
-		private void lay(int i, Vec3 c, float now, float r, float a, float w) {
-			Vec3 n = rotate(normal[i], precess[i], now * 0.07);
-			Vec3 b1 = n.cross(Math.abs(n.y) < 0.9 ? new Vec3(0, 1, 0) : new Vec3(1, 0, 0)).normalize();
-			Vec3 b2 = n.cross(b1);
-			double head = phase[i] + speed[i] * now;
-			double sp = span[i];
-			double rr = r * scale[i];
-			for (int k = 0; k < POINTS; k++) {
-				double s = k / (double) (POINTS - 1);
-				double th = head - Math.signum(speed[i]) * sp * (1 - s);
-				pts[k] = c.add(b1.scale(Math.cos(th) * rr)).add(b2.scale(Math.sin(th) * rr));
-				float taper = (float) Math.sin(Math.PI * Math.pow(s, 0.7));
-				width[k] = w * (0.25F + 0.75F * taper) * (float) (rr / RADIUS);
-				alpha[k] = a * taper;
-			}
-		}
-
-		/** The edge ring round {@code c} in the camera's plane ({@code left}, {@code up}), radius {@code r}, into the rim arrays. */
-		private void rim(Vec3 c, Vec3 left, Vec3 up, float now, float r, float a) {
-			for (int k = 0; k < RIM_POINTS; k++) {
-				double th = Mth.TWO_PI * k / (RIM_POINTS - 1);
-				double wob = 1 + 0.05 * Math.sin(th * 3 + now * 1.7) + 0.03 * Math.sin(th * 5 - now * 2.3);
-				double rr = r * 1.02 * wob;
-				rimPts[k] = c.add(left.scale(Math.cos(th) * rr)).add(up.scale(Math.sin(th) * rr));
-				float shade = 0.6F + 0.4F * (float) Math.sin(th * 2 - now * 1.1);
-				rimWidth[k] = 0.075F * (r / RADIUS) * (0.7F + 0.3F * shade);
-				rimAlpha[k] = a * 0.75F * shade;
-			}
-		}
-
-		/**
-		 * Inflow strand {@code j} into the scratch arrays: a spiral of wind on a tilted plane through {@code c}, winding in from
-		 * about 3.4 radii to the sphere's edge, drawn in tighter and fading as the sphere forms.
-		 */
-		private void inflow(int j, Vec3 c, float now, float r, float a) {
-			Vec3 n = normal[j];
-			Vec3 b1 = n.cross(Math.abs(n.y) < 0.9 ? new Vec3(0, 1, 0) : new Vec3(1, 0, 0)).normalize();
-			Vec3 b2 = n.cross(b1);
-			float form = Mth.clamp(now / DrillGeometry.WINDUP, 0F, 1F);
-			double outer = 3.6 - 2.2 * form;
-			double turn = phase[j] + now * 0.9;
-			float fade = a * (1 - form * form * 0.85F);
-			for (int k = 0; k < POINTS; k++) {
-				double s = k / (double) (POINTS - 1);
-				double rr = r * (outer + (1.05 - outer) * s);
-				double th = turn + 2.6 * s;
-				pts[k] = c.add(b1.scale(Math.cos(th) * rr)).add(b2.scale(Math.sin(th) * rr));
-				float taper = (float) Math.sin(Math.PI * s);
-				width[k] = 0.05F * (0.3F + 0.7F * (float) s) * (r / RADIUS);
-				alpha[k] = fade * taper * (float) s;
-			}
-		}
-
-		private static Vec3 rotate(Vec3 v, Vec3 axis, double ang) {
-			double cos = Math.cos(ang);
-			double sin = Math.sin(ang);
-			return v.scale(cos).add(axis.cross(v).scale(sin)).add(axis.scale(axis.dot(v) * (1 - cos))).normalize();
 		}
 
 		private void glow(QuadParticleRenderState state, Vec3 cam, Quaternionf q, TextureAtlasSprite sprite, Vec3 p, float half, int rgb, float a) {
@@ -692,6 +713,8 @@ public final class WindSphereFx implements SpellFx {
 		private static final double REACH = 6.5;
 
 		private final Vec3 at;
+		/** Where the drill's axis starts (on the body's line), for the vortex. */
+		private final Vec3 axis;
 		private final Vec3 look;
 		private final BladeWindGeometry.Frame frame;
 		private final float size;
@@ -702,9 +725,10 @@ public final class WindSphereFx implements SpellFx {
 		private float[] width = new float[0];
 		private float[] alpha = new float[0];
 
-		Spiral(ClientLevel level, Vec3 at, Vec3 look, float size, int drill, long seed) {
+		Spiral(ClientLevel level, Vec3 at, Vec3 axis, Vec3 look, float size, int drill, long seed) {
 			super(level, at.x, at.y, at.z, MagicCircleRenderer.sprite("line"));
 			this.at = at;
+			this.axis = axis;
 			this.look = look;
 			this.frame = BladeWindGeometry.frame(look);
 			this.size = size;
@@ -805,7 +829,7 @@ public final class WindSphereFx implements SpellFx {
 				double along = reach * s;
 				double rad = DrillGeometry.radiusAt(along, drill) * 0.7;
 				double ang = turn + Mth.TWO_PI * i / VORTEX + along * 1.5 - now * 0.8;
-				pts[k] = at.add(look.scale(along + 0.2)).add(frame.side().scale(Math.cos(ang) * rad)).add(frame.up().scale(Math.sin(ang) * rad));
+				pts[k] = axis.add(look.scale(along + 0.2)).add(frame.side().scale(Math.cos(ang) * rad)).add(frame.up().scale(Math.sin(ang) * rad));
 				float edge = (float) Math.min(1, Math.min(s, 1 - s) * 6);
 				width[k] = (float) (0.1 + 0.08 * rad);
 				alpha[k] = fade * edge * 0.9F;
