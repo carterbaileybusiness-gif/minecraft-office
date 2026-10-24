@@ -70,7 +70,7 @@ public final class EarthSpikes implements Spell {
 		BlockPos start = EarthSpikesGeometry.start(p.position(), forward);
 		int length = EarthSpikesGeometry.length(ctx.charge());
 		List<BlockPos> path = EarthSpikesGeometry.path(start, forward, length, solid(ctx.level()));
-		if (!ActiveEffects.add(ctx.level(), new Burst(ctx, path, forward))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, new Burst(ctx, path, forward))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(start)).withDuration(Math.max(1, path.size()))
 				.withData(length));
 	}

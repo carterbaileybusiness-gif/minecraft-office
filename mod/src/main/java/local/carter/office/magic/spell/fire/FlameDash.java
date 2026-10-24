@@ -81,7 +81,7 @@ public final class FlameDash implements Spell {
 		double speed = speed(ctx.charge());
 		Vec3 start = p.position();
 		Trail trail = new Trail(ctx, centre(p));
-		if (!ActiveEffects.add(ctx.level(), trail)) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, trail)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Motion.dash(p, dir.scale(speed).add(0, UP, 0), NO_FALL_TICKS);
 		return CastOutcome.cast(ctx.fx().withTarget(start).withDuration(BURN_TICKS).withData((float) speed));
 	}

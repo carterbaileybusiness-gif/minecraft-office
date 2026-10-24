@@ -85,7 +85,7 @@ public final class Quake implements Spell {
 		BlockPos centre = centre(p.position());
 		double radius = QuakeGeometry.radius(ctx.charge());
 		Ripple ripple = new Ripple(ctx, centre, radius);
-		if (!ActiveEffects.add(ctx.level(), ripple)) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, ripple)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(centre.above())).withDuration(QuakeGeometry.duration(radius))
 				.withData((float) radius));
 	}

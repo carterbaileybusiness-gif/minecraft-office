@@ -90,7 +90,7 @@ public final class WaterDragon implements Spell {
 		int flood = DragonGeometry.floodRadius(ctx.grimoireLevel());
 		int mud = DragonGeometry.mudRadius(ctx.grimoireLevel());
 		Flight flight = new Flight(ctx, impact, cell, flood, mud);
-		if (!ActiveEffects.add(level, flight)) return CastOutcome.fizzle("magic.office.busy");
+		if (!ActiveEffects.add(ctx, flight)) return CastOutcome.fizzle("magic.office.busy");
 		return CastOutcome.cast(ctx.fx().withTarget(impact).withDuration(DragonGeometry.FLIGHT)
 				.withData(flood, mud, cell.getY()));
 	}

@@ -78,7 +78,7 @@ public final class BubbleShield implements Spell {
 		ServerPlayer caster = ctx.caster();
 		int life = BubbleShieldGeometry.duration(ctx.charge());
 		Bubble bubble = new Bubble(ctx, life);
-		if (!ActiveEffects.add(ctx.level(), bubble)) return CastOutcome.fizzle("magic.office.busy");
+		if (!ActiveEffects.add(ctx, bubble)) return CastOutcome.fizzle("magic.office.busy");
 		Bubble old = ACTIVE.put(caster.getUUID(), bubble);
 		if (old != null) ActiveEffects.remove(old);
 		caster.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, life, RESISTANCE_AMPLIFIER, false, false, true), caster);

@@ -118,12 +118,13 @@ public final class TeleportChannel {
 
 	/**
 	 * Starts {@code p}'s channel toward {@code trip} (the caller has already checked that {@code trip} resolves and that
-	 * {@code p} is not channeling). False when the server's lingering effects are full (nothing started).
+	 * {@code p} is not channeling). False when {@code p} already runs {@link ActiveEffects#MAX_PER_CASTER} effects (nothing
+	 * started); other players' effects never refuse a channel ({@link ActiveEffects#addChannel}).
 	 */
 	public static boolean start(ServerPlayer p, Trip trip) {
 		if (channeling(p)) return false;
 		Channel channel = new Channel(p, trip);
-		if (!ActiveEffects.add(p.level(), channel)) return false;
+		if (!ActiveEffects.addChannel(p.level(), p.getUUID(), channel)) return false;
 		CHANNELS.put(p.getUUID(), channel);
 		return true;
 	}

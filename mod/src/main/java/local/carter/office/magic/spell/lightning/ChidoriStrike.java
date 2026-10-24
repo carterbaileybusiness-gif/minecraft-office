@@ -115,7 +115,7 @@ public final class ChidoriStrike implements Spell {
 		BlinkPath.Walk w = BlinkPath.walk(start, way, way.length(), at -> Blink.fits(p, at), planned::add);
 		ChidoriGeometry g = new ChidoriGeometry(start, w.end(), ChidoriGeometry.radius(ctx.grimoireLevel()));
 		Charge charge = new Charge(ctx, g, hit.orElse(null), planned);
-		if (!ActiveEffects.add(level, charge)) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, charge)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Motion.dash(p, Vec3.ZERO, ChidoriGeometry.TICKS + NO_FALL_TICKS);
 		int[] ids = hit.map(e -> new int[] {e.getId()}).orElse(new int[0]);
 		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), g.flatDir(), g.end(), fx.charge(), fx.power(), fx.seed(),

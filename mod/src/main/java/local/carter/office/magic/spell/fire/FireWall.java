@@ -98,7 +98,7 @@ public final class FireWall implements Spell {
 		}
 		FireWallGeometry g = FireWallGeometry.of(base, forward, ctx.charge());
 		Burning effect = new Burning(ctx, g);
-		if (!ActiveEffects.add(level, effect)) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, effect)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		melt(ctx, g);
 		FxEvent fx = ctx.fx();
 		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), g.forward(), base, fx.charge(), fx.power(), fx.seed(),
