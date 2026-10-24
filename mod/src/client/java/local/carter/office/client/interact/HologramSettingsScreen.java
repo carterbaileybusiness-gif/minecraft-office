@@ -238,7 +238,7 @@ public class HologramSettingsScreen extends Screen {
 		int bw = (colW - 8) / 3;
 		choice(left, y, bw, "16:9", shape == Shape.WIDE_16_9, () -> setShape(Shape.WIDE_16_9));
 		choice(left + bw + 4, y, bw, "21:9", shape == Shape.ULTRA_21_9, () -> setShape(Shape.ULTRA_21_9));
-		choice(left + 2 * (bw + 4), y, bw, "9:16", shape == Shape.TALL_9_16, () -> setShape(Shape.TALL_9_16));
+		choice(left + 2 * (bw + 4), y, colW - 2 * (bw + 4), "9:16", shape == Shape.TALL_9_16, () -> setShape(Shape.TALL_9_16));
 		y += ROW + 4;
 
 		label(left, y, "Shows");
@@ -256,7 +256,7 @@ public class HologramSettingsScreen extends Screen {
 		} else {
 			choice(left + bw + 4, y, bw, "Extend", mode == Mode.EXTEND, () -> setMode(Mode.EXTEND));
 		}
-		choice(left + 2 * (bw + 4), y, bw, "Window", mode == Mode.WINDOW, () -> setMode(Mode.WINDOW));
+		choice(left + 2 * (bw + 4), y, colW - 2 * (bw + 4), "Window", mode == Mode.WINDOW, () -> setMode(Mode.WINDOW));
 		y += ROW + 4;
 
 		Rect mapAt = plan.map();
@@ -309,7 +309,7 @@ public class HologramSettingsScreen extends Screen {
 		y += LABEL;
 		choice(right, y, bw, "Public", privacyLevel == Privacy.Level.PUBLIC, () -> setPrivacy(Privacy.Level.PUBLIC));
 		choice(right + bw + 4, y, bw, "Private", privacyLevel == Privacy.Level.PRIVATE, () -> setPrivacy(Privacy.Level.PRIVATE));
-		choice(right + 2 * (bw + 4), y, bw, "Show to…", privacyLevel == Privacy.Level.SHOW_TO, () -> setPrivacy(Privacy.Level.SHOW_TO));
+		choice(right + 2 * (bw + 4), y, colW - 2 * (bw + 4), "Show to…", privacyLevel == Privacy.Level.SHOW_TO, () -> setPrivacy(Privacy.Level.SHOW_TO));
 		y += ROW + 4;
 
 		if (players != null) {
