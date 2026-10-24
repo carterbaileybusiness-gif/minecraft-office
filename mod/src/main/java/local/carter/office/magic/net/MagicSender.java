@@ -2,6 +2,7 @@ package local.carter.office.magic.net;
 
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
+import local.carter.office.magic.net.MagicPayloads.TravelRoster;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -25,4 +26,10 @@ public interface MagicSender {
 	void actionBar(ServerPlayer p, Component c);
 
 	void title(ServerPlayer p, Component title, Component subtitle);
+
+	/** A chat line (not the action bar): travel requests and their outcomes, which must outlast a glance. */
+	void chat(ServerPlayer p, Component c);
+
+	/** The Friends page roster for {@code p}. */
+	void roster(ServerPlayer p, TravelRoster r);
 }

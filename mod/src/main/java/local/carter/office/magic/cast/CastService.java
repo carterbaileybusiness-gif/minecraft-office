@@ -20,6 +20,7 @@ import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
@@ -128,6 +129,11 @@ public final class CastService {
 	/** The charge ended without a cast (cancelled, death, disconnect, dimension change). */
 	public static void endCharge(ServerPlayer p) {
 		CHARGING.remove(p.getUUID());
+	}
+
+	/** True while {@code p} is charging a grimoire cast (Travel refuses to start meanwhile). */
+	public static boolean charging(ServerPlayer p) {
+		return CHARGING.containsKey(p.getUUID()) || (p.isUsingItem() && GrimoireItem.isGrimoire(p.getUseItem()));
 	}
 
 	/**
@@ -333,7 +339,9 @@ public final class CastService {
 	}
 
 	private static Component cooldownMessage(Spell spell, long ticksLeft) {
-		return Component.translatable("magic.office.cooldown", name(spell), ticksLeft / 20.0);
+		// Lang strings take only %s: one decimal, rounded up to the next tenth of a second.
+		return Component.translatable("magic.office.cooldown", name(spell),
+				String.format(java.util.Locale.ROOT, "%.1f", Math.ceil(ticksLeft / 2.0) / 10));
 	}
 
 	private static Component noManaMessage(int mana, int need) {
