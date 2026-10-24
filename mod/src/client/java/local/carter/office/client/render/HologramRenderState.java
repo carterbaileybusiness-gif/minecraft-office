@@ -44,4 +44,6 @@ public class HologramRenderState extends BlockEntityRenderState {
 	public boolean cursor;
 	public float cursorU;
 	public float cursorV;
+	/** Identify (3 s): the label drawn big in the middle (a letter or 1-4), or null. */
+	public @Nullable String identify;
 }

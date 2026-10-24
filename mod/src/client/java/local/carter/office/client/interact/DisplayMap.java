@@ -2,18 +2,25 @@ package local.carter.office.client.interact;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
 
 import com.mojang.blaze3d.platform.cursor.CursorTypes;
 
+import local.carter.office.client.platform.Platform;
 import local.carter.office.client.platform.Platform.Rect;
 import local.carter.office.client.screens.DisplayMapModel;
+import local.carter.office.client.screens.IdentifyClient;
+import local.carter.office.client.screens.IdentifyLabels;
+import local.carter.office.client.screens.ScreenList;
 import local.carter.office.client.screens.DisplayMapModel.Choice;
 import local.carter.office.client.screens.MapLayout;
 import local.carter.office.client.screens.Screen;
 import local.carter.office.core.Mode;
+import local.carter.office.hologram.HologramBlockEntity;
+import local.carter.office.net.OfficePayloads;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -24,7 +31,11 @@ import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
 import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.util.Util;
+
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 /**
  * The settings screen's display map, like Windows Display Settings: every screen as a box placed and sized by its real
@@ -359,6 +370,44 @@ public final class DisplayMap extends AbstractWidget {
 			g.requestCursor(CursorTypes.RESIZE_ALL);
 		} else if (s != null && !(model.click(s.id()) instanceof Choice.None)) {
 			g.requestCursor(CursorTypes.POINTING_HAND);
+		}
+	}
+
+	// ---------------------------------------------------------------- Identify
+
+	/**
+	 * Whether Identify can run: everywhere it can number the holograms, except a Mac whose helper can't show the
+	 * overlays on the real screens yet (greyed with the helper hint, so the real screens are never left out silently).
+	 */
+	public static boolean canIdentify(final ScreenList list) {
+		return list.abilities().canIdentifyScreens() || !Platform.isMac();
+	}
+
+	/**
+	 * Identify for 3 s: this client draws its own holograms' labels, the server shows them to the players who may see
+	 * those holograms (never a monitor name), and the helper puts the same labels on the real screens.
+	 */
+	public static void identify(final ScreenList list) {
+		Minecraft mc = Minecraft.getInstance();
+		List<HologramBlockEntity> mine = new ArrayList<>();
+		for (HologramBlockEntity be : HologramTracker.loaded()) {
+			if (mc.player != null && be.isOwner(mc.player.getUUID())) {
+				mine.add(be);
+			}
+		}
+		Map<BlockPos, String> labels = IdentifyLabels.forHolograms(mine, list);
+		IdentifyClient.get().show(labels, Util.getMillis());
+		if (!labels.isEmpty() && ClientPlayNetworking.canSend(OfficePayloads.IdentifyHolograms.TYPE)) {
+			List<OfficePayloads.HologramLabel> out = new ArrayList<>();
+			for (Map.Entry<BlockPos, String> e : labels.entrySet()) {
+				if (out.size() < OfficePayloads.MAX_IDENTIFY) {
+					out.add(new OfficePayloads.HologramLabel(e.getKey(), e.getValue()));
+				}
+			}
+			ClientPlayNetworking.send(new OfficePayloads.IdentifyHolograms(out));
+		}
+		if (list.abilities().canIdentifyScreens()) {
+			Platform.current().identifyScreens(IdentifyLabels.forScreens(list));
 		}
 	}
 

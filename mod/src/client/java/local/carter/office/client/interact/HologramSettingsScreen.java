@@ -67,6 +67,7 @@ public class HologramSettingsScreen extends Screen {
 	/** The map's button row: under the panel, two half-column buttons. */
 	private static final int MAP_BUTTON_W = (COL_W - 4) / 2;
 	private static final String MOVE_HINT = "Drag an Office display, then Apply";
+	private static final String IDENTIFY_HINT = "Show each screen's letter or number for 3 s";
 	private static final String OLD_SERVER_HINT = "This server can't remember a monitor yet";
 	private static boolean screensHooked;
 
@@ -94,6 +95,7 @@ public class HologramSettingsScreen extends Screen {
 	private final @Nullable DisplayMapModel mapModel;
 	private @Nullable DisplayMap map;
 	private @Nullable Button apply;
+	private @Nullable Button identify;
 	private int playerPage;
 	private int windowPage;
 
@@ -174,10 +176,18 @@ public class HologramSettingsScreen extends Screen {
 		return apply;
 	}
 
+	public @Nullable Button identifyButton() {
+		return identify;
+	}
+
 	private void mapChanged() {
 		Button b = apply;
 		if (b != null && mapModel != null) {
 			b.active = mapModel.canApply();
+		}
+		Button i = identify;
+		if (i != null && mapModel != null) {
+			i.active = DisplayMap.canIdentify(mapModel.list());
 		}
 	}
 
@@ -194,6 +204,7 @@ public class HologramSettingsScreen extends Screen {
 		labels.clear();
 		map = null;
 		apply = null;
+		identify = null;
 
 		int left = (width - (2 * COL_W + GAP)) / 2;
 		int right = left + COL_W + GAP;
@@ -333,7 +344,8 @@ public class HologramSettingsScreen extends Screen {
 	}
 
 	/**
-	 * The display map at {@code (x, mapTop)}, one column wide, and its button row under it: Apply (Extend) on the right.
+	 * The display map at {@code (x, mapTop)}, one column wide, and its button row under it: Identify on the left, Apply
+	 * (Extend) on the right.
 	 * {@code note}: the platform's line, the map's status line while it has nothing else to say.
 	 */
 	private void addMap(final int x, final int mapTop, final @Nullable String note) {
@@ -345,6 +357,13 @@ public class HologramSettingsScreen extends Screen {
 		DisplayMap m = new DisplayMap(x, mapTop, COL_W, MAP_H, model, this::chose, this::mapChanged, note);
 		map = addRenderableWidget(m);
 		int rowY = mapTop + MAP_H + 4;
+		ScreenList list = model.list();
+		Button identify = Button.builder(Component.literal("Identify"), btn -> DisplayMap.identify(model.list()))
+				.bounds(x, rowY, MAP_BUTTON_W, 20).build();
+		identify.active = DisplayMap.canIdentify(list);
+		String why = list.abilities().hint();
+		identify.setTooltip(Tooltip.create(Component.literal(identify.active || why == null ? IDENTIFY_HINT : why)));
+		this.identify = addRenderableWidget(identify);
 		if (mode == Mode.EXTEND) {
 			Button b = Button.builder(Component.literal("Apply"), btn -> applyMoves())
 					.bounds(x + COL_W - MAP_BUTTON_W, rowY, MAP_BUTTON_W, 20).build();

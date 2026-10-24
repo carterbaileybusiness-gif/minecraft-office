@@ -110,6 +110,72 @@ public final class OfficePayloads {
 		}
 	}
 
+	/** Max holograms in one Identify. */
+	public static final int MAX_IDENTIFY = 32;
+
+	/**
+	 * One hologram's Identify label: a real monitor's letter ({@code A-Z}) or an Office display's number ({@code 1-4}).
+	 * Never a monitor name.
+	 */
+	public record HologramLabel(BlockPos pos, String label) {
+		public static boolean validLabel(final String label) {
+			return label.length() == 1 && (label.charAt(0) >= 'A' && label.charAt(0) <= 'Z' || label.charAt(0) >= '1' && label.charAt(0) <= '4');
+		}
+	}
+
+	private static void writeLabels(final FriendlyByteBuf buf, final List<HologramLabel> labels) {
+		List<HologramLabel> list = labels.size() > MAX_IDENTIFY ? labels.subList(0, MAX_IDENTIFY) : labels;
+		buf.writeVarInt(list.size());
+		for (HologramLabel l : list) {
+			buf.writeBlockPos(l.pos());
+			buf.writeUtf(l.label(), 2);
+		}
+	}
+
+	private static List<HologramLabel> readLabels(final FriendlyByteBuf buf) {
+		int n = buf.readVarInt();
+		if (n < 0 || n > MAX_IDENTIFY) {
+			throw new DecoderException("too many identify labels: " + n);
+		}
+		List<HologramLabel> list = new ArrayList<>(n);
+		for (int i = 0; i < n; i++) {
+			list.add(new HologramLabel(buf.readBlockPos(), buf.readUtf(2)));
+		}
+		return List.copyOf(list);
+	}
+
+	/** C2S, owner's Identify: show these labels on these of my holograms to the players who may see them. */
+	public record IdentifyHolograms(List<HologramLabel> labels) implements CustomPacketPayload {
+		public static final Type<IdentifyHolograms> TYPE = new Type<>(OfficeMod.id("identify_holograms"));
+		public static final StreamCodec<FriendlyByteBuf, IdentifyHolograms> CODEC = StreamCodec.of(
+				(buf, p) -> writeLabels(buf, p.labels), buf -> new IdentifyHolograms(readLabels(buf)));
+
+		public IdentifyHolograms {
+			labels = List.copyOf(labels);
+		}
+
+		@Override
+		public Type<IdentifyHolograms> type() {
+			return TYPE;
+		}
+	}
+
+	/** S2C: another player pressed Identify; draw these labels on these holograms for 3 s. */
+	public record IdentifyShown(List<HologramLabel> labels) implements CustomPacketPayload {
+		public static final Type<IdentifyShown> TYPE = new Type<>(OfficeMod.id("identify_shown"));
+		public static final StreamCodec<FriendlyByteBuf, IdentifyShown> CODEC = StreamCodec.of(
+				(buf, p) -> writeLabels(buf, p.labels), buf -> new IdentifyShown(readLabels(buf)));
+
+		public IdentifyShown {
+			labels = List.copyOf(labels);
+		}
+
+		@Override
+		public Type<IdentifyShown> type() {
+			return TYPE;
+		}
+	}
+
 	/** Max players listed in one {@link WorkingPlayers}. */
 	public static final int MAX_WORKING = 1024;
 
@@ -315,6 +381,7 @@ public final class OfficePayloads {
 		s2c.register(StreamEnded.TYPE, StreamEnded.CODEC);
 		s2c.register(StreamFallbackTile.TYPE, StreamFallbackTile.CODEC);
 		s2c.register(WorkingPlayers.TYPE, WorkingPlayers.CODEC);
+		s2c.register(IdentifyShown.TYPE, IdentifyShown.CODEC);
 
 		var c2s = PayloadTypeRegistry.serverboundPlay();
 		c2s.register(FallbackTile.TYPE, FallbackTile.CODEC);
@@ -325,5 +392,6 @@ public final class OfficePayloads {
 		c2s.register(SetWorking.TYPE, SetWorking.CODEC);
 		c2s.register(RemoveHologram.TYPE, RemoveHologram.CODEC);
 		c2s.register(SetMirrorDisplay.TYPE, SetMirrorDisplay.CODEC);
+		c2s.register(IdentifyHolograms.TYPE, IdentifyHolograms.CODEC);
 	}
 }

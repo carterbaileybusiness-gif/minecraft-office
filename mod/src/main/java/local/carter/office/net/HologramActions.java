@@ -17,6 +17,9 @@ import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.hologram.StarterKit;
+import local.carter.office.net.OfficePayloads.HologramLabel;
+import local.carter.office.net.OfficePayloads.IdentifyHolograms;
+import local.carter.office.net.OfficePayloads.IdentifyShown;
 import local.carter.office.net.OfficePayloads.MoveHologram;
 import local.carter.office.net.OfficePayloads.RemoveHologram;
 import local.carter.office.net.OfficePayloads.ResizeHologram;
@@ -65,6 +68,7 @@ public final class HologramActions {
 		ServerPlayNetworking.registerGlobalReceiver(SetWorking.TYPE, (p, ctx) -> apply(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(RemoveHologram.TYPE, (p, ctx) -> apply(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(SetMirrorDisplay.TYPE, (p, ctx) -> apply(ctx.player(), p));
+		ServerPlayNetworking.registerGlobalReceiver(IdentifyHolograms.TYPE, (p, ctx) -> apply(ctx.player(), p));
 	}
 
 	/** Applies one payload as {@code player}; returns whether anything changed (false = silently rejected). */
@@ -75,6 +79,7 @@ public final class HologramActions {
 			case MoveHologram m -> edit(player, m.pos(), s -> move(s, m));
 			case SetWorking w -> setWorking(player, w.working());
 			case RemoveHologram r -> remove(player, r.pos());
+			case IdentifyHolograms i -> identify(player, i);
 			case SetMirrorDisplay d -> (d.display() == null || isMonitorId(d.display()))
 					&& edit(player, d.pos(), s -> s.withMirrorDisplay(d.display()));
 			default -> false;
@@ -125,6 +130,7 @@ public final class HologramActions {
 
 	/** Called on disconnect: no longer working. */
 	public static void clearWorking(final ServerPlayer player) {
+		IDENTIFY_LAST.remove(player.getUUID()); // and no Identify limit to remember
 		WORKING_PENDING.remove(player.getUUID());
 		WORKING_LAST_APPLIED.remove(player.getUUID());
 		if (WORKING.remove(player.getUUID())) {
@@ -275,6 +281,72 @@ public final class HologramActions {
 		// A wall-mounted hologram never leaves its wall plane (resizes keep the centre; moves slide along the wall).
 		be.setSpec(HologramEmitterBlock.constrain(be.getBlockState(), next));
 		StreamRouter.rerouteNow(); // privacy/position may change who views it: reroute before returning
+		return true;
+	}
+
+	// ---------------------------------------------------------------- Identify
+
+	/** One Identify per player per this many milliseconds. */
+	public static final long IDENTIFY_MIN_INTERVAL_MS = 1000L;
+	private static final Map<UUID, Long> IDENTIFY_LAST = new ConcurrentHashMap<>();
+
+	/** Where Identify labels go: by default an {@link IdentifyShown} to that player. GameTests record them instead. */
+	public interface IdentifyBroadcast {
+		void send(ServerPlayer viewer, List<HologramLabel> labels);
+	}
+
+	private static volatile IdentifyBroadcast identifyBroadcast = HologramActions::sendIdentify;
+
+	/** Test seam; {@code null} restores the real broadcast. */
+	public static void setIdentifyBroadcast(final IdentifyBroadcast b) {
+		identifyBroadcast = b == null ? HologramActions::sendIdentify : b;
+	}
+
+	private static void sendIdentify(final ServerPlayer viewer, final List<HologramLabel> labels) {
+		if (ServerPlayNetworking.canSend(viewer, IdentifyShown.TYPE)) {
+			ServerPlayNetworking.send(viewer, new IdentifyShown(labels));
+		}
+	}
+
+	/**
+	 * {@code IdentifyHolograms}: the owner's client already shows its own labels; every other player in the same level
+	 * gets the labels of the holograms they may see (Public, or Show-to them), never a Private one. Only valid labels
+	 * (a letter or 1-4) on holograms the sender owns and can reach count; at most one Identify a second.
+	 */
+	private static boolean identify(final ServerPlayer player, final IdentifyHolograms p) {
+		UUID id = player.getUUID();
+		long now = clock.getAsLong();
+		Long last = IDENTIFY_LAST.get(id);
+		if (last != null && now - last < IDENTIFY_MIN_INTERVAL_MS) {
+			return false;
+		}
+		List<HologramLabel> ok = new ArrayList<>();
+		List<Privacy> privacy = new ArrayList<>();
+		for (HologramLabel l : p.labels()) {
+			HologramBlockEntity be = HologramLabel.validLabel(l.label()) ? owned(player, l.pos()) : null;
+			if (be != null && ok.size() < OfficePayloads.MAX_IDENTIFY) {
+				ok.add(l);
+				privacy.add(be.spec().privacy());
+			}
+		}
+		if (ok.isEmpty()) {
+			return false;
+		}
+		IDENTIFY_LAST.put(id, now);
+		for (ServerPlayer viewer : player.level().players()) {
+			if (viewer == player) {
+				continue;
+			}
+			List<HologramLabel> shown = new ArrayList<>();
+			for (int i = 0; i < ok.size(); i++) {
+				if (privacy.get(i).canView(id, viewer.getUUID())) {
+					shown.add(ok.get(i));
+				}
+			}
+			if (!shown.isEmpty()) {
+				identifyBroadcast.send(viewer, List.copyOf(shown));
+			}
+		}
 		return true;
 	}
 

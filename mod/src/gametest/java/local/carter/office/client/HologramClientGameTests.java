@@ -1229,6 +1229,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 					continue; // Extend is greyed on Windows: no map there
 				}
 				switchMode(context, sp, mode);
+				identifyLabelsTheHologram(context, mode);
 				for (int scale = 1; scale <= 4; scale++) {
 					final int s = scale;
 					context.runOnClient(mc -> {
@@ -1252,6 +1253,34 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				mc.resizeGui();
 			});
 			switchMode(context, sp, original);
+		}
+	}
+
+	/** Identify (Task 11) from the settings screen: the own hologram shows its number (Extend) or letter (Mirror) for 3 s. */
+	private void identifyLabelsTheHologram(final ClientGameTestContext context, final local.carter.office.core.Mode mode) {
+		String want = context.computeOnClient(mc -> mode == local.carter.office.core.Mode.EXTEND
+				? Integer.toString(clientHologram(mc).spec().displaySlot()) : "A");
+		context.runOnClient(mc -> {
+			HologramSettingsScreen screen = new HologramSettingsScreen(clientHologram(mc), "Test");
+			mc.gui.setScreen(screen);
+			if (screen.identifyButton() == null || !screen.identifyButton().active) {
+				throw new AssertionError("Identify should be there and active in " + mode);
+			}
+			screen.identifyButton().onPress(new net.minecraft.client.input.KeyEvent(InputConstants.KEY_RETURN, 0, 0));
+			mc.gui.setScreen(null);
+		});
+		context.waitTicks(5);
+		String shown = context.computeOnClient(mc -> local.carter.office.client.screens.IdentifyClient.get()
+				.labelAt(clientHologram(mc).getBlockPos(), net.minecraft.util.Util.getMillis()));
+		context.takeScreenshot("identify-" + mode.name().toLowerCase(java.util.Locale.ROOT));
+		if (!want.equals(shown)) {
+			throw new AssertionError("Identify in " + mode + " should show " + want + " on the hologram, shows " + shown);
+		}
+		context.waitTicks(70); // 3.5 s
+		String after = context.computeOnClient(mc -> local.carter.office.client.screens.IdentifyClient.get()
+				.labelAt(clientHologram(mc).getBlockPos(), net.minecraft.util.Util.getMillis()));
+		if (after != null) {
+			throw new AssertionError("Identify should be gone after 3 s, still shows " + after);
 		}
 	}
 
@@ -1289,6 +1318,10 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			return "no display map";
 		}
 		mine.add(screen.displayMap());
+		if (screen.identifyButton() == null) {
+			return "no Identify button";
+		}
+		mine.add(screen.identifyButton());
 		if (mode == local.carter.office.core.Mode.EXTEND) {
 			if (screen.applyButton() == null) {
 				return "no Apply button";

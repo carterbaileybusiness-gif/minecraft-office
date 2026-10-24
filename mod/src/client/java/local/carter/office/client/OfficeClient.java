@@ -48,6 +48,8 @@ public class OfficeClient implements ClientModInitializer {
 		PointerClient.register();
 		// Shared screens: send own (non-private) screens to nearby friends, show theirs (Task 14).
 		StreamClient.register();
+		// Identify: other players' labels on their holograms (the display map's Identify button).
+		local.carter.office.client.screens.IdentifyClient.register();
 		// Debug: /hologramtest (dev environment or -Doffice.testPattern=true only).
 		HologramTestCommand.register();
 		// "Screen self-test": Esc-menu button + /officeselftest (plain-text report for Carter, no pixels or titles).

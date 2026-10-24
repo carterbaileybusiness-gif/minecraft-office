@@ -525,6 +525,81 @@ public class HologramGameTests {
 		h.succeed();
 	}
 
+	private static boolean setPrivacy(ServerPlayer owner, HologramBlockEntity be, Privacy privacy) {
+		HologramSpec s = be.spec();
+		return HologramActions.apply(owner, new OfficePayloads.UpdateHologram(be.getBlockPos(), s.shape(), Mode.EXTEND, privacy, 1, null));
+	}
+
+	private static OfficePayloads.IdentifyHolograms identifyOne(HologramBlockEntity be, String label) {
+		return new OfficePayloads.IdentifyHolograms(List.of(new OfficePayloads.HologramLabel(be.getBlockPos(), label)));
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void identifyRelaysToViewersWhoMaySee(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		ServerPlayer v1 = h.makeMockServerPlayerInLevel();
+		ServerPlayer v2 = h.makeMockServerPlayerInLevel();
+		java.util.Map<UUID, List<OfficePayloads.HologramLabel>> got = new java.util.concurrent.ConcurrentHashMap<>();
+		AtomicLong now = new AtomicLong(5_000_000);
+		HologramActions.setClock(now::get);
+		HologramActions.setIdentifyBroadcast((viewer, labels) -> got.put(viewer.getUUID(), labels));
+		try {
+			HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
+			h.assertTrue(setPrivacy(a, be, Privacy.PUBLIC), "Public Extend");
+			h.assertTrue(HologramActions.apply(a, identifyOne(be, "1")), "Identify accepted");
+			List<OfficePayloads.HologramLabel> want = List.of(new OfficePayloads.HologramLabel(be.getBlockPos(), "1"));
+			h.assertValueEqual(got.get(v1.getUUID()), want, "Public: viewer 1 sees it");
+			h.assertValueEqual(got.get(v2.getUUID()), want, "Public: viewer 2 sees it");
+			h.assertFalse(got.containsKey(a.getUUID()), "the owner's client draws its own");
+
+			got.clear();
+			now.addAndGet(HologramActions.IDENTIFY_MIN_INTERVAL_MS);
+			h.assertTrue(setPrivacy(a, be, Privacy.PRIVATE), "Private");
+			h.assertTrue(HologramActions.apply(a, identifyOne(be, "1")), "accepted (the owner still sees their own)");
+			h.assertFalse(got.containsKey(v1.getUUID()) || got.containsKey(v2.getUUID()), "Private: nobody else");
+
+			got.clear();
+			now.addAndGet(HologramActions.IDENTIFY_MIN_INTERVAL_MS);
+			h.assertTrue(setPrivacy(a, be, new Privacy(Privacy.Level.SHOW_TO, java.util.Set.of(v1.getUUID()))), "Show to viewer 1");
+			h.assertTrue(HologramActions.apply(a, identifyOne(be, "1")), "accepted");
+			h.assertValueEqual(got.get(v1.getUUID()), want, "viewer 1 may see it");
+			h.assertFalse(got.containsKey(v2.getUUID()), "viewer 2 may not");
+		} finally {
+			HologramActions.setIdentifyBroadcast(null);
+			HologramActions.setClock(null);
+			h.getLevel().getServer().getPlayerList().remove(v1);
+			h.getLevel().getServer().getPlayerList().remove(v2);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	public void identifyRejectsBadInput(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		ServerPlayer b = survivalPlayer(h, new BlockPos(3, 0, 5));
+		AtomicLong now = new AtomicLong(9_000_000);
+		HologramActions.setClock(now::get);
+		HologramActions.setIdentifyBroadcast((viewer, labels) -> {});
+		try {
+			HologramBlockEntity mine = place(h, a, new BlockPos(1, 1, 1));
+			HologramBlockEntity theirs = place(h, b, new BlockPos(3, 1, 1));
+			for (String bad : new String[] {"AB", "LG", "5", "", "a"}) {
+				h.assertFalse(HologramActions.apply(a, identifyOne(mine, bad)), "label '" + bad + "' dropped");
+			}
+			h.assertFalse(HologramActions.apply(a, identifyOne(theirs, "1")), "someone else's hologram dropped");
+			h.assertTrue(HologramActions.apply(a, identifyOne(mine, "B")), "a letter on my own hologram");
+			now.addAndGet(HologramActions.IDENTIFY_MIN_INTERVAL_MS - 1);
+			h.assertFalse(HologramActions.apply(a, identifyOne(mine, "B")), "a second Identify within 1000 ms ignored");
+			now.addAndGet(1);
+			h.assertTrue(HologramActions.apply(a, identifyOne(mine, "2")), "a second later it works again");
+		} finally {
+			HologramActions.setIdentifyBroadcast(null);
+			HologramActions.setClock(null);
+		}
+		h.succeed();
+	}
+
 	/** Places an emitter by clicking face {@code face} of the block at {@code clicked} (relative); returns its BE. */
 	private static HologramBlockEntity placeOnFace(GameTestHelper h, ServerPlayer player, BlockPos clicked, Direction face) {
 		// Like a real click on that face (GameTestHelper.placeAt clicks the air block in front, i.e. a "replace").
