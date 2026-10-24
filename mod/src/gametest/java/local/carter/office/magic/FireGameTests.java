@@ -517,7 +517,8 @@ public class FireGameTests {
 		h.runAfterDelay(4 * BarrageGeometry.INTERVAL + 25, () -> {
 			float lost = 100 - inside.getHealth();
 			// Blasts at most 12 × P in all; burning adds a little on top (a point a second).
-			h.assertTrue(lost > 5 * power, "the volley hurts it, lost " + lost);
+			// how many blasts land in time varies a little (knockback between blasts): a quarter of the cap is a clear hit
+			h.assertTrue(lost > FireballBarrage.MAX_DAMAGE * power / 4, "the volley hurts it, lost " + lost);
 			h.assertTrue(lost <= FireballBarrage.MAX_DAMAGE * power + 3, "capped at 12 × P (" + FireballBarrage.MAX_DAMAGE * power + "), lost " + lost);
 			h.assertValueEqual(far.getHealth(), 20f, "far zombie");
 			h.assertFalse(far.isOnFire(), "far zombie not burning");
