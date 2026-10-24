@@ -3,10 +3,12 @@
 	"package": "local.carter.office.mixin.client",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"CameraShakeMixin",
 		"CameraZoomMixin",
 		"DynamicFpsFocusMixin",
 		"EntityRendererNameTagMixin",
 		"GameRendererSkipWorldMixin",
+		"HitStopMixin",
 		"KeyMappingAccessor",
 		"MinecraftAttackMixin",
 		"MinecraftFrameMixin",
