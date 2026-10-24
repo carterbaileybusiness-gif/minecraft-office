@@ -38,6 +38,12 @@ import ScreenCaptureKit
             return bounds.isEmpty ? nil : (bounds, live.spec.width, live.spec.height)
         }
         input.mainBounds = { CGDisplayBounds(CGMainDisplayID()) }
+        CursorVeil.log = Log.write
+        input.cursorDisplays = { [weak self] in
+            guard let self else { return [] }
+            return self.displays.displays.map { (slot: $0.key, bounds: CGDisplayBounds($0.value.displayID), width: $0.value.spec.width,
+                                                  height: $0.value.spec.height) }
+        }
         launcher.send = { [weak self] message in self?.server.send(message) }
         launcher.display = { [weak self] slot in
             guard let live = self?.displays.displays[slot] else { return nil }
@@ -109,7 +115,7 @@ import ScreenCaptureKit
         case .zoomIn(let p): zoomIn(p)
         case .zoomOut: endZoom(notifyMod: false)
         case .requestPermissions: requestPermissions()
-        case .pointerDown, .pointerMove, .pointerUp, .click, .scroll, .exitTyping:
+        case .pointerDown, .pointerMove, .pointerUp, .click, .scroll, .exitTyping, .workBegin:
             if !AXIsProcessTrusted() { askAccessibilityOnce() }
             input.handle(message)
         case .listApps:
@@ -124,7 +130,7 @@ import ScreenCaptureKit
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
-             .apps, .icons, .appResult, .secureInput:
+             .apps, .icons, .appResult, .secureInput, .cursor:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
     }
@@ -155,6 +161,7 @@ import ScreenCaptureKit
                 return
             }
             guard self.displays.displayID(slot: spec.slot) == id else { return } // removed meanwhile
+            self.displays.arrange() // next to the main display, like monitors next to a laptop
             self.server.send(.display(DisplayPayload(slot: spec.slot, displayId: id, w: spec.width, h: spec.height)))
         }
     }

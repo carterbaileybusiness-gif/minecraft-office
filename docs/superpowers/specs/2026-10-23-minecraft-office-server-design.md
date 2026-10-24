@@ -150,6 +150,23 @@ extended screens, just like hooking up a laptop to monitors."
 - Minecraft defaults to a borderless window filling the screen (not macOS's separate full-screen Space, where the other
   windows aren't on the mirrored display).
 
+**Work mode — replaces "the crosshair is the mouse" while working (round 2, after Carter's play-test, ~22:30).**
+Carter: "when I clicked into the screen and moved my mouse, my entire minecraft screen would turn away, and the mouse in
+the screen wouldn't match with my cursor… it just didn't parity well at all." Ruling:
+1. A click on your own hologram enters **work mode** until **Esc** (the helper's tap swallows Esc as before; ⌘-Tab back
+   to Minecraft works too). The camera is frozen — the view never turns while working — and movement keys go to the app.
+2. The mouse drives the **real Mac cursor 1:1** (macOS acceleration, like a real mouse). The hologram shows exactly where
+   that cursor is (drawn from the helper's reported position, on the pixel a click goes to); the system cursor is hidden,
+   so no second cursor strays over Minecraft's view.
+3. Moving the cursor off the Mirror's edge carries it onto the adjacent Extend display (the helper places the Office
+   displays next to the main display in the arrangement), so dragging a window from the Mirror to an Extend screen is a
+   normal drag. Press / hold / release are the real button's: no synthetic drag machine that can drop or stick.
+4. Own screens must feel immediate: ≥30 fps and ≲100 ms (measured: 5 fps → 143 ms median; now 30 fps visible, 60 fps
+   while working → 38 / 30 ms median through the helper).
+5. Esc leaves work mode: Minecraft focused, mouse grabbed, camera turns again, its window normal.
+- Also: a Mirror starts **Private** (owner only; Extend / Window keep Public). The Dock shows the apps' own icons.
+- Windows keeps its current behaviour (zoom).
+
 ## 6. How the screens work (architecture)
 
 Three parts **(my call; based on research)**:

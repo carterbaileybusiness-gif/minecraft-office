@@ -43,7 +43,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * changes owner, or the player disconnects. Client thread only.
  *
  * <p>Default source: this computer's own capture ({@link Platform#newOwnSource}: the Mac helper with an adaptive rate,
- * {@link CaptureRate}: 5 fps while the hologram's front is on screen, 0 when not, 30 while zoomed in; or Windows'
+ * {@link CaptureRate}: 30 fps while the hologram's front is on screen, 0 when not, 60 while working / zoomed in; or Windows'
  * {@link JavaDesktopSource}, which paces itself under {@link #MAX_FPS}). With
  * {@code -Doffice.testPattern=true} (dev override) every own hologram shows a {@link TestPatternSource} at 30 fps
  * instead. Without either, own holograms are not fed.
@@ -172,7 +172,7 @@ public final class OwnScreens {
 			// Debounced (1 s) so sweeping the camera past a hologram doesn't STOP / CAPTURE the helper over and over.
 			int fps = adaptiveRate
 					? CaptureRate.fps(visibility.update(visible(camera, be.getBlockPos(), spec), System.nanoTime() / 1_000_000L),
-							HologramRenderer.isZoomed(id))
+							HologramRenderer.isZoomed(id) || local.carter.office.client.pointer.PointerClient.working())
 					: MAX_FPS;
 			if (adaptiveRate && shared(id)) {
 				// a source that paces itself (Windows: 10 fps, 30 while working) already runs fast enough to share

@@ -173,7 +173,8 @@ public class HologramEmitterBlock extends BaseEntityBlock {
 		HologramIndex index = HologramIndex.get(serverLevel.getServer());
 		// Every hologram is a new virtual display on the next free slot (Windows clients switch theirs to Mirror).
 		PlacementPlan.Choice choice = index.placementFor(owner);
-		HologramSpec spec = defaultSpec(owner, choice.displaySlot(), mount(state), yaw).withMode(choice.mode());
+		HologramSpec spec = defaultSpec(owner, choice.displaySlot(), mount(state), yaw).withMode(choice.mode())
+				.withPrivacy(HologramSpec.defaultPrivacy(choice.mode())); // a Mirror starts Private
 		be.initPlaced(spec, by.getName().getString(), online);
 		index.put(be.hologramId(), owner, serverLevel.dimension(), pos, spec.mode(), spec.displaySlot());
 	}

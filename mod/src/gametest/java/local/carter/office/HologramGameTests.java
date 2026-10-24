@@ -100,7 +100,7 @@ public class HologramGameTests {
 		h.assertValueEqual(s.owner(), a.getUUID(), "owner");
 		h.assertValueEqual(s.shape(), Shape.WIDE_16_9, "shape");
 		h.assertValueEqual(s.mode(), Mode.MIRROR, "mode (the first hologram is your own screen, spec 5.10)");
-		h.assertValueEqual(s.privacy(), Privacy.PUBLIC, "privacy");
+		h.assertValueEqual(s.privacy(), Privacy.PRIVATE, "privacy (a Mirror starts Private: it shows your whole screen)");
 		h.assertValueEqual(s.width(), 2.0, "width");
 		h.assertValueEqual(s.displaySlot(), 1, "displaySlot");
 		h.assertTrue(s.windowKey() == null, "windowKey null");
@@ -131,6 +131,8 @@ public class HologramGameTests {
 		h.assertValueEqual(third.mode(), Mode.EXTEND, "third: Extend");
 		h.assertValueEqual(third.displaySlot(), 3, "third: display 3");
 		h.assertValueEqual(friends.mode(), Mode.MIRROR, "another player's first hologram mirrors their screen");
+		h.assertValueEqual(first.privacy(), Privacy.PRIVATE, "the Mirror starts Private");
+		h.assertValueEqual(second.privacy(), Privacy.PUBLIC, "an Extend screen starts Public, as before");
 		// Settings can still switch any of them; the index remembers it for the next placement.
 		BlockPos firstAbs = h.absolutePos(new BlockPos(1, 1, 1));
 		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(firstAbs, first.shape(), Mode.WINDOW, first.privacy(),

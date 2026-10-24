@@ -178,26 +178,26 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
      "Private" panel), or **Show to...** (pick specific players).
    - **Remove** to pick it back up.
 5. **Move it.** Hold **Shift**, then right-click the hologram and drag. **Scroll** while dragging to rotate it.
-6. **Use it (Mac).** With an empty hand (or anything but an emitter), look at your hologram: Minecraft's crosshair
-   is the mouse, on your Mirror and on every Extend screen:
-   - **Left-click** clicks there, **right-click** right-clicks there. Nothing in the world is broken or placed.
-   - **Hold left-click and turn your head** to drag: select text, move a window, even carry it over to another
-     hologram, like between real monitors.
-   - **Scroll** scrolls the app you aim at (your hotbar stays).
-   - **Clicking into an app lets you type:** Minecraft stands still and shows "Typing — Esc to return". Press **Esc**
-     (the app never gets it) or click back into Minecraft to look around again. On your **Mirror**, use **Esc** or
-     **⌘-Tab** back to Minecraft (clicks go through Minecraft to your apps while you type there). In a **password
-     field** macOS hides Esc from everyone: Minecraft says so; press **⌘-Tab**. Switching to any other app also ends
-     typing.
+6. **Use it (Mac): work mode.** With an empty hand (or anything but an emitter), **click** your hologram (your Mirror
+   or any Extend screen). You are now working on your Mac: Minecraft shows "Working on your Mac — Esc (or ⌘-Tab) to
+   return", the view stops turning, and **your mouse is your Mac's mouse**, starting where you clicked. The hologram
+   shows the cursor right where it is.
+   - Click, right-click, drag, select and type exactly as on a real Mac. Your keys go to the app.
+   - **Move the cursor off the edge of your Mirror** and it continues onto the Extend screen next to it, like a laptop
+     next to its monitor. So to move a window to another screen, drag its title bar over the edge.
+   - Press **Esc** (the app never gets it) or **⌘-Tab** back to Minecraft to look around again. In a **password
+     field** macOS hides Esc from everyone: Minecraft says so; press **⌘-Tab**.
+   - Not working: **scroll** while aiming at a screen scrolls the app there (your hotbar stays).
    - The Mirror needs Minecraft in a window: if you turned on Fullscreen in Options → Video, turn it off (Minecraft
      then fills the screen as a borderless window); chat reminds you.
-   - Your windows stay where they are when you join or leave. To put one on another screen, **drag its title bar**
-     from your Mirror onto an Extend hologram, just like onto a real monitor.
+   - Your windows stay where they are when you join or leave.
    - **The mini Dock** along the bottom of each Extend hologram (only you see it): click Chrome, Safari, Finder,
      Notes, Terminal, Claude, ChatGPT, Music or YouTube and it opens on that screen (only apps you have are shown).
      **All apps** (the grid) searches every app on your Mac.
-   - While you use your Mirror, Minecraft lets your clicks through to the apps under it and stays on top; if you switch
-     to another app yourself (Cmd-Tab), Minecraft steps back as usual.
+   - While you work, Minecraft stays on top of your apps and lets your clicks through to them; after Esc it is a normal
+     window again.
+   - Your **Mirror starts Private** (only you see it: it shows your whole screen). Make it Public in its settings if
+     you want friends to see it.
 7. **Work on it (Windows).** **Click your hologram.** The camera zooms in until it fills your view, and your real
    mouse and keyboard now control your real computer. On a **Mirror** hologram, Minecraft is minimized and you are
    simply on your normal desktop. **Double-tap Esc**, or click back into Minecraft (taskbar), to come back. Backup:

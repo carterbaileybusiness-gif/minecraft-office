@@ -33,7 +33,6 @@ import local.carter.office.client.zoom.ZoomClient;
 import local.carter.office.client.zoom.ZoomController;
 import local.carter.office.client.helper.HelperProtocol.PointerButton;
 import local.carter.office.client.pointer.PointerClient;
-import local.carter.office.client.pointer.PointerGesture;
 import local.carter.office.client.pointer.PointerPoint;
 import local.carter.office.client.pointer.PointerPort;
 import local.carter.office.client.pointer.TypingScreen;
@@ -495,8 +494,8 @@ public class HologramClientGameTests implements FabricClientGameTest {
 	private static final class FakePointer implements PointerPort {
 		final java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
 		java.util.function.Consumer<String> typingExit = r -> {};
-		java.util.function.Consumer<String> dragEnded = r -> {};
 		java.util.function.Consumer<Boolean> secureInput = on -> {};
+		volatile int[] cursor;
 
 		@Override
 		public String problem() {
@@ -504,23 +503,13 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		}
 
 		@Override
-		public void pointerDown(final PointerPoint p) {
-			calls.add("down " + p.slot());
+		public void workBegin(final PointerPoint p, final PointerButton button) {
+			calls.add("work " + button + " " + p.slot() + " " + p.x() + "," + p.y());
 		}
 
 		@Override
-		public void pointerMove(final PointerPoint p) {
-			calls.add("move " + p.slot() + " " + p.x() + "," + p.y());
-		}
-
-		@Override
-		public void pointerUp(final PointerPoint p) {
-			calls.add("up");
-		}
-
-		@Override
-		public void click(final PointerPoint p, final PointerButton button) {
-			calls.add("click " + button + " " + p.slot() + " " + p.x() + "," + p.y());
+		public int[] workCursor() {
+			return cursor;
 		}
 
 		@Override
@@ -536,11 +525,6 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		@Override
 		public void onTypingExit(final java.util.function.Consumer<String> listener) {
 			typingExit = listener;
-		}
-
-		@Override
-		public void onDragEnded(final java.util.function.Consumer<String> listener) {
-			dragEnded = listener;
 		}
 
 		@Override
@@ -568,10 +552,12 @@ public class HologramClientGameTests implements FabricClientGameTest {
 	}
 
 	/**
-	 * Mac in-world use with a fake helper: a left click on your own Extend hologram is a CLICK there (typing mode opens,
-	 * the helper's TYPING_EXIT closes it), holding and turning is POINTER_DOWN + POINTER_MOVE, the wheel scrolls the app
-	 * not the hotbar, the Dock's icons open apps (OPEN_APP) and its "All apps" the search, a click on a Mirror makes
-	 * Minecraft click-through and goes to slot 0, and the stone right behind the hologram is never broken.
+ * Mac in-world use with a fake helper. Work mode (spec 5.10 round 2): a left click on your own Extend hologram makes
+	 * Minecraft floating + click-through, then WORK_BEGIN at that pixel; the hint screen freezes the camera (no turning
+	 * however the mouse moves) and the real cursor the helper reports is drawn on that hologram where it is; Esc
+	 * (TYPING_EXIT) brings back the camera and a normal window. A right click is work mode with a right press. The wheel
+	 * scrolls the app, not the hotbar; the Dock's icons open apps (OPEN_APP) and "All apps" the search; the Mirror's
+	 * work mode is on slot 0; the stone right behind the hologram is never broken.
 	 */
 	private void inWorldPointer(final ClientGameTestContext context, final TestSingleplayerContext sp) {
 		FakePointer fake = new FakePointer();
@@ -607,38 +593,69 @@ public class HologramClientGameTests implements FabricClientGameTest {
 						+ " (hologram centre " + hologramCenter(spec) + ", emitter " + emitter + ")");
 			}
 
-			// 1. a click: CLICK at the middle of display 1, typing mode, nothing broken
+			// 1. work mode: a click on display 1's hologram → floating + click-through first, then WORK_BEGIN at its middle
+			fake.calls.clear();
 			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
 			context.waitTicks(5);
-			String click = fake.calls.stream().filter(c -> c.startsWith("click")).findFirst().orElse(null);
-			if (click == null || !click.startsWith("click LEFT 1 ")) {
-				throw new AssertionError("left click should send CLICK on display 1, sent " + fake.calls);
+			int layered = fake.calls.indexOf("layer floating click-through");
+			int work = indexOfNear(fake.calls, "work LEFT 1", 960, 540);
+			if (layered < 0 || work < 0 || layered > work) {
+				throw new AssertionError("a click should make Minecraft click-through, then WORK_BEGIN on display 1's middle, sent " + fake.calls);
 			}
-			if (!context.computeOnClient(mc -> mc.gui.screen() instanceof TypingScreen)) {
-				throw new AssertionError("typing mode should show its hint screen");
+			if (!context.computeOnClient(mc -> mc.gui.screen() instanceof TypingScreen)
+					|| !PointerClient.WORK_HINT.equals(context.computeOnClient(mc -> PointerClient.typingHint()))) {
+				throw new AssertionError("work mode shows its hint screen: \"" + PointerClient.WORK_HINT + "\"");
 			}
-			context.takeScreenshot("pointer-typing");
+			// the camera is frozen: moving the mouse turns nothing
+			float yaw0 = context.computeOnClient(mc -> mc.player.getYRot());
+			float pitch0 = context.computeOnClient(mc -> mc.player.getXRot());
+			context.getInput().moveCursor(240, 120);
+			context.waitTicks(5);
+			float yaw1 = context.computeOnClient(mc -> mc.player.getYRot());
+			float pitch1 = context.computeOnClient(mc -> mc.player.getXRot());
+			if (yaw1 != yaw0 || pitch1 != pitch0) {
+				throw new AssertionError("the camera must not turn while working: yaw " + yaw0 + " → " + yaw1 + ", pitch " + pitch0 + " → " + pitch1);
+			}
+			// the real cursor the helper reports is drawn where it is: on display 1 at (1440, 270) = u 0.75, v 0.25
+			fake.cursor = new int[] {1, 1440, 270, 1920, 1080};
+			context.waitTicks(3);
+			double[] drawn = context.computeOnClient(mc -> PointerClient.cursorOn(clientHologram(mc).spec()));
+			if (drawn == null || Math.abs(drawn[0] - 1440.5 / 1920) > 1e-6 || Math.abs(drawn[1] - 270.5 / 1080) > 1e-6) {
+				throw new AssertionError("the cursor should be drawn at the helper's position, was " + java.util.Arrays.toString(drawn));
+			}
+			context.takeScreenshot("pointer-work-cursor");
+			fake.cursor = new int[] {-1, 0, 0, 0, 0}; // moved onto another monitor
+			context.waitTicks(2);
+			if (context.computeOnClient(mc -> PointerClient.cursorOn(clientHologram(mc).spec())) != null) {
+				throw new AssertionError("a cursor on another monitor isn't drawn on the hologram");
+			}
+			// Esc (the helper's TYPING_EXIT): the camera turns again, Minecraft's window is normal again, no cursor
 			context.runOnClient(mc -> fake.typingExit.accept("esc"));
 			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
+			context.waitTicks(3);
+			String lastLayer = fake.calls.stream().filter(c -> c.startsWith("layer")).reduce((a, b) -> b).orElse("");
+			if (!"layer normal".equals(lastLayer)) {
+				throw new AssertionError("after Esc Minecraft's window must be normal again, sent " + fake.calls);
+			}
+			fake.cursor = new int[] {1, 1440, 270, 1920, 1080};
+			if (context.computeOnClient(mc -> PointerClient.cursorOn(clientHologram(mc).spec())) != null) {
+				throw new AssertionError("no cursor is drawn outside work mode");
+			}
+			fake.cursor = null;
 
-			// 2. hold and turn: a drag the helper drives, never mining
+			// 2. a right click is work mode with a right press
 			fake.calls.clear();
 			look(context, hologramCenter(spec));
 			context.waitTicks(2);
-			context.getInput().holdMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.getInput().pressMouse(MOUSE_RIGHT);
+			context.waitTicks(5);
+			if (indexOfNear(fake.calls, "work RIGHT 1", 960, 540) < 0) {
+				throw new AssertionError("a right click should send WORK_BEGIN with the right button, sent " + fake.calls);
+			}
+			context.runOnClient(mc -> fake.typingExit.accept("minecraft")); // ⌘-Tab back to Minecraft
+			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
 			context.waitTicks(3);
 			Frame f = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), spec);
-			look(context, f.center().add(f.right().scale(f.w() * 0.3)));
-			context.waitTicks(10);
-			if (!fake.calls.contains("down 1") || fake.calls.stream().noneMatch(c -> c.startsWith("move 1 "))) {
-				throw new AssertionError("holding and turning should send POINTER_DOWN then POINTER_MOVE, sent " + fake.calls);
-			}
-			context.runOnClient(mc -> fake.dragEnded.accept("released"));
-			context.getInput().releaseMouse(InputConstants.MOUSE_BUTTON_LEFT);
-			context.waitTicks(3);
-			if (context.computeOnClient(mc -> PointerClient.gesture().state()) != PointerGesture.State.IDLE) {
-				throw new AssertionError("DRAG_ENDED should end the drag");
-			}
 
 			// 3. the wheel scrolls the app, not the hotbar
 			look(context, hologramCenter(spec));
@@ -661,7 +678,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
 			context.waitTicks(3);
 			if (!fake.calls.contains("open 1 com.google.Chrome") || fake.calls.contains("open without the Dock's band")
-					|| fake.calls.stream().anyMatch(c -> c.startsWith("click") || c.startsWith("down"))) {
+					|| fake.calls.stream().anyMatch(c -> c.startsWith("work"))) {
 				throw new AssertionError("a click on the Dock's Chrome icon should send OPEN_APP Chrome on display 1 and nothing else, sent " + fake.calls);
 			}
 			if (context.computeOnClient(mc -> mc.gui.screen() != null)) {
@@ -679,8 +696,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.runOnClient(mc -> mc.gui.setScreen(null));
 			context.waitTicks(3);
 
-			// 6. the Mirror (spec 5.10): a click goes to the main display (slot 0) with Minecraft made click-through first,
-			// and typing's end restores it
+			// 6. the Mirror (spec 5.10): work mode on the main display (slot 0), click-through first; Esc restores it
 			sp.getServer().runOnServer(server -> {
 				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
 				be.setSpec(be.spec().withMode(local.carter.office.core.Mode.MIRROR));
@@ -692,22 +708,18 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
 			context.waitTicks(5);
 			int through = fake.calls.indexOf("layer floating click-through");
-			// the centre of the 1920x1080 main display, give or take float rounding of the look ray
-			int mirrorClick = -1;
-			for (int i = 0; i < fake.calls.size(); i++) {
-				String[] c = fake.calls.get(i).split("[ ,]");
-				if (c.length == 5 && "click".equals(c[0]) && "LEFT".equals(c[1]) && "0".equals(c[2])
-						&& Math.abs(Integer.parseInt(c[3]) - 960) <= 2 && Math.abs(Integer.parseInt(c[4]) - 540) <= 2) {
-					mirrorClick = i;
-					break;
-				}
+			// the centre of the 1920x1080 picture of the main display, give or take float rounding of the look ray
+			int mirrorWork = indexOfNear(fake.calls, "work LEFT 0", 960, 540);
+			if (through < 0 || mirrorWork < 0 || through > mirrorWork) {
+				throw new AssertionError("a Mirror click should make Minecraft click-through, then WORK_BEGIN slot 0 at the centre, sent " + fake.calls);
 			}
-			if (through < 0 || mirrorClick < 0 || through > mirrorClick) {
-				throw new AssertionError("a Mirror click should make Minecraft click-through, then CLICK slot 0 at the centre, sent " + fake.calls);
+			fake.cursor = new int[] {0, 720, 450, 1440, 900}; // the real cursor in the middle of the laptop screen
+			context.waitTicks(2);
+			double[] onMirror = context.computeOnClient(mc -> PointerClient.cursorOn(clientHologram(mc).spec()));
+			if (onMirror == null || Math.abs(onMirror[0] - 720.5 / 1440) > 1e-6 || Math.abs(onMirror[1] - 450.5 / 900) > 1e-6) {
+				throw new AssertionError("on the Mirror the cursor is drawn at its share of the main display, was " + java.util.Arrays.toString(onMirror));
 			}
-			if (!PointerClient.MIRROR_TYPING_HINT.equals(context.computeOnClient(mc -> PointerClient.typingHint()))) {
-				throw new AssertionError("typing on the Mirror says Esc or ⌘-Tab returns");
-			}
+			fake.cursor = null;
 			context.runOnClient(mc -> fake.secureInput.accept(true)); // a password field: Esc can't be seen
 			context.waitTicks(2);
 			if (!PointerClient.PASSWORD_HINT.equals(context.computeOnClient(mc -> PointerClient.typingHint()))) {
@@ -719,7 +731,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.waitTicks(3);
 			String last = fake.calls.stream().filter(c -> c.startsWith("layer")).reduce((a, b) -> b).orElse("");
 			if (last.contains("click-through")) {
-				throw new AssertionError("after typing Minecraft must not stay click-through, sent " + fake.calls);
+				throw new AssertionError("after work mode Minecraft must not stay click-through, sent " + fake.calls);
 			}
 			sp.getServer().runOnServer(server -> {
 				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
@@ -775,6 +787,21 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			});
 			context.waitTicks(3);
 		}
+	}
+
+	/** Index of the first call "<prefix> x,y" with x, y within 2 of the expected pixel (float rounding of the look ray), or -1. */
+	private static int indexOfNear(final java.util.List<String> calls, final String prefix, final int x, final int y) {
+		for (int i = 0; i < calls.size(); i++) {
+			String c = calls.get(i);
+			if (!c.startsWith(prefix + " ")) {
+				continue;
+			}
+			String[] xy = c.substring(prefix.length() + 1).split(",");
+			if (xy.length == 2 && Math.abs(Integer.parseInt(xy[0]) - x) <= 2 && Math.abs(Integer.parseInt(xy[1]) - y) <= 2) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	/** The world point at the centre of a box of the hologram's picture ((u, v), v down). */

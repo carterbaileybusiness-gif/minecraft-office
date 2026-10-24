@@ -139,11 +139,15 @@ struct TypingMachine {
     private(set) var swallowingEscape = false
     /// The app being typed into (the one the click brought forward; nil = the first app activated after the click).
     private(set) var target: pid_t?
+    /// Work mode (spec 5.10 round 2): the player uses the Mac with the real mouse, so other apps coming forward is
+    /// normal; only Esc and Minecraft coming back end it.
+    private(set) var work = false
 
-    mutating func enter(target: pid_t? = nil) -> [Effect] {
+    mutating func enter(target: pid_t? = nil, work: Bool = false) -> [Effect] {
         guard !active else { return [] }
         active = true
         self.target = target
+        self.work = work
         return swallowingEscape ? [] : [.armTap]
     }
 
@@ -154,6 +158,7 @@ struct TypingMachine {
     mutating func appActivated(pid: pid_t, isMinecraft: Bool) -> [Effect] {
         guard active else { return [] }
         if isMinecraft { return minecraftActivated() }
+        if work { return [] } // working on the Mac: clicking into another app is just using it
         guard let target else { self.target = pid; return [] }
         if pid == target { return [] }
         active = false
@@ -228,4 +233,45 @@ struct SecureInputWatch: Equatable {
 
     /// Typing ended: the next session starts from "off" (the mod forgets it when typing ends).
     mutating func reset() { reported = false }
+}
+
+/// Work mode: where the real cursor is, for the hologram that shows that display (pure). Slot 0 = the main display (the
+/// Mirror), in its points; slots 1-4 = virtual displays, in their pixels (what the hologram's picture is made of), so the
+/// drawn cursor lands on the pixel the click goes to. Off all of them (another physical display): slot -1.
+enum CursorLocator {
+    static func locate(_ p: CGPoint, main: CGRect, displays: [(slot: Int, bounds: CGRect, width: Int, height: Int)]) -> CursorPayload {
+        if main.contains(p) {
+            return CursorPayload(slot: PointerTarget.mainSlot, x: Int((p.x - main.minX).rounded(.down)), y: Int((p.y - main.minY).rounded(.down)),
+                                 w: Int(main.width), h: Int(main.height))
+        }
+        for d in displays where d.bounds.contains(p) {
+            let x = Int(((p.x - d.bounds.minX) * Double(d.width) / d.bounds.width).rounded(.down))
+            let y = Int(((p.y - d.bounds.minY) * Double(d.height) / d.bounds.height).rounded(.down))
+            return CursorPayload(slot: d.slot, x: min(x, d.width - 1), y: min(y, d.height - 1), w: d.width, h: d.height)
+        }
+        return CursorPayload(slot: -1, x: 0, y: 0, w: 0, h: 0)
+    }
+}
+
+/// Where the Office displays sit in the display arrangement (pure): in slot order in a row along the main display's top
+/// edge, starting at its right edge — so moving the cursor off the Mirror's right edge carries it onto display 1, like a
+/// laptop and its monitors. If another display (a real monitor) already touches the main display's right edge, the row
+/// goes to its left instead (display 1 next to the main display's left edge).
+enum DisplayArrangement {
+    static func origins(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)]) -> [Int: CGPoint] {
+        let sorted = ours.sorted { $0.slot < $1.slot }
+        let totalWidth = sorted.reduce(0) { $0 + $1.size.width }
+        let height = sorted.map(\.size.height).max() ?? 0
+        let rightBand = CGRect(x: main.maxX, y: main.minY, width: max(totalWidth, 1), height: max(height, 1))
+        let rightFree = !others.contains { $0.intersects(rightBand) || ($0.minX == main.maxX && $0.maxY > main.minY && $0.minY < main.maxY) }
+        var out: [Int: CGPoint] = [:]
+        if rightFree {
+            var x = main.maxX
+            for d in sorted { out[d.slot] = CGPoint(x: x, y: main.minY); x += d.size.width }
+        } else {
+            var x = main.minX
+            for d in sorted { x -= d.size.width; out[d.slot] = CGPoint(x: x, y: main.minY) }
+        }
+        return out
+    }
 }

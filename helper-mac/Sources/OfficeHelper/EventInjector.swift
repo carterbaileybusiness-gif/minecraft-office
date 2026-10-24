@@ -135,3 +135,43 @@ enum EventInjector {
         return true
     }
 }
+
+@_silgen_name("_CGSDefaultConnection") private func _CGSDefaultConnection() -> Int32
+@_silgen_name("CGSSetConnectionProperty") private func CGSSetConnectionProperty(_ cid: Int32, _ target: Int32, _ key: CFString, _ value: CFTypeRef) -> Int32
+
+/// Hides the system cursor while the player works through a hologram (the hologram draws it instead, so no second
+/// cursor floats over Minecraft's view). A background app may only hide the cursor with the window server's
+/// "SetsCursorInBackground" connection property (the long-standing trick cursor-hiding utilities use). The hide is tied
+/// to this process's connection: if the helper dies, the cursor comes back by itself. Another app becoming active
+/// shows the cursor again (measured on macOS 26), so while hidden the helper re-asserts it on every app activation and
+/// once a second (`reassert`); `show` undoes every hide.
+@MainActor enum CursorVeil {
+    private(set) static var hidden = false
+    private static var hides = 0
+
+    static var log: (String) -> Void = { _ in }
+
+    static func hide() {
+        guard !hidden else { return }
+        let cid = _CGSDefaultConnection()
+        let set = CGSSetConnectionProperty(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        hidden = true
+        reassert()
+        log("cursor hidden (connection \(cid), background property \(set == 0 ? "set" : "error \(set)"))")
+    }
+
+    static func reassert() {
+        guard hidden else { return }
+        let result = CGDisplayHideCursor(CGMainDisplayID())
+        hides += 1
+        if result != .success { log("cursor hide failed: \(result.rawValue)") }
+    }
+
+    static func show() {
+        guard hidden else { return }
+        for _ in 0..<max(1, hides) { CGDisplayShowCursor(CGMainDisplayID()) }
+        log("cursor shown (\(hides) hides undone)")
+        hides = 0
+        hidden = false
+    }
+}

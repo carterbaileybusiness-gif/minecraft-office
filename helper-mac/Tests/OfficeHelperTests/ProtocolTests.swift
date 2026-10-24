@@ -55,6 +55,8 @@ enum ProtocolTests {
         ("icons", .icons(IconsPayload(icons: [AppIcon(bundle: "com.apple.Notes", png: "iVBORw0KGgo=")]))),
         ("app_result", .appResult(AppResultPayload(target: "com.apple.Notes", ok: true, message: "Notes is on screen 2"))),
         ("secure_input", .secureInput(SecureInputPayload(on: true))),
+        ("work_begin", .workBegin(PointerPayload(slot: 0, x: 960, y: 540, button: .left, w: 1920, h: 1080))),
+        ("cursor", .cursor(CursorPayload(slot: 1, x: 100, y: 200, w: 1920, h: 1080))),
     ]
 
     static func decodeAll(_ bytes: Data) throws -> [Message] {

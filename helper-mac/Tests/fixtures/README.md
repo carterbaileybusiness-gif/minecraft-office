@@ -47,6 +47,7 @@ Swift change alters them without the fixtures being committed.
 | `app_icons.bin` | APP_ICONS = 20 | `{"bundles":["com.apple.Notes","com.google.Chrome"],"size":64}` |
 | `open_app.bin` | OPEN_APP = 21 | `{"bottom":96,"bundle":"com.apple.Notes","slot":2}` (`bottom`: the Dock's band, display pixels) |
 | `open_app_url.bin` | OPEN_APP = 21 | `{"slot":1,"url":"https://www.youtube.com"}` |
+| `work_begin.bin` | WORK_BEGIN = 22 | `{"button":"left","h":1080,"slot":0,"w":1920,"x":960,"y":540}` |
 | `welcome.bin` | WELCOME = 64 | `{"accessibility":false,"screenRecording":true,"version":1}` |
 | `windows.bin` | WINDOWS = 65 | `[{"app":"Notes","h":600,"title":"Groceries — List","w":800,"windowKey":"com.apple.Notes\|4321"},{"app":"Safari","h":900,"title":"","w":1200,"windowKey":"com.apple.Safari\|99"}]` (the dash is U+2014, bytes `e2 80 94`) |
 | `display.bin` | DISPLAY = 66 | `{"displayId":5,"h":1080,"slot":1,"w":1920}` |
@@ -62,6 +63,7 @@ Swift change alters them without the fixtures being committed.
 | `icons.bin` | ICONS = 76 | `{"icons":[{"bundle":"com.apple.Notes","png":"iVBORw0KGgo="}]}` (`png`: base64 PNG bytes) |
 | `app_result.bin` | APP_RESULT = 77 | `{"message":"Notes is on screen 2","ok":true,"target":"com.apple.Notes"}` |
 | `secure_input.bin` | SECURE_INPUT = 78 | `{"on":true}` |
+| `cursor.bin` | CURSOR = 79 | `{"h":1080,"slot":1,"w":1920,"x":100,"y":200}` |
 
 (`\|` above is a table escape; the bytes contain a plain `|`.)
 
@@ -118,6 +120,18 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   - SCROLL: a real scroll-wheel event at the point, in pixels (`dy` > 0 = up); scrolling never activates an app. On
     slot 0 the (hidden) cursor is also put at the point, so a wheel event of the player's during Minecraft's
     click-through moment lands in the same app.
+- **Work mode** (spec 5.10 round 2; what the Mac mod uses now instead of CLICK / POINTER_DOWN): WORK_BEGIN `{slot, x,
+  y, button[, w, h]}` (slot 0 needs w, h) → the helper hides the system cursor (background-hide, re-asserted on every
+  app activation and ten times a second), warps the real cursor to the point, waits for click-through on slot 0, brings
+  the app there forward, then posts only a **down** if the physical button is still held (the hand finishes the press:
+  real drags, the real release) or a **click** if it is already up. From then on the real mouse drives the real cursor;
+  the helper reports where it is about 120 times a second while it moves: `CURSOR {slot, x, y, w, h}` (slot 0 = the main
+  display in points, 1–4 = an Office display in its pixels, -1 = another monitor). Esc (the tap) or Minecraft becoming
+  active end it (`TYPING_EXIT esc|minecraft`), other apps coming forward do not; EXIT_TYPING ends it from the mod. The
+  cursor shows again when it ends (and by itself if the helper dies). SECURE_INPUT is reported as for typing.
+- The Office displays are placed next to the main display (session-only display configuration): in slot order along its
+  top edge from its right edge, or from its left edge when a real monitor already touches its right edge, so the cursor
+  moves off the main display straight onto display 1. Display and Mirror captures leave the cursor out (the mod draws it).
 - Types 17 and 18 (WINDOWS_TO_DISPLAY / WINDOWS_BACK) are retired (spec 5.10: windows never move by themselves); they
   are unknown types now and close the connection like any other.
 - The mini Dock (spec 5.10):

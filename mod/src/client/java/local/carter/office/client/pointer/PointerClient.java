@@ -38,25 +38,24 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
 /**
- * In-world use of your own holograms (spec 5.9, 5.10, Mac): the crosshair is the mouse — Minecraft's own crosshair, no
- * cursor is drawn (Carter). Client thread only. Works on Extend holograms (virtual displays) and on the Mirror (the
- * laptop's main display): there Minecraft's window floats above the other apps and is click-through while you use it
- * ({@link MirrorWindow}), so the helper's events reach the app under it.
+ * Your own holograms in the world (spec 5.10, Mac). Client thread only.
  *
  * <ul>
- * <li>Aimed at your own Extend or Mirror hologram with no emitter in the main hand: the crosshair is the pointer.</li>
- * <li>The mini Dock along the bottom of each Extend hologram ({@link Dock}) takes clicks before the screen behind it:
- * an icon opens its app onto that screen, "All apps" opens a search ({@link AppSearchScreen}).</li>
- * <li>Left button: a click there, or, once the crosshair moves while it is held, a drag ({@link PointerGesture}): the
- * helper drives it and sends the physical mouse motion back, which turns your head here ({@link #frame}); a drag
- * carries on across holograms. Blocks are never broken while aimed at a hologram or during a press or drag
- * ({@code MinecraftAttackMixin}).</li>
- * <li>Right button: a right-click there. Wheel: scrolls the app there (Fabric's hotbar-scroll event; the slot stays).</li>
- * <li>A click enters typing mode ({@link TypingMode}, {@link TypingScreen}): the app has the keyboard, Minecraft stands
- * still and says "Typing — Esc to return"; Esc (swallowed by the helper) or clicking back into Minecraft returns.</li>
+ * <li><b>Work mode</b> (round 2, Carter: "like hooking up a laptop to monitors"): a click (left or right) on your own
+ * Mirror or Extend hologram with no emitter in the main hand puts the real Mac cursor at that point and hands it the
+ * real mouse, 1:1 with macOS's own acceleration, until Esc. The camera is frozen and Minecraft stands still (a hint
+ * screen is open; Minecraft isn't the active app, so keys go to the app). Press, hold, drag and release are the real
+ * button's; moving off the Mirror's edge goes onto the Office display next to it (the helper arranges them), so a
+ * window drags from the Mirror onto an Extend screen like onto a real monitor. The hologram that shows the cursor's
+ * display draws the cursor where the helper reports it ({@link #cursorOn}); the system cursor itself is hidden.
+ * Minecraft's window floats above the apps and is click-through while working ({@link MirrorWindow}); Esc (swallowed by
+ * the helper) or ⌘-Tab back to Minecraft ends it: focus, mouse grab, mouse-look and a normal window come back.</li>
+ * <li>Outside work mode the crosshair is aimed with: the mini Dock along the bottom of each Extend hologram ({@link
+ * Dock}) opens apps onto that screen, "All apps" opens a search ({@link AppSearchScreen}); the wheel scrolls the app
+ * under the crosshair (the hotbar slot stays). Blocks behind a hologram are never broken ({@code MinecraftAttackMixin}).</li>
  * <li>One-window holograms are view-only: a click says so. An emitter in the main hand keeps editing.</li>
  * </ul>
- * While typing or dragging, Minecraft keeps running unfocused (pauseOnLostFocus off in memory, AFK limit kept awake).
+ * While working, Minecraft keeps running unfocused (pauseOnLostFocus off in memory, AFK limit kept awake).
  */
 public final class PointerClient {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
@@ -68,42 +67,6 @@ public final class PointerClient {
 
 	private @Nullable PointerPort override;
 	private boolean listening;
-	private final PointerGesture gesture = new PointerGesture(new PointerGesture.Out() {
-		@Override
-		public void down(final PointerPoint p) {
-			PointerPort port = port();
-			if (port != null) {
-				if (p.onMain()) {
-					throughMirror(); // before the helper posts its down at the main display
-				}
-				port.pointerDown(p);
-			}
-		}
-
-		@Override
-		public void move(final PointerPoint p) {
-			PointerPort port = port();
-			if (port != null) {
-				if (p.onMain() && !mirror.clickThrough(Util.getMillis())) {
-					throughMirror(); // a drag from an Extend screen onto the Mirror: drops land in the app under Minecraft
-				}
-				port.pointerMove(p);
-			}
-		}
-
-		@Override
-		public void up(final PointerPoint p) {
-			PointerPort port = port();
-			if (port != null) {
-				port.pointerUp(p);
-			}
-		}
-
-		@Override
-		public void click(final PointerPoint p, final PointerButton button) {
-			clicked(p, button);
-		}
-	});
 	private final TypingMode typing = new TypingMode(new TypingMode.Env() {
 		@Override
 		public void showHint() {
@@ -147,9 +110,10 @@ public final class PointerClient {
 	/** The layer last applied to Minecraft's window (null: none yet, or the last try failed), and the focus it was for. */
 	private MirrorWindow.@Nullable Layer applied;
 	private boolean appliedFocus;
-	/** This typing session is in an app on the Mirror (the hint says ⌘-Tab works too); secure input is on in it. */
-	private boolean typingOnMirror;
+	/** Secure input (a password field) is on while working: Esc can't be seen, ⌘-Tab still returns. */
 	private boolean secureInput;
+	/** The real cursor while working (helper's CURSOR), or null. */
+	private int @Nullable [] cursor;
 	private boolean regrabWhenFocused;
 	private double scrollX;
 	private double scrollY;
@@ -186,20 +150,12 @@ public final class PointerClient {
 		port.onTypingExit(reason -> {
 			boolean was = typing.active();
 			typing.helperExited();
-			mirror.interactionEnded();
+			workEnded();
 			if (was) {
-				LOGGER.info("Typing: back to the game ({})", reason);
+				LOGGER.info("Work mode: back to the game ({})", reason);
 				if (HELPER_GONE.equals(reason)) {
-					bringBack(); // the helper died while typing: nobody re-activates Minecraft for us
+					bringBack(); // the helper died while working: nobody re-activates Minecraft for us
 				}
-			}
-		});
-		port.onDragEnded(reason -> {
-			boolean was = gesture.state() == PointerGesture.State.DRAGGING;
-			dragEnded();
-			mirror.interactionEnded();
-			if (was && "cancelled".equals(reason)) {
-				bringBack(); // a drag cancelled (helper gone, or the mod's POINTER_UP): make sure Minecraft has the mouse
 			}
 		});
 		port.onSecureInput(on -> {
@@ -219,10 +175,11 @@ public final class PointerClient {
 		});
 	}
 
-	/** A click or drag on the Mirror is about to reach the helper: Minecraft's window lets it through, now. */
-	private void throughMirror() {
-		mirror.mirrorPressed();
-		applyWindow(Util.getMillis());
+	/** Work mode is over (any way): Minecraft's window back to normal on the next frame, no cursor drawn. */
+	private void workEnded() {
+		mirror.workEnded();
+		secureInput = false;
+		cursor = null;
 	}
 
 	/**
@@ -236,24 +193,34 @@ public final class PointerClient {
 		}
 		Minecraft mc = Minecraft.getInstance();
 		boolean focused = mc.isWindowActive();
-		MirrorWindow.Layer layer = mirror.layer(now, focused, gesture.busy() || typing.active());
+		MirrorWindow.Layer layer = mirror.layer(now);
 		if (!layer.equals(applied) || focused != appliedFocus) {
 			applied = port.windowLayerApplied(layer.floating(), layer.clickThrough()) ? layer : null;
 			appliedFocus = focused;
 		}
 	}
 
-	/** The typing hint: Mirror typing says ⌘-Tab works too; a password field (secure input) hides Esc. */
+	/** The work-mode hint; a password field (secure input) hides Esc, so then it says ⌘-Tab. */
 	public static String typingHint() {
-		PointerClient c = INSTANCE;
-		if (c.secureInput) {
-			return PASSWORD_HINT;
-		}
-		return c.typingOnMirror ? MIRROR_TYPING_HINT : TypingScreen.HINT;
+		return INSTANCE.secureInput ? PASSWORD_HINT : WORK_HINT;
 	}
 
-	public static final String MIRROR_TYPING_HINT = "Typing — Esc or ⌘-Tab to return";
+	public static final String WORK_HINT = "Working on your Mac — Esc (or ⌘-Tab) to return";
 	public static final String PASSWORD_HINT = "Password field: press ⌘-Tab to return";
+
+	/** In work mode right now (own screens then capture faster). */
+	public static boolean working() {
+		return INSTANCE.typing.active();
+	}
+
+	/**
+	 * Where to draw the real cursor on a hologram drawn with {@code spec} this frame: {u, v} of its picture, or null
+	 * (not working, or the cursor is on another screen). Only the owner's client calls this.
+	 */
+	public static double @Nullable [] cursorOn(final HologramSpec spec) {
+		PointerClient c = INSTANCE;
+		return c.typing.active() ? WorkCursor.on(spec, c.cursor) : null;
+	}
 
 	/** TYPING_EXIT reason the mod reports for itself when the helper disconnects mid-typing. */
 	public static final String HELPER_GONE = "helper";
@@ -280,17 +247,13 @@ public final class PointerClient {
 		return port() != null;
 	}
 
-	public static PointerGesture gesture() {
-		return INSTANCE.gesture;
-	}
-
 	public static TypingMode typing() {
 		return INSTANCE.typing;
 	}
 
 	// ---------------------------------------------------------------- per frame (MinecraftFrameMixin)
 
-	/** Once per frame: head turn from a helper-driven drag, then where the crosshair points. */
+	/** Once per frame: where the crosshair points, the real cursor while working, Minecraft's window layer. */
 	public static void frame() {
 		INSTANCE.onFrame();
 	}
@@ -303,21 +266,15 @@ public final class PointerClient {
 			aim = null;
 			return;
 		}
-		if (gesture.state() == PointerGesture.State.DRAGGING) {
-			int[] d = port.drainDragDelta();
-			if (d[0] != 0 || d[1] != 0) {
-				turn(mc, d[0], d[1]); // Minecraft has no mouse now: the helper's physical motion turns the head
-			}
-		}
-		if (typing.active() || gesture.busy()) {
+		if (typing.active()) {
 			mc.getFramerateLimitTracker().onInputReceived(); // input goes to the computer: no AFK frame-rate drop
+			cursor = port.workCursor();
 		}
 		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
 		Aim a = typing.active() ? null : computeAim(mc, partial);
 		aim = a;
 		long now = Util.getMillis();
-		gesture.aim(a == null ? null : a.point(), now);
-		int hover = a == null || gesture.busy() ? -1 : dockIndex(a, port);
+		int hover = a == null ? -1 : dockIndex(a, port);
 		dockHologram = hover >= 0 ? a.be().hologramId() : null;
 		dockHover = hover;
 		applyWindow(now);
@@ -368,15 +325,6 @@ public final class PointerClient {
 		LOGGER.info("Dock: {} onto display {}", item.bundle() != null ? item.bundle() : item.url(), slot);
 	}
 
-	/** Vanilla's mouse-look with the helper's deltas (points, like SDL's relative motion). */
-	private static void turn(final Minecraft mc, final int dx, final int dy) {
-		double ss = mc.options.sensitivity().get() * 0.6 + 0.2;
-		double sens = ss * ss * ss * 8.0;
-		double xo = dx * sens;
-		double yo = dy * sens;
-		mc.player.turn(mc.options.invertMouseX().get() ? -xo : xo, mc.options.invertMouseY().get() ? -yo : yo);
-	}
-
 	private static @Nullable Aim computeAim(final Minecraft mc, final float partial) {
 		LocalPlayer player = mc.player;
 		if (player == null || mc.gui.screen() != null || holdingEmitter(player)) {
@@ -414,14 +362,15 @@ public final class PointerClient {
 
 	/**
 	 * The attack key was pressed ({@code Minecraft.startAttack}). True = it was for a hologram: vanilla must not attack.
-	 * Any hologram in front swallows it (never break the block behind a screen); your own Extend hologram starts a press.
+	 * Any hologram in front swallows it (never break the block behind a screen); on your own one it is the Dock's, or it
+	 * starts work mode with a left press there.
 	 */
 	public static boolean onAttack(final Minecraft mc) {
 		LocalPlayer player = mc.player;
 		if (player == null || mc.level == null) {
 			return false;
 		}
-		if (INSTANCE.gesture.busy() || INSTANCE.typing.active()) {
+		if (INSTANCE.typing.active()) {
 			return true;
 		}
 		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
@@ -444,14 +393,14 @@ public final class PointerClient {
 		}
 		PointerPoint p = usable(player, a, port);
 		if (p != null) {
-			INSTANCE.gesture.press(p, Util.getMillis());
+			INSTANCE.work(p, PointerButton.LEFT);
 		}
 		return true;
 	}
 
-	/** {@code Minecraft.continueAttack}: never mine while pressing or dragging on a hologram, or aiming at one. */
+	/** {@code Minecraft.continueAttack}: never mine while working, or aiming at a hologram. */
 	public static boolean blocksAttack(final Minecraft mc) {
-		if (INSTANCE.gesture.busy() || INSTANCE.typing.active()) {
+		if (INSTANCE.typing.active()) {
 			return true;
 		}
 		return mc.player != null && inFront(mc, mc.getDeltaTracker().getGameTimeDeltaPartialTick(true)).isPresent();
@@ -459,7 +408,7 @@ public final class PointerClient {
 
 	/**
 	 * Right-click on your own hologram without an emitter in the main hand, where in-world use is available. Always
-	 * consumed: a right-click there, or a note why not.
+	 * consumed: work mode with a right-click there, or a note why not.
 	 */
 	public static boolean onUse(final Minecraft mc, final HologramBlockEntity be) {
 		LocalPlayer player = mc.player;
@@ -467,7 +416,7 @@ public final class PointerClient {
 		if (player == null || port == null) {
 			return false;
 		}
-		if (INSTANCE.gesture.busy() || INSTANCE.typing.active()) {
+		if (INSTANCE.typing.active()) {
 			return true;
 		}
 		Aim a = computeAim(mc, mc.getDeltaTracker().getGameTimeDeltaPartialTick(true));
@@ -476,7 +425,7 @@ public final class PointerClient {
 		}
 		PointerPoint p = usable(player, a, port);
 		if (p != null) {
-			INSTANCE.gesture.rightClick(p);
+			INSTANCE.work(p, PointerButton.RIGHT);
 		}
 		return true;
 	}
@@ -532,30 +481,22 @@ public final class PointerClient {
 		return true;
 	}
 
-	private void clicked(final PointerPoint p, final PointerButton button) {
+	/** Work mode at {@code p}: the press there is the first thing the real mouse does on the Mac. */
+	private void work(final PointerPoint p, final PointerButton button) {
 		PointerPort port = port();
 		if (port == null) {
 			return;
 		}
-		// The hint screen first: it releases the mouse (Minecraft centres the cursor), then the helper's real click puts
-		// the cursor on the display and brings the app forward with the keyboard.
+		// The hint screen first: it releases the mouse (Minecraft centres the cursor and stops turning the camera), then
+		// Minecraft's window lets clicks through, then the helper puts the real cursor at the point and presses there.
 		typing.enter(Util.getMillis());
-		typingOnMirror = p.onMain();
 		secureInput = false;
-		if (p.onMain()) {
-			throughMirror(); // typing in an app under Minecraft: click-through until Esc / back in Minecraft
-		}
-		port.click(p, button);
-		LOGGER.info("Typing: {} click on display {} at {},{}", button.wire, p.slot(), p.x(), p.y());
-	}
-
-	private void dragEnded() {
-		if (gesture.state() == PointerGesture.State.DRAGGING) {
-			gesture.dragEnded();
-			Minecraft mc = Minecraft.getInstance();
-			mc.options.keyAttack.setDown(false); // the helper took the physical release; Minecraft never saw it
-			regrabWhenFocused = true;
-		}
+		cursor = null;
+		mirror.workBegan();
+		applyWindow(Util.getMillis());
+		port.workBegin(p, button);
+		Minecraft.getInstance().options.keyAttack.setDown(false); // the real button belongs to the Mac now
+		LOGGER.info("Work mode: {} at display {} {},{}", button.wire, p.slot(), p.x(), p.y());
 	}
 
 	// ---------------------------------------------------------------- tick
@@ -576,18 +517,12 @@ public final class PointerClient {
 		if (typing.active() && typing.state() == TypingMode.State.TYPING && screen != null && mc.gui.screen() != screen) {
 			typing.leave(); // another screen replaced the hint (death, a disconnect screen)
 		}
-		if (gesture.busy() && !mc.options.keyAttack.isDown()) {
-			gesture.release(active, now);
-		}
-		gesture.tick(now);
-		if (!gesture.busy() && !typing.active()) {
-			mirror.interactionEnded(); // every other way a drag or typing ended (timeouts, the hint replaced, focus back)
-			typingOnMirror = false;
-			secureInput = false;
+		if (!typing.active()) {
+			workEnded(); // every way work mode ended (Esc, focus back, timeouts, the hint replaced, the helper gone)
 		}
 		applyWindow(now);
-		pause.hold(mc, typing.active() || gesture.state() == PointerGesture.State.DRAGGING);
-		if (regrabWhenFocused && active && !typing.active() && !gesture.busy()) {
+		pause.hold(mc, typing.active());
+		if (regrabWhenFocused && active && !typing.active()) {
 			regrabWhenFocused = false;
 			if (mc.gui.screen() == null) {
 				// Minecraft lost focus with its mouse grabbed: grab again so mouse-look works at once
@@ -597,10 +532,10 @@ public final class PointerClient {
 		}
 	}
 
-	/** World left / port changed / game closing: release a drag, leave typing, restore pause-on-focus-loss and the window. */
+	/** World left / port changed / game closing: leave work mode, restore pause-on-focus-loss and the window. */
 	private void abort() {
-		gesture.cancel();
 		typing.leave();
+		cursor = null;
 		pause.hold(Minecraft.getInstance(), false);
 		mirror.leaveWorld();
 		PointerPort port = port();

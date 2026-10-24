@@ -127,6 +127,20 @@ class MacHelperInWorldTest {
 	}
 
 	@Test
+	void workModeGoesOutWithThePictureSizeOnTheMirrorAndTheNewestCursorIsKept() {
+		helper.workBegin(new PointerPoint(0, 960, 540, 1920, 1080), PointerButton.LEFT);
+		helper.workBegin(new PointerPoint(2, 10, 20), PointerButton.RIGHT);
+		assertEquals(List.of(new HelperProtocol.WorkBegin(0, 960, 540, PointerButton.LEFT, 1920, 1080),
+				new HelperProtocol.WorkBegin(2, 10, 20, PointerButton.RIGHT, null, null)), sentOf(HelperProtocol.WorkBegin.class));
+		assertNull(helper.cursor(), "no cursor until the helper reports one");
+		listener().message(new HelperProtocol.Cursor(2, 11, 21, 1920, 1080));
+		listener().message(new HelperProtocol.Cursor(2, 12, 22, 1920, 1080));
+		assertEquals(new HelperProtocol.Cursor(2, 12, 22, 1920, 1080), helper.cursor(), "the newest");
+		helper.workBegin(new PointerPoint(1, 5, 5), PointerButton.LEFT);
+		assertNull(helper.cursor(), "a new work session starts without the old cursor");
+	}
+
+	@Test
 	void dragDeltasAddUpUntilDrainedAndTypingAndDragEndsReachTheClientThread() {
 		List<String> events = new ArrayList<>();
 		helper.onTypingExit(reason -> events.add("typing " + reason));

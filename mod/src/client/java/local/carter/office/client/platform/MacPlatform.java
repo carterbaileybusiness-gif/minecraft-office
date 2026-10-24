@@ -191,23 +191,14 @@ public final class MacPlatform implements Platform {
 		}
 
 		@Override
-		public void pointerDown(final PointerPoint p) {
-			helper.pointerDown(p);
+		public void workBegin(final PointerPoint p, final PointerButton button) {
+			helper.workBegin(p, button);
 		}
 
 		@Override
-		public void pointerMove(final PointerPoint p) {
-			helper.pointerMove(p);
-		}
-
-		@Override
-		public void pointerUp(final PointerPoint p) {
-			helper.pointerUp(p);
-		}
-
-		@Override
-		public void click(final PointerPoint p, final PointerButton button) {
-			helper.click(p, button);
+		public int @Nullable [] workCursor() {
+			HelperProtocol.Cursor c = helper.cursor();
+			return c == null ? null : new int[] {c.slot(), c.x(), c.y(), c.w(), c.h()};
 		}
 
 		@Override
@@ -221,18 +212,8 @@ public final class MacPlatform implements Platform {
 		}
 
 		@Override
-		public int[] drainDragDelta() {
-			return helper.drainDragDelta();
-		}
-
-		@Override
 		public void onTypingExit(final java.util.function.Consumer<String> listener) {
 			helper.onTypingExit(listener);
-		}
-
-		@Override
-		public void onDragEnded(final java.util.function.Consumer<String> listener) {
-			helper.onDragEnded(listener);
 		}
 
 		@Override

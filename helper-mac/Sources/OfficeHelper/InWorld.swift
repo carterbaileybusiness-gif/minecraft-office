@@ -36,6 +36,11 @@ import CoreGraphics
     private var activationObserver: NSObjectProtocol?
     private var secure = SecureInputWatch()
     private var secureTimer: Timer?
+    private var cursorTimer: Timer?
+    private var lastCursor: CursorPayload?
+    private var cursorTicks = 0
+    /// The Office displays the cursor can be on (slot, bounds in points, pixel size).
+    var cursorDisplays: () -> [(slot: Int, bounds: CGRect, width: Int, height: Int)] = { [] }
 
     /// The one instance the C tap callbacks reach (they can't capture context).
     nonisolated(unsafe) static weak var current: InWorldInput?
@@ -71,6 +76,11 @@ import CoreGraphics
                 }
                 EventInjector.scrollHID(at: point, dx: Int32(clamping: p.dx), dy: Int32(clamping: p.dy))
             }
+        case .workBegin(let p):
+            guard let point = point(p), let button = p.button else { return }
+            if drag.isActive { perform(drag.cancel()) }
+            if typing.active { return } // already working: the real mouse is in charge
+            beginWork(at: point, button: button, slot: p.slot)
         case .exitTyping:
             perform(typing.exit())
         default:
@@ -82,6 +92,7 @@ import CoreGraphics
     func shutdown() {
         if drag.isActive { perform(drag.cancel().filter { $0 != .activateMinecraft }) }
         perform(typing.exit())
+        stopWorkExtras()
         disarmKeys()
         stopObservingMinecraft()
         if let mouseTap { CGEvent.tapEnable(tap: mouseTap, enable: false) }
@@ -144,6 +155,70 @@ import CoreGraphics
         }
     }
 
+    // MARK: Work mode (spec 5.10, round 2)
+
+    /// The player clicked their hologram: the real cursor goes to that point and the real mouse drives it from now on,
+    /// 1:1 with macOS's own acceleration, across the main display and the Office displays (they sit next to it in the
+    /// arrangement). The press itself is real: if the physical button is still down, only a down is posted at the point
+    /// and the physical mouse finishes it (real drags, the real release); if it is already up, a click. The system cursor
+    /// is hidden (the hologram draws it from CURSOR reports, so it can't stray over Minecraft's view), Esc (the tap) or
+    /// Minecraft coming back ends it.
+    private func beginWork(at point: CGPoint, button: PointerButton, slot: Int) {
+        clickWait += 1
+        let wait = clickWait
+        CursorVeil.hide()
+        CGAssociateMouseAndMouseCursorPosition(1)
+        CGWarpMouseCursorPosition(point)
+        whenReachable(point, slot: slot) { [weak self] in
+            guard let self, self.clickWait == wait else { return }
+            self.bringForward(under: point, isCurrent: { [weak self] in self?.clickWait == wait }) { [weak self] target in
+                guard let self else { return }
+                let held = CGEventSource.buttonState(.hidSystemState, button: EventInjector.cgButton(button))
+                EventInjector.postHID(.mouseMoved, at: point, button: .left, clickState: 0)
+                if held {
+                    EventInjector.postHID(EventInjector.downType(button), at: point, button: button) // the hand finishes it
+                } else {
+                    EventInjector.hidClick(at: point, button: button)
+                }
+                self.perform(self.typing.enter(target: target, work: true))
+                CursorVeil.reassert() // the click activated the app under it, which shows the cursor again
+                self.observeActivations()
+                self.watchSecureInput()
+                self.startCursorReports()
+                self.log("work: \(button) \(held ? "press" : "click") at \(Int(point.x)),\(Int(point.y)) slot \(slot)")
+            }
+        }
+    }
+
+    /// About 120 times a second while working: where the real cursor is, when it changed.
+    private func startCursorReports() {
+        cursorTimer?.invalidate()
+        lastCursor = nil
+        reportCursor()
+        cursorTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reportCursor() }
+        }
+    }
+
+    private func reportCursor() {
+        guard typing.active, typing.work else { stopWorkExtras(); return }
+        guard let location = CGEvent(source: nil)?.location else { return }
+        let here = CursorLocator.locate(location, main: mainBounds(), displays: cursorDisplays())
+        if here != lastCursor {
+            lastCursor = here
+            send(.cursor(here))
+        }
+        cursorTicks += 1
+        if cursorTicks % 12 == 0 { CursorVeil.reassert() } // ten times a second: an app setting its cursor (I-beam) shows it again
+    }
+
+    /// Work mode is over: the system cursor shows again, no more reports.
+    private func stopWorkExtras() {
+        cursorTimer?.invalidate(); cursorTimer = nil
+        lastCursor = nil
+        CursorVeil.show()
+    }
+
     /// While typing: report secure input going on / off (it hides Esc from the tap), twice a second.
     private func watchSecureInput() {
         secureTimer?.invalidate()
@@ -176,6 +251,7 @@ import CoreGraphics
         if !typing.active {
             stopObservingMinecraft()
             secureTimer?.invalidate(); secureTimer = nil
+            stopWorkExtras()
         }
     }
 
@@ -188,6 +264,7 @@ import CoreGraphics
             MainActor.assumeIsolated {
                 guard let self, let pid = app?.processIdentifier, pid != getpid() else { return }
                 self.perform(self.typing.appActivated(pid: pid, isMinecraft: pid == self.minecraftPid()))
+                if self.typing.active, self.typing.work { CursorVeil.reassert() } // an activation shows the cursor again
             }
         }
     }

@@ -78,6 +78,32 @@ import CoreGraphics
 
     func removeAll() { for slot in Array(displays.keys) { remove(slot: slot) } }
 
+    /// Puts the Office displays next to the main display (DisplayArrangement) for this login session, when they aren't
+    /// there already. Other displays are never moved.
+    func arrange() {
+        let main = CGDisplayBounds(CGMainDisplayID())
+        let ourIDs = Set(displays.values.map(\.displayID))
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetOnlineDisplayList(count, &ids, &count)
+        let others = ids.prefix(Int(count)).filter { $0 != CGMainDisplayID() && !ourIDs.contains($0) }.map { CGDisplayBounds($0) }
+        let ours = displays.map { (slot: $0.key, size: CGSize(width: $0.value.spec.width, height: $0.value.spec.height)) }
+        let wanted = DisplayArrangement.origins(main: main, others: others, ours: ours)
+        let moves = wanted.filter { slot, origin in
+            guard let id = displays[slot]?.displayID else { return false }
+            return CGDisplayBounds(id).origin != origin
+        }
+        guard !moves.isEmpty else { return }
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+        for (slot, origin) in moves {
+            if let id = displays[slot]?.displayID { CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y)) }
+        }
+        let result = CGCompleteDisplayConfiguration(config, .forSession)
+        log("arranged \(moves.keys.sorted()) next to the main display: \(result == .success ? "ok" : "error \(result.rawValue)")")
+    }
+
     static func isOnline(_ id: CGDirectDisplayID) -> Bool {
         var count: UInt32 = 0
         guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return false }

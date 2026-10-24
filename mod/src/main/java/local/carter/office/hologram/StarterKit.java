@@ -65,8 +65,8 @@ public final class StarterKit {
 				+ "Right-click the emitter:\n- Shape: 16:9, 21:9 or 9:16\n- Shows: Extend, Window or Mirror\n- Remove"},
 		{"Privacy", "Also in the emitter menu:\n- Public: anyone nearby sees it\n- Private: only you; others see frosted glass\n"
 				+ "- Show to...: friends you pick\n\nPrivate screens never leave your computer."},
-		{"Working", "Mac: your crosshair is the mouse. Click, hold and turn to drag (even to another screen), scroll. "
-				+ "Click into an app to type; Esc comes back. Extend screens have a Dock.\n\nWindows: click to zoom in; double-tap Esc."},
+		{"Working", "Mac: click your screen to work on your Mac: your mouse is the Mac's mouse, drag windows across screens, "
+				+ "type. Esc comes back. Extend screens have a Dock.\n\nWindows: click to zoom in; double-tap Esc."},
 		{"Magic", "Magic is normal survival: craft a table, a wand and runes. No commands.\n\n"
 				+ "Recipe book (JEI): hover an item and press R to see how it's made, U to see what it's used for."},
 		{"1. Wand", "Novice Wand: 1 coal + 1 stick (coal top-right, stick bottom-left).\n\n"

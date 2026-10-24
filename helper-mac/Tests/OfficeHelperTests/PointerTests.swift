@@ -193,6 +193,49 @@ enum PointerTests {
             expectEqual(e.appActivated(pid: 3, isMinecraft: false), [.sendExit("elsewhere")], "Esc still held: its tap stays for the release")
         }
 
+        run("work mode: only Esc or Minecraft end it; other apps coming forward is just using the Mac") {
+            var t = TypingMachine()
+            expectEqual(t.enter(target: 42, work: true), [.armTap])
+            expect(t.work, "work mode")
+            expectEqual(t.appActivated(pid: 77, isMinecraft: false), [], "clicking into Safari while working")
+            expectEqual(t.appActivated(pid: 78, isMinecraft: false), [], "and Finder")
+            expect(t.active, "still working")
+            let esc = t.key(code: TypingMachine.escape, down: true, modifiers: [])
+            expect(esc.swallow && esc.effects == [.activateMinecraft, .sendExit("esc")], "Esc ends it (and is swallowed): \(esc)")
+            var m = TypingMachine()
+            _ = m.enter(target: 42, work: true)
+            expectEqual(m.appActivated(pid: 9, isMinecraft: true), [.disarmTap, .sendExit("minecraft")], "⌘-Tab back to Minecraft")
+            var typing = TypingMachine()
+            _ = typing.enter(target: 42)
+            expectEqual(typing.appActivated(pid: 77, isMinecraft: false), [.disarmTap, .sendExit("elsewhere")], "plain typing keeps round 1's rule")
+        }
+
+        run("work mode cursor: where the real cursor is, on the grid the hologram's picture is made of") {
+            let main = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            let ours = [(slot: 1, bounds: CGRect(x: 1440, y: 0, width: 1920, height: 1080), width: 1920, height: 1080),
+                        (slot: 2, bounds: CGRect(x: 3360, y: 0, width: 960, height: 540), width: 1920, height: 1080)]
+            expectEqual(CursorLocator.locate(CGPoint(x: 720.6, y: 450.2), main: main, displays: ours),
+                        CursorPayload(slot: 0, x: 720, y: 450, w: 1440, h: 900), "on the Mirror: main display points")
+            expectEqual(CursorLocator.locate(CGPoint(x: 1440, y: 0), main: main, displays: ours),
+                        CursorPayload(slot: 1, x: 0, y: 0, w: 1920, h: 1080), "off the Mirror's right edge: display 1's first pixel")
+            expectEqual(CursorLocator.locate(CGPoint(x: 3360 + 480.5, y: 270.5), main: main, displays: ours),
+                        CursorPayload(slot: 2, x: 961, y: 541, w: 1920, h: 1080), "a HiDPI display: its pixels, not points")
+            expectEqual(CursorLocator.locate(CGPoint(x: -50, y: 10), main: main, displays: ours).slot, -1, "another monitor")
+        }
+
+        run("arrangement: Office displays in a row right of the main display, or left when a monitor is there") {
+            let main = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            let ours = [(slot: 2, size: CGSize(width: 1920, height: 1080)), (slot: 1, size: CGSize(width: 1920, height: 1080))]
+            expectEqual(DisplayArrangement.origins(main: main, others: [], ours: ours),
+                        [1: CGPoint(x: 1440, y: 0), 2: CGPoint(x: 3360, y: 0)], "slot order from the right edge")
+            let monitor = CGRect(x: 1440, y: -180, width: 1920, height: 1080)
+            expectEqual(DisplayArrangement.origins(main: main, others: [monitor], ours: ours),
+                        [1: CGPoint(x: -1920, y: 0), 2: CGPoint(x: -3840, y: 0)], "a real monitor on the right: to the left")
+            let above = CGRect(x: 0, y: -1080, width: 1920, height: 1080)
+            expectEqual(DisplayArrangement.origins(main: main, others: [above], ours: ours)[1], CGPoint(x: 1440, y: 0),
+                        "a monitor above doesn't block the right side")
+        }
+
         run("secure input: each change is reported once, a new typing session starts from off") {
             var w = SecureInputWatch()
             expectEqual(w.sample(false), nil as Bool?, "off at the start: nothing to say")

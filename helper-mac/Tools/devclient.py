@@ -23,6 +23,8 @@ Steps (run in order; incoming messages are printed as they arrive):
   apps                       LIST_APPS, wait for APPS (prints how many and the first few)
   icons SIZE BUNDLE [..]     APP_ICONS (ends at the next step word); prints each icon's PNG size
   open SLOT BUNDLE|URL       OPEN_APP: the app (bundle id) or https page onto that slot's display; waits for APP_RESULT
+  work SLOT X Y [BUTTON]     WORK_BEGIN: work mode there (real cursor + real mouse until Esc; CURSOR reports print as
+                             they come, at most one line per 0.25 s)
   sleep SECONDS              wait (still printing incoming messages)
   displays                   print online display ids (CoreGraphics)
   uuid SLOT                  print the display UUID macOS uses to restore arrangement / window positions
@@ -47,9 +49,9 @@ NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY"
          69: "ENDED", 70: "EXIT_ZOOM", 71: "ERROR",
          11: "POINTER_DOWN", 12: "POINTER_MOVE", 13: "POINTER_UP", 14: "SCROLL", 15: "CLICK", 16: "EXIT_TYPING",
          19: "LIST_APPS", 20: "APP_ICONS", 21: "OPEN_APP", 72: "TYPING_EXIT", 73: "DRAG_DELTA", 74: "DRAG_ENDED",
-         75: "APPS", 76: "ICONS", 77: "APP_RESULT", 78: "SECURE_INPUT"}
+         22: "WORK_BEGIN", 75: "APPS", 76: "ICONS", 77: "APP_RESULT", 78: "SECURE_INPUT", 79: "CURSOR"}
 STEPS = {"create", "remove", "list", "capture", "ready", "stop", "zoomin", "zoomout", "permissions", "down", "move", "up",
-         "click", "scroll", "exittyping", "apps", "icons", "open", "sleep", "uuid", "displays", "waitgone", "badtoken"}
+         "click", "scroll", "exittyping", "apps", "icons", "open", "work", "sleep", "uuid", "displays", "waitgone", "badtoken"}
 MAIN_PICTURE = {"w": 1920, "h": 1080}  # slot 0 (Mirror): the picture size x / y belong to
 CODES = {v: k for k, v in NAMES.items()}
 
@@ -144,6 +146,11 @@ class Client:
                 if kind == "APPS":
                     apps = value.get("apps", [])
                     print(f"<- APPS {len(apps)} apps, e.g. {[a['name'] for a in apps[:6]]}", flush=True)
+                elif kind == "CURSOR":
+                    now = time.time()
+                    if now - getattr(self, "last_cursor_print", 0) >= 0.25:
+                        self.last_cursor_print = now
+                        print(f"<- CURSOR {json.dumps(value)}", flush=True)
                 elif kind == "ICONS":
                     print(f"<- ICONS {[(i['bundle'], len(i['png']) * 3 // 4) for i in value.get('icons', [])]} (bundle, PNG bytes)", flush=True)
                 else:
@@ -236,6 +243,12 @@ def main(argv):
                 bundles.append(argv[i]); i += 1
             c.send("APP_ICONS", {"bundles": bundles, "size": size})
             c.wait_for("ICONS", 10)
+        elif step == "work":
+            slot, x, y = map(int, argv[i + 1:i + 4]); i += 4
+            button = "left"
+            if i < len(argv) and argv[i] in ("left", "right", "middle"):
+                button = argv[i]; i += 1
+            c.send("WORK_BEGIN", {"slot": slot, "x": x, "y": y, "button": button, **(MAIN_PICTURE if slot == 0 else {})})
         elif step == "open":
             slot, target = int(argv[i + 1]), argv[i + 2]; i += 3
             c.send("OPEN_APP", {"slot": slot, ("url" if target.startswith("https://") else "bundle"): target})

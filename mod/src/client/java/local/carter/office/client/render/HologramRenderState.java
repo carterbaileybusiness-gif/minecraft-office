@@ -40,4 +40,8 @@ public class HologramRenderState extends BlockEntityRenderState {
 	/** The icon under the crosshair (-1: none) and its name. */
 	public int dockHover = -1;
 	public String dockLabel = "";
+	/** Work mode (owner only): the real Mac cursor is on this hologram's screen at (cursorU, cursorV) of the picture. */
+	public boolean cursor;
+	public float cursorU;
+	public float cursorV;
 }

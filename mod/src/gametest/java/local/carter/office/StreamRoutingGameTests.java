@@ -87,7 +87,10 @@ public class StreamRoutingGameTests {
 		owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 1));
 		h.placeAt(owner, owner.getMainHandItem(), EMITTER.below(), Direction.UP);
 		h.assertBlockPresent(OfficeBlocks.HOLOGRAM_EMITTER, EMITTER);
-		return h.getBlockEntity(EMITTER, HologramBlockEntity.class);
+		HologramBlockEntity be = h.getBlockEntity(EMITTER, HologramBlockEntity.class);
+		// a player's first hologram is a Mirror that starts Private (spec 5.10 round 2); these tests are about a shared one
+		be.setSpec(be.spec().withPrivacy(local.carter.office.core.Privacy.PUBLIC));
+		return be;
 	}
 
 	/** World-space centre of the hologram (emitter centre + offsets), the point view range is measured from. */

@@ -45,13 +45,23 @@ import ApplicationServices
         return AppCatalog.list(found, excluding: [Bundle.main.bundleIdentifier ?? "local.carter.office-helper"])
     }
 
-    /// PNG icons, `size` pixels square; apps that aren't installed are left out.
+    /// PNG icons, `size` pixels square; apps that aren't installed are left out. The app's own icon file
+    /// (CFBundleIconFile) comes first: NSWorkspace's icon follows the system icon style, and with macOS 26's tinted
+    /// style every icon came out one colour (Carter's play-test: "green squares").
     static func icons(_ bundles: [String], size: Int) -> [AppIcon] {
         bundles.compactMap { bundle in
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle),
-                  let png = png(NSWorkspace.shared.icon(forFile: url.path), size: size) else { return nil }
+                  let png = png(bundleIcon(url) ?? NSWorkspace.shared.icon(forFile: url.path), size: size) else { return nil }
             return AppIcon(bundle: bundle, png: png.base64EncodedString())
         }
+    }
+
+    /// The app's own .icns (untinted), or nil.
+    static func bundleIcon(_ app: URL) -> NSImage? {
+        guard let bundle = Bundle(url: app), var name = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
+              !name.isEmpty else { return nil }
+        if (name as NSString).pathExtension.isEmpty { name += ".icns" }
+        return bundle.resourceURL.flatMap { NSImage(contentsOf: $0.appendingPathComponent(name)) }
     }
 
     static func png(_ image: NSImage, size: Int) -> Data? {

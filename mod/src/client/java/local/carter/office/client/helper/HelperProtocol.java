@@ -60,6 +60,8 @@ public final class HelperProtocol {
     public static final int LIST_APPS = 19;
     public static final int APP_ICONS = 20;
     public static final int OPEN_APP = 21;
+    /** Work mode (spec 5.10 round 2): the real cursor goes to this point and the real mouse drives it until Esc. */
+    public static final int WORK_BEGIN = 22;
     // Helper -> mod
     public static final int WELCOME = 64;
     public static final int WINDOWS = 65;
@@ -77,6 +79,8 @@ public final class HelperProtocol {
     public static final int APP_RESULT = 77;
     /** While typing: secure input (a password field) went on / off; Esc can't be seen then, ⌘-Tab still returns. */
     public static final int SECURE_INPUT = 78;
+    /** Work mode: where the real cursor is (slot -1: on none of the player's screens). */
+    public static final int CURSOR = 79;
     /** Pointer slot 0: the main display (a Mirror hologram); x, y are then a pixel of a w x h picture of it. */
     public static final int MAIN_SLOT = 0;
 
@@ -96,7 +100,7 @@ public final class HelperProtocol {
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
             ZoomIn, ZoomOut, RequestPermissions, PointerDown, PointerMove, PointerUp, Scroll, Click, ExitTyping,
             ListApps, AppIcons, OpenApp, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
-            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput {
+            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput, WorkBegin, Cursor {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -134,6 +138,8 @@ public final class HelperProtocol {
                 case Icons m -> ICONS;
                 case AppResult m -> APP_RESULT;
                 case SecureInput m -> SECURE_INPUT;
+                case WorkBegin m -> WORK_BEGIN;
+                case Cursor m -> CURSOR;
             };
         }
     }
@@ -322,6 +328,15 @@ public final class HelperProtocol {
     /** Secure input on / off while typing. */
     public record SecureInput(boolean on) implements Message {}
 
+    /** Enter work mode at this point (slot 0 = the main display, with the picture size w, h). */
+    public record WorkBegin(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {}
+
+    /**
+     * The real cursor while working: on display {@code slot} (0 = main, its points; 1-4 = a virtual display, its pixels;
+     * -1 = none of them) at (x, y) of a w x h grid.
+     */
+    public record Cursor(int slot, int x, int y, int w, int h) implements Message {}
+
     /** ERROR message. Named HelperError so it does not clash with {@link java.lang.Error}. */
     public record HelperError(String code, String message) implements Message {
         public static final String BAD_SLOT = "bad_slot";
@@ -442,6 +457,8 @@ public final class HelperProtocol {
             case AppIcons m -> map("bundles", List.copyOf(m.bundles()), "size", m.size());
             case OpenApp m -> map("bottom", m.bottom(), "bundle", m.bundle(), "slot", m.slot(), "url", m.url());
             case SecureInput m -> map("on", m.on());
+            case WorkBegin m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case Cursor m -> map("h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
             case Apps m -> {
                 List<Object> list = new ArrayList<>();
                 for (AppInfo a : m.apps()) list.add(map("bundle", a.bundle(), "name", a.name()));
@@ -599,6 +616,16 @@ public final class HelperProtocol {
             }
             case SECURE_INPUT:
                 return new SecureInput(bool(object(root), "on"));
+            case WORK_BEGIN: {
+                JsonObject o = object(root);
+                int slot = integer(o, "slot");
+                Integer[] wh = picture(o, slot);
+                return new WorkBegin(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
+            }
+            case CURSOR: {
+                JsonObject o = object(root);
+                return new Cursor(integer(o, "slot"), integer(o, "x"), integer(o, "y"), integer(o, "w"), integer(o, "h"));
+            }
             case TYPING_EXIT:
                 return new TypingExit(str(object(root), "reason"));
             case DRAG_DELTA: {
@@ -978,6 +1005,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= OPEN_APP) || (t >= WELCOME && t <= SECURE_INPUT);
+        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= WORK_BEGIN) || (t >= WELCOME && t <= CURSOR);
     }
 }

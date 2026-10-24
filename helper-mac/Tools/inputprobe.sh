@@ -20,6 +20,7 @@ swiftc -swift-version 5 -O -parse-as-library -target arm64-apple-macos14.0 \
   "$here/Sources/OfficeHelper/Protocol.swift" \
   "$here/Tools/inputprobe.swift" \
   "$here/Tools/inputprobe_helper.swift" \
+  "$here/Tools/inputprobe_latency.swift" \
   -o "$out/inputprobe"
 app="${1:-$here/build/OfficeHelper.app}"
 if pgrep -x OfficeHelper >/dev/null; then
@@ -32,6 +33,8 @@ echo "== delivery routes (the probe posts events itself)"
 if [ -d "$app" ]; then
   echo "== end to end through the signed helper: $app"
   "$out/inputprobe" --helper "$app" || status=1
+  echo "== own-screen latency through the signed helper"
+  "$out/inputprobe" --latency "$app" || status=1
 else
   echo "(no helper at $app: build it with helper-mac/build.sh for the end-to-end part)"
 fi

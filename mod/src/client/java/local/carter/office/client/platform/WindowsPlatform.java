@@ -215,7 +215,9 @@ public final class WindowsPlatform implements Platform {
 				BlockPos pos = be.getBlockPos();
 				if (placed.shouldSwitch(be.hologramId(), spec, me.equals(spec.owner()), pos.getX(), pos.getY(), pos.getZ(), now)) {
 					LOGGER.info("New hologram at {}: Mirror (Windows can't add a virtual display yet)", pos);
-					ClientPlayNetworking.send(new OfficePayloads.UpdateHologram(pos, spec.shape(), Mode.MIRROR, spec.privacy(), spec.displaySlot(), null));
+					// a Mirror shows the whole screen: it starts Private (spec 5.10 round 2), like a Mac's first hologram
+					ClientPlayNetworking.send(new OfficePayloads.UpdateHologram(pos, spec.shape(), Mode.MIRROR,
+							HologramSpec.defaultPrivacy(Mode.MIRROR), spec.displaySlot(), null));
 				}
 			}
 		});
