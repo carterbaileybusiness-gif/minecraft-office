@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.client.magic.SpellWheel;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
 import local.carter.office.client.magic.screen.UiKit;
 import local.carter.office.magic.core.Element;
@@ -64,6 +65,7 @@ public final class ManaBarHud {
 		HudElementRegistry.replaceElement(VanillaHudElements.EXPERIENCE_LEVEL, vanilla -> wrap(vanilla, ManaBarHud::xpLevel));
 		HudElementRegistry.replaceElement(VanillaHudElements.INFO_BAR_FOREGROUND, vanilla -> wrap(vanilla, (g, dt) -> {}));
 		HudElementRegistry.replaceElement(VanillaHudElements.HELD_ITEM_TOOLTIP, vanilla -> (g, dt) -> {
+			if (SpellWheel.visible()) return; // the open wheel shows the selection (and sits here)
 			if (label != null && labelTicks > 0 && active(Minecraft.getInstance())) spellLabel(g, dt);
 			else vanilla.extractRenderState(g, dt);
 		});
