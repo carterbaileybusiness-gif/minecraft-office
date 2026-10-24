@@ -74,12 +74,27 @@ public final class MagicInputGate {
 	}
 
 	/**
+	 * Whole steps for one hotbar-scroll event (positive = up = previous). In 26.3 vanilla's {@code ScrollWheelHandler} already
+	 * adds up trackpad fractions, and Fabric's {@code ClientHotbarScrollEvents} fires only when it completes a whole step,
+	 * passing that last event's raw (often fractional) offset. So every event is at least one step: a quarter-notch that
+	 * completes a step is one step, a mouse notch (±1) is one step as before, and a big flick of n notches is n steps. Adding
+	 * the offsets up again here would need several whole swipes per step.
+	 */
+	public static int scrollSteps(double dx, double dy) {
+		double amount = scrollAmount(dx, dy);
+		if (amount == 0 || Double.isNaN(amount)) return 0;
+		return (int) Math.signum(amount) * Math.max(1, (int) Math.abs(amount));
+	}
+
+	/**
 	 * Shift + scroll in off-hand casting stance at a hologram the monitor didn't take (not your own live screen): swallowed, so
-	 * neither a spell nor the hotbar changes (a hotbar step would leave the casting stance).
+	 * neither a spell nor the hotbar changes (a hotbar step would leave the casting stance). The same while typing or in work
+	 * mode: magic selects nothing then, and the hotbar stays.
 	 */
 	public static boolean scrollSwallowed(boolean shift, boolean typing, boolean aimingAtHologram, boolean grimoireOffhand,
 			boolean mainHandEmpty, boolean bound) {
-		return shift && !typing && aimingAtHologram && grimoireOffhand && mainHandEmpty && bound;
+		// While typing, Shift + scroll in stance is swallowed too: it selects nothing and never moves the hotbar.
+		return shift && (typing || aimingAtHologram) && grimoireOffhand && mainHandEmpty && bound;
 	}
 
 	// ---------------------------------------------------------------- live

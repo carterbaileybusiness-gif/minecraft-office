@@ -77,16 +77,38 @@ class MagicInputGateTest {
 	}
 
 	@Test
+	void everyScrollEventIsAtLeastOneStep() {
+		// Whole mouse notches: one step each, exactly as before.
+		assertEquals(-1, MagicInputGate.scrollSteps(0, -1));
+		assertEquals(1, MagicInputGate.scrollSteps(0, 1));
+		assertEquals(-1, MagicInputGate.scrollSteps(1, 0), "Mac Shift + wheel down");
+		// Trackpad: vanilla's ScrollWheelHandler fires the event only once its fractions make a whole step, passing the last
+		// fraction; that event is one step (adding up again would need several swipes per step).
+		assertEquals(-1, MagicInputGate.scrollSteps(0, -0.25));
+		assertEquals(1, MagicInputGate.scrollSteps(0, 0.1));
+		assertEquals(1, MagicInputGate.scrollSteps(-0.3, 0));
+		// A big flick: as many steps as whole notches.
+		assertEquals(-3, MagicInputGate.scrollSteps(0, -3.4));
+		assertEquals(0, MagicInputGate.scrollSteps(0, 0));
+		assertEquals(0, MagicInputGate.scrollSteps(0, Double.NaN));
+	}
+
+	@Test
 	void shiftScrollAtAHologramTheMonitorDidNotTakeIsSwallowed() {
 		assertTrue(MagicInputGate.scrollSwallowed(true, false, true, true, true, true), "stance at a hologram: neither spell nor hotbar");
 		assertFalse(MagicInputGate.scrollSwallowed(false, false, true, true, true, true), "no Shift: vanilla");
 		assertFalse(MagicInputGate.scrollSwallowed(true, false, false, true, true, true), "not aiming: it selects instead");
 		assertFalse(MagicInputGate.scrollSwallowed(true, false, true, true, false, true), "out of stance: vanilla");
 		assertFalse(MagicInputGate.scrollSwallowed(true, false, true, true, true, false), "unbound: vanilla");
-		assertFalse(MagicInputGate.scrollSwallowed(true, true, true, true, true, true), "typing: not magic's");
-		for (boolean aiming : new boolean[] {false, true}) {
-			assertFalse(MagicInputGate.scrollSelects(true, false, aiming, true, true, true)
-					&& MagicInputGate.scrollSwallowed(true, false, aiming, true, true, true), "never both");
+		assertTrue(MagicInputGate.scrollSwallowed(true, true, true, true, true, true), "typing at a hologram: swallowed");
+		assertTrue(MagicInputGate.scrollSwallowed(true, true, false, true, true, true), "typing anywhere in stance: the hotbar never moves");
+		assertFalse(MagicInputGate.scrollSwallowed(false, true, false, true, true, true), "typing, no Shift: not magic's");
+		assertFalse(MagicInputGate.scrollSwallowed(true, true, false, true, false, true), "typing out of stance: not magic's");
+		for (boolean typing : new boolean[] {false, true}) {
+			for (boolean aiming : new boolean[] {false, true}) {
+				assertFalse(MagicInputGate.scrollSelects(true, typing, aiming, true, true, true)
+						&& MagicInputGate.scrollSwallowed(true, typing, aiming, true, true, true), "never both");
+			}
 		}
 	}
 

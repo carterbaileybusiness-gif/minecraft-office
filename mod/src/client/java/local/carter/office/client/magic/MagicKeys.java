@@ -109,23 +109,25 @@ public final class MagicKeys {
 	 */
 	static boolean onWheelScroll(double dx, double dy) {
 		if (!SpellWheel.isOpen()) return true;
-		double amount = MagicInputGate.scrollAmount(dx, dy);
-		if (amount != 0) SpellWheel.step(amount < 0 ? 1 : -1);
+		int steps = MagicInputGate.scrollSteps(dx, dy); // vanilla already added up trackpad fractions
+		for (int i = 0; i < Math.abs(steps); i++) SpellWheel.step(steps < 0 ? 1 : -1);
 		return false;
 	}
 
 	/** Shift + scroll in the world, after the monitors had their turn. False = it was magic's (the hotbar slot stays). */
 	static boolean onScroll(double dx, double dy) {
 		if (SpellWheel.isOpen()) return false;
-		double amount = MagicInputGate.scrollAmount(dx, dy);
 		Minecraft mc = Minecraft.getInstance();
 		MagicInputGate.Scroll what = MagicInputGate.scroll(mc);
 		if (what == MagicInputGate.Scroll.VANILLA) return true;
-		if (what == MagicInputGate.Scroll.SWALLOW || amount == 0) return false;
+		if (what == MagicInputGate.Scroll.SWALLOW) return false;
+		int steps = MagicInputGate.scrollSteps(dx, dy); // vanilla already added up trackpad fractions
+		if (steps == 0) return false;
 		MagicData d = MagicAttachments.get(mc.player);
 		List<Identifier> ids = SpellRegistry.unlocked(d).stream().map(Spell::id).toList();
 		Identifier current = selected(d);
-		Identifier next = ScrollSelect.next(ids, current, amount);
+		Identifier next = current;
+		for (int i = 0; i < Math.abs(steps); i++) next = ScrollSelect.next(ids, next, steps);
 		if (next != null && !next.equals(current)) choose(next, false);
 		return false;
 	}

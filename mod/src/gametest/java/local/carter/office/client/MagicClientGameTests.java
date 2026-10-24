@@ -588,6 +588,20 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		context.waitTicks(1);
 		hovered = context.computeOnClient(mc -> SpellWheel.hovered());
 		if (hovered != 0) throw new AssertionError("scrolling back up hovers Fire Bolt (0), hovered " + hovered);
+		// A trackpad: half notches; one does nothing, two make one step (vanilla adds them up), and back.
+		context.getInput().scroll(-0.5);
+		context.waitTicks(1);
+		hovered = context.computeOnClient(mc -> SpellWheel.hovered());
+		if (hovered != 0) throw new AssertionError("half a notch must not step the wheel, hovered " + hovered);
+		context.getInput().scroll(-0.5);
+		context.waitTicks(1);
+		hovered = context.computeOnClient(mc -> SpellWheel.hovered());
+		if (hovered != 1) throw new AssertionError("two half notches step the wheel once, hovered " + hovered);
+		context.getInput().scroll(0.5);
+		context.getInput().scroll(0.5);
+		context.waitTicks(1);
+		hovered = context.computeOnClient(mc -> SpellWheel.hovered());
+		if (hovered != 0) throw new AssertionError("two half notches up step back once, hovered " + hovered);
 		context.getInput().releaseKey(MagicKeys.WHEEL); // Fire Bolt is already selected: nothing changes
 		context.waitFor(mc -> !SpellWheel.visible(), 20);
 		after = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
@@ -672,6 +686,23 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		if (after != slot) throw new AssertionError("Shift + scroll must keep the hotbar slot: " + slot + " -> " + after);
 		// A Mac sends Shift + wheel as a horizontal scroll: +x is down (next: Recall), -x is up (back to Fire Wall).
 		macShiftScroll(context, sp, 1, SpellIds.RECALL);
+		macShiftScroll(context, sp, -1, PROBE_1);
+		// A trackpad: quarter notches add up; three select nothing, the fourth steps once.
+		context.getInput().holdShift();
+		for (int i = 0; i < 3; i++) context.getInput().scroll(-0.25);
+		context.waitTicks(3);
+		sp.getConnection().waitForServerboundPackets();
+		Optional<Identifier> partial = sp.getServer().computeOnServer(server -> MagicAttachments.get(player(server)).selected());
+		if (!partial.equals(Optional.of(PROBE_1))) {
+			context.getInput().releaseShift();
+			throw new AssertionError("three quarter-notches must not step yet, got " + partial);
+		}
+		context.getInput().scroll(-0.25);
+		context.waitTicks(2);
+		context.getInput().releaseShift();
+		sp.getConnection().waitForServerboundPackets();
+		sp.getServer().waitFor(server -> MagicAttachments.get(player(server)).selected().equals(Optional.of(SpellIds.RECALL)), 40);
+		context.waitFor(mc -> MagicAttachments.get(mc.player).selected().equals(Optional.of(SpellIds.RECALL)), 40);
 		macShiftScroll(context, sp, -1, PROBE_1);
 		after = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
 		if (after != slot) throw new AssertionError("horizontal Shift + scroll must keep the hotbar slot: " + slot + " -> " + after);
@@ -830,11 +861,15 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			assertTyping(context, "R");
 
 			enterTyping(context);
+			int hotbar = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
 			context.getInput().holdShift();
 			context.getInput().scroll(-1);
+			context.getInput().scroll(1, 0); // a Mac's Shift + wheel
 			context.getInput().releaseShift();
 			context.waitTicks(2);
 			assertTyping(context, "Shift + scroll");
+			int hotbarAfter = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+			if (hotbarAfter != hotbar) throw new AssertionError("typing: Shift + scroll in stance must not move the hotbar: " + hotbar + " -> " + hotbarAfter);
 			sp.getConnection().waitForServerboundPackets();
 			context.waitTicks(2);
 			assertNoCast(context, sp, "inputs while typing");
