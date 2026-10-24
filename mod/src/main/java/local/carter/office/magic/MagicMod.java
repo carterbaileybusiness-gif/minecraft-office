@@ -1,10 +1,13 @@
 package local.carter.office.magic;
 
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.cast.SignChallenges;
 import local.carter.office.magic.command.MagicCommand;
+import local.carter.office.magic.core.Dir;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.item.MagicItems;
 import local.carter.office.magic.net.MagicPayloads;
+import local.carter.office.magic.net.MagicPayloads.SignAnswer;
 import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.Motion;
 import local.carter.office.magic.spell.SpellKit;
@@ -27,6 +30,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.CreativeModeTabs;
@@ -48,6 +52,7 @@ public final class MagicMod {
 		ShadowSpells.register();
 		CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> MagicCommand.register(dispatcher));
 		registerCastHooks();
+		registerSignAnswers();
 		registerTerrainHooks();
 		CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES).register(output -> {
 			output.accept(MagicItems.GRIMOIRE);
@@ -55,18 +60,29 @@ public final class MagicMod {
 		});
 	}
 
-	/** Cast pipeline ticking and the hooks that discard a charge with no cast (death, disconnect, dimension change). */
+	/**
+	 * Cast pipeline ticking and the hooks that discard a charge or an open hand-sign challenge with no cast and no cost
+	 * (death, disconnect, dimension change).
+	 */
 	private static void registerCastHooks() {
 		ServerTickEvents.END_SERVER_TICK.register(CastService::tick);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> CastService.stop());
 		ServerLivingEntityEvents.ALLOW_DAMAGE.register(Motion::allowDamage);
 		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
-			if (entity instanceof ServerPlayer p) discardCharge(p);
+			if (entity instanceof ServerPlayer p) discardPending(p);
 		});
-		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, from, to) -> discardCharge(player));
+		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, from, to) -> discardPending(player));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-			discardCharge(handler.player);
+			discardPending(handler.player);
 			CastService.forget(handler.player);
+		});
+	}
+
+	/** The {@code SignAnswer} receiver: bytes that are not arrows make a miss (an empty answer). */
+	private static void registerSignAnswers() {
+		ServerPlayNetworking.registerGlobalReceiver(SignAnswer.TYPE, (payload, ctx) -> {
+			Dir[] dirs = payload.toDirs();
+			CastService.answer(ctx.player(), payload.id(), dirs == null ? new Dir[0] : dirs);
 		});
 	}
 
@@ -104,8 +120,9 @@ public final class MagicMod {
 		kit.temp().restoreAll(server);
 	}
 
-	private static void discardCharge(ServerPlayer p) {
+	private static void discardPending(ServerPlayer p) {
 		p.stopUsingItem();
 		CastService.endCharge(p);
+		SignChallenges.discard(p);
 	}
 }

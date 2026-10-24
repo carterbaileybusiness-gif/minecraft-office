@@ -32,6 +32,7 @@ public class OfficeClient implements ClientModInitializer {
 		BlockEntityRendererRegistry.register(OfficeBlocks.HOLOGRAM_BE, HologramRenderer::new);
 		HologramTracker.register();
 		HologramInteractions.register();
+		local.carter.office.client.magic.MagicClient.register(); // after HologramInteractions: hologram use/scroll handlers run first
 		// This computer's own-screen support: Mac = the helper app (setup, /officescreens, leave-world teardown);
 		// Windows (beta) = window list + zoom via Win32, Window-mode placement default, zoom undone on CLIENT_STOPPING;
 		// otherwise none. Only the Mac platform touches the helper; only Windows loads the webrtc natives.

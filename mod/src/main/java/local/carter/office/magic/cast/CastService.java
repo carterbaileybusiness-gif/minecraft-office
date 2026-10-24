@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Dir;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.HandSigns;
 import local.carter.office.magic.core.LevelCurve;
 import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.core.Slots;
@@ -40,10 +41,13 @@ import net.minecraft.world.entity.player.Player;
 
 /**
  * The server cast pipeline. {@link #cast} runs every check in order (element bound, spell element, unlocked, channeling,
- * cooldown, mana, XP levels), then the spell; only a {@link CastOutcome.Cast} spends anything. {@link #answer} lands in Task 6.
+ * cooldown, mana, XP levels), then the spell; only a {@link CastOutcome.Cast} spends anything. An ultimate is not cast
+ * directly: {@link #cast} issues a hand-sign challenge ({@link SignChallenges}) and {@link #answer} casts it after a re-check,
+ * or fizzles it.
  */
 public final class CastService {
-	public enum Result { CAST, CHALLENGED, FIZZLED, NO_ELEMENT, WRONG_ELEMENT, LOCKED, COOLDOWN, NO_MANA, NO_LEVELS, BUSY }
+	/** {@link #IGNORED}: an answer for a challenge that is not open (unknown id, discarded or already expired); nothing happened. */
+	public enum Result { CAST, CHALLENGED, FIZZLED, NO_ELEMENT, WRONG_ELEMENT, LOCKED, COOLDOWN, NO_MANA, NO_LEVELS, BUSY, IGNORED }
 
 	/** {@code CastFx} range in blocks; ultimates reach twice as far. */
 	public static final double FX_RANGE = 64;
@@ -52,6 +56,12 @@ public final class CastService {
 	public static final String BUSY_KEY = "magic.office.busy";
 	/** The fizzle message of a spell that threw while casting. */
 	public static final String SPELL_FAILED_KEY = "magic.office.spell_failed";
+	/** Action-bar message of a hand-sign fizzle (wrong, late or no longer affordable). */
+	public static final String SIGN_FIZZLE_KEY = "magic.office.fizzle";
+	/** Fizzle message when the signs were right but the cast no longer could be (its argument is the reason). */
+	public static final String SIGN_FIZZLE_REASON_KEY = "magic.office.fizzle_reason";
+	/** Cooldown after a hand-sign fizzle, in ticks. */
+	public static final int FIZZLE_COOLDOWN_TICKS = 100;
 
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 	private static final AtomicLong CAST_IDS = new AtomicLong();
@@ -64,10 +74,14 @@ public final class CastService {
 
 	private CastService() {}
 
-	/** What {@link #check} decided: a failure, or the charge and mana the cast will use. */
-	record Checked(@Nullable Result failure, float charge, int mana) {
-		static Checked fail(Result r) {
-			return new Checked(r, 0, 0);
+	/** What {@link #check} decided: a failure with its message, or the charge and mana the cast will use. */
+	record Checked(@Nullable Result failure, float charge, int mana, @Nullable Component message) {
+		Checked(@Nullable Result failure, float charge, int mana) {
+			this(failure, charge, mana, null);
+		}
+
+		static Checked fail(Result r, Component message) {
+			return new Checked(r, 0, 0, message);
 		}
 	}
 
@@ -83,8 +97,11 @@ public final class CastService {
 	public static Result cast(ServerPlayer p, Spell spell, float charge) {
 		Checked c = check(p, spell, charge);
 		if (c.failure() != null) return c.failure();
-		// Ultimates: Task 6 sends them to SignChallenges.issue here (CHALLENGED) and runs them from answer() after a re-check.
-		// Until it lands they cast directly, at charge 1 for base mana and their XP levels.
+		if (isUltimate(spell)) {
+			// Nothing is spent yet: answer() re-checks and casts (or fizzles) when the signs come back.
+			SignChallenges.issue(p, spell, c.charge());
+			return Result.CHALLENGED;
+		}
 		return run(p, spell, c.charge(), c.mana());
 	}
 
@@ -126,23 +143,61 @@ public final class CastService {
 		return null;
 	}
 
-	/** The player's hand-sign answer for challenge {@code id}. */
-	public static Result answer(ServerPlayer p, int id, Dir[] dirs) {
-		throw new UnsupportedOperationException("CastService.answer lands in Task 6");
+	/**
+	 * The player's hand-sign answer for challenge {@code id} (a partial or null answer is a miss). The id must be the player's
+	 * open challenge, else the answer is {@link Result#IGNORED}. Right and within {@code limit + GRACE_TICKS}, with element,
+	 * unlock, cooldown, mana and XP levels re-checked now → the full ultimate cast ({@link #run}). Wrong, late or no longer
+	 * affordable → {@link Result#FIZZLED} ({@link #fizzle}).
+	 */
+	public static Result answer(ServerPlayer p, int id, Dir @Nullable [] dirs) {
+		SignChallenges.Open c = SignChallenges.take(p, id);
+		if (c == null) return Result.IGNORED;
+		if (c.late(p.level().getGameTime()) || !HandSigns.matches(c.expected(), dirs)) return fizzle(p, c.spell(), null);
+		Checked k = evaluate(p, c.spell(), 1f);
+		if (k.failure() != null) return fizzle(p, c.spell(), k.message());
+		return run(p, c.spell(), k.charge(), k.mana());
 	}
 
-	/** Once per server tick: mana regen, lingering effects, projectiles and dash no-fall windows. */
+	/**
+	 * A hand-sign miss: {@code HandSigns.fizzleMana(base)} mana spent (all that is left if less; creative players spend none),
+	 * no XP levels, a {@link #FIZZLE_COOLDOWN_TICKS} cooldown (never lowering one), the extinguish sound and one action-bar
+	 * message: {@link #SIGN_FIZZLE_KEY}, or {@link #SIGN_FIZZLE_REASON_KEY} with {@code reason} when the signs were right but
+	 * the answer-time re-check failed.
+	 */
+	static Result fizzle(ServerPlayer p, Spell spell, @Nullable Component reason) {
+		ServerLevel level = p.level();
+		long now = level.getGameTime();
+		if (!p.hasInfiniteMaterials()) {
+			int mana = MagicAttachments.mana(p);
+			int spent = Math.min(mana, HandSigns.fizzleMana(spell.cost().mana()));
+			if (spent > 0) {
+				MagicAttachments.setMana(p, mana - spent);
+				LAST_CAST.put(p.getUUID(), now);
+			}
+		}
+		MagicData d = MagicAttachments.get(p);
+		Long existing = d.readyAt().get(spell.id());
+		MagicAttachments.set(p, d.withReady(spell.id(), Math.max(existing == null ? Long.MIN_VALUE : existing, now + FIZZLE_COOLDOWN_TICKS)));
+		level.playSound(null, p.blockPosition(), SoundEvents.FIRE_EXTINGUISH, SoundSource.PLAYERS, 0.8f, 1.1f);
+		MagicServer.sender().actionBar(p, reason == null ? Component.translatable(SIGN_FIZZLE_KEY)
+				: Component.translatable(SIGN_FIZZLE_REASON_KEY, reason));
+		return Result.FIZZLED;
+	}
+
+	/** Once per server tick: unanswered hand signs fizzle, mana regen, lingering effects, projectiles and dash no-fall windows. */
 	public static void tick(MinecraftServer server) {
+		for (var expired : SignChallenges.expire(server)) fizzle(expired.getKey(), expired.getValue().spell(), null);
 		for (ServerPlayer p : server.getPlayerList().getPlayers()) regen(p);
 		ActiveEffects.tick();
 		Projectiles.tick();
 		Motion.tick(server);
 	}
 
-	/** A player left: forget their regen pause and charge. */
+	/** A player left: forget their regen pause, charge and hand-sign challenge. */
 	public static void forget(ServerPlayer p) {
 		LAST_CAST.remove(p.getUUID());
 		CHARGING.remove(p.getUUID());
+		SignChallenges.discard(p);
 	}
 
 	/** Server stopping: end lingering effects (their {@code end} runs), drop projectiles and per-player state. */
@@ -152,26 +207,38 @@ public final class CastService {
 		Motion.clear();
 		LAST_CAST.clear();
 		CHARGING.clear();
+		SignChallenges.clear();
 	}
 
 	static boolean isUltimate(Spell s) {
 		return s.slot() == Slots.ULTIMATE;
 	}
 
-	/** Every check, in order, with its action-bar message. Task 6 re-runs it when a hand-sign answer arrives. */
+	/** Every check, in order; a failure shows its message on the action bar. */
 	static Checked check(ServerPlayer p, Spell spell, float charge) {
+		Checked c = evaluate(p, spell, charge);
+		if (c.failure() != null && c.message() != null) MagicServer.sender().actionBar(p, c.message());
+		return c;
+	}
+
+	/**
+	 * {@link #check} without sending anything: {@link #answer} re-runs it after taking the challenge (so an open challenge,
+	 * which makes every other cast BUSY, never blocks its own answer) and folds a failure's reason into the one fizzle message.
+	 */
+	static Checked evaluate(ServerPlayer p, Spell spell, float charge) {
 		MagicData d = MagicAttachments.get(p);
-		if (d.element().isEmpty()) return refuse(p, Result.NO_ELEMENT, Component.translatable("magic.office.choose"));
+		if (d.element().isEmpty()) return Checked.fail(Result.NO_ELEMENT, Component.translatable("magic.office.choose"));
 		Element bound = d.element().get();
 		if (spell.element() != null && spell.element() != bound) {
-			return refuse(p, Result.WRONG_ELEMENT,
+			return Checked.fail(Result.WRONG_ELEMENT,
 					Component.translatable("magic.office.wrong_element", name(spell), Component.translatable("element.office." + bound.key())));
 		}
 		int unlock = Slots.unlockLevel(spell.slot());
-		if (d.level() < unlock) return refuse(p, Result.LOCKED, Component.translatable("magic.office.locked", name(spell), unlock));
-		if (channeling.test(p)) return refuse(p, Result.BUSY, Component.translatable(BUSY_KEY));
+		if (d.level() < unlock) return Checked.fail(Result.LOCKED, Component.translatable("magic.office.locked", name(spell), unlock));
+		if (channeling.test(p)) return Checked.fail(Result.BUSY, Component.translatable(BUSY_KEY));
+		if (SignChallenges.pending(p)) return Checked.fail(Result.BUSY, Component.translatable("magic.office.signs"));
 		long left = d.cooldownLeft(spell.id(), p.level().getGameTime());
-		if (left > 0) return refuse(p, Result.COOLDOWN, cooldownMessage(spell, left));
+		if (left > 0) return Checked.fail(Result.COOLDOWN, cooldownMessage(spell, left));
 
 		SpellCost cost = spell.cost();
 		boolean ultimate = isUltimate(spell);
@@ -181,10 +248,10 @@ public final class CastService {
 		float c = ultimate ? 1f : ChargeMath.affordableCharge(mana, cost.mana(), requested);
 		int need = ChargeMath.cost(cost.mana(), ultimate ? 1f : Math.max(c, 0f), ultimate);
 		if (c < 0 || need > mana) {
-			return refuse(p, Result.NO_MANA, noManaMessage(mana, ChargeMath.cost(cost.mana(), 0f, ultimate)));
+			return Checked.fail(Result.NO_MANA, noManaMessage(mana, ChargeMath.cost(cost.mana(), 0f, ultimate)));
 		}
 		if (ultimate && p.experienceLevel < cost.xpLevels()) {
-			return refuse(p, Result.NO_LEVELS, Component.translatable("magic.office.no_levels", name(spell), cost.xpLevels()));
+			return Checked.fail(Result.NO_LEVELS, Component.translatable("magic.office.no_levels", name(spell), cost.xpLevels()));
 		}
 		return new Checked(null, c, need);
 	}
@@ -269,11 +336,6 @@ public final class CastService {
 
 	private static Component noManaMessage(int mana, int need) {
 		return Component.translatable("magic.office.no_mana", mana, need);
-	}
-
-	private static Checked refuse(ServerPlayer p, Result r, Component message) {
-		MagicServer.sender().actionBar(p, message);
-		return Checked.fail(r);
 	}
 
 	/** The spell's display name ({@code spell.<namespace>.<path>}). */

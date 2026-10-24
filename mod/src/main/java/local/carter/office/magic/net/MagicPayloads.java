@@ -17,7 +17,7 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 
 /**
  * Magic payloads (same style as {@code net.OfficePayloads}). Server-to-client ones go out through {@link MagicSender};
- * client-to-server receivers live in {@link MagicServer#registerReceivers()} (SignAnswer's arrives with Task 6).
+ * client-to-server receivers live in {@link MagicServer#registerReceivers()} (SignAnswer: {@code MagicMod}).
  */
 public final class MagicPayloads {
 	/** Most arrows a hand-sign answer may carry. */
