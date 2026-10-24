@@ -6,8 +6,12 @@ import java.util.Optional;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.DataResult;
+
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import io.netty.handler.codec.DecoderException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.LevelCurve;
@@ -23,17 +27,20 @@ import net.minecraft.resources.Identifier;
  * the Recall home (the only home store), per-spell cooldowns as absolute game times ({@code readyAt}) and whether friends may
  * ask to travel to this player ({@code travel}, default on; {@code /magic travel off|on}) and each spell's skill-tree rank
  * ({@code ranks}: spell id → {@code SpellRank.packed()}; keyed by spell, so every element keeps its own and a rebind and back
- * restores them). Immutable; change it with the {@code with…} copies and {@code MagicAttachments.set}.
+ * restores them), and the game time a spent Rebinding Seal's re-pick window closes ({@code repickUntil}, 0 = none: the server
+ * decides it, and the owner's client reads it from the synced data, so reopening the book still shows the window). Immutable;
+ * change it with the {@code with…} copies and {@code MagicAttachments.set}.
  */
 public record MagicData(Optional<Element> element, int level, int xp, Optional<Identifier> selected, Optional<GlobalPos> home,
-		Map<Identifier, Long> readyAt, boolean travel, Map<Identifier, Integer> ranks) {
+		Map<Identifier, Long> readyAt, boolean travel, Map<Identifier, Integer> ranks, long repickUntil) {
 	/** Cap on cooldown entries carried over the network (there are 31 spells). */
 	public static final int MAX_COOLDOWNS = 64;
 	/** Cap on rank entries carried over the network (30 element spells have a tree). */
 	public static final int MAX_RANKS = 64;
+	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 
 	public static final MagicData EMPTY = new MagicData(Optional.empty(), 1, 0, Optional.empty(), Optional.empty(), Map.of(), true,
-			Map.of());
+			Map.of(), 0);
 
 	private static final Codec<Element> ELEMENT_CODEC = Codec.STRING.comapFlatMap(
 			k -> Element.byKey(k).map(DataResult::success).orElseGet(() -> DataResult.error(() -> "unknown element " + k)),
@@ -55,21 +62,26 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 				return out;
 			});
 
-	/** Ranks keyed by id strings; entries whose key is not a valid id, or whose rank is out of range, are dropped. */
-	private static final Codec<Map<Identifier, Integer>> RANKS_CODEC = Codec.unboundedMap(Codec.STRING, Codec.INT).xmap(
-			m -> {
-				Map<Identifier, Integer> out = new HashMap<>();
-				m.forEach((k, v) -> {
-					Identifier id = Identifier.tryParse(k);
-					if (id != null && validRank(v)) out.put(id, v);
-				});
-				return out;
-			},
-			m -> {
+	/**
+	 * Ranks keyed by id strings, read entry by entry: an entry whose key is not a valid id, whose value is not a number, or whose
+	 * rank is out of range is dropped (and logged) on its own, so one bad entry never costs the others.
+	 */
+	private static final Codec<Map<Identifier, Integer>> RANKS_CODEC = Codec.of(
+			Codec.unboundedMap(Codec.STRING, Codec.INT).comap(m -> {
 				Map<String, Integer> out = new HashMap<>();
 				m.forEach((k, v) -> out.put(k.toString(), v));
 				return out;
-			});
+			}),
+			Codec.unboundedMap(Codec.STRING, Codec.PASSTHROUGH).map(m -> {
+				Map<Identifier, Integer> out = new HashMap<>();
+				m.forEach((k, v) -> {
+					Identifier id = Identifier.tryParse(k);
+					Integer packed = Codec.INT.parse(v).result().orElse(null);
+					if (id != null && packed != null && validRank(packed)) out.put(id, packed);
+					else LOGGER.warn("[office] dropped a bad skill-tree rank entry {} = {}", k, v.getValue());
+				});
+				return out;
+			}));
 
 	/** Every field is lenient: a bad value falls back to that field's default and the other fields still load. */
 	public static final Codec<MagicData> CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -80,7 +92,8 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 			GlobalPos.CODEC.lenientOptionalFieldOf("home").forGetter(MagicData::home),
 			READY_AT_CODEC.lenientOptionalFieldOf("ready_at", Map.of()).forGetter(MagicData::readyAt),
 			Codec.BOOL.lenientOptionalFieldOf("travel", true).forGetter(MagicData::travel),
-			RANKS_CODEC.lenientOptionalFieldOf("ranks", Map.of()).forGetter(MagicData::ranks)
+			RANKS_CODEC.lenientOptionalFieldOf("ranks", Map.of()).forGetter(MagicData::ranks),
+			Codec.LONG.lenientOptionalFieldOf("repick_until", 0L).forGetter(MagicData::repickUntil)
 	).apply(i, MagicData::new));
 
 	public static final StreamCodec<FriendlyByteBuf, MagicData> STREAM_CODEC = StreamCodec.of(MagicData::write, MagicData::read);
@@ -90,35 +103,43 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 		xp = Math.max(0, xp);
 		readyAt = Map.copyOf(readyAt);
 		ranks = Map.copyOf(ranks);
+		repickUntil = Math.max(0, repickUntil);
 	}
 
 	/** Travel requests accepted (the default), no ranks. */
 	public MagicData(Optional<Element> element, int level, int xp, Optional<Identifier> selected, Optional<GlobalPos> home,
 			Map<Identifier, Long> readyAt) {
-		this(element, level, xp, selected, home, readyAt, true, Map.of());
+		this(element, level, xp, selected, home, readyAt, true, Map.of(), 0);
 	}
 
 	/** No ranks. */
 	public MagicData(Optional<Element> element, int level, int xp, Optional<Identifier> selected, Optional<GlobalPos> home,
 			Map<Identifier, Long> readyAt, boolean travel) {
-		this(element, level, xp, selected, home, readyAt, travel, Map.of());
+		this(element, level, xp, selected, home, readyAt, travel, Map.of(), 0);
 	}
 
-	public MagicData withElement(Optional<Element> e) { return new MagicData(e, level, xp, selected, home, readyAt, travel, ranks); }
+	public MagicData withElement(Optional<Element> e) { return new MagicData(e, level, xp, selected, home, readyAt, travel, ranks, repickUntil); }
 
-	public MagicData withLevel(int l) { return new MagicData(element, l, xp, selected, home, readyAt, travel, ranks); }
+	public MagicData withLevel(int l) { return new MagicData(element, l, xp, selected, home, readyAt, travel, ranks, repickUntil); }
 
-	public MagicData withXp(int x) { return new MagicData(element, level, x, selected, home, readyAt, travel, ranks); }
+	public MagicData withXp(int x) { return new MagicData(element, level, x, selected, home, readyAt, travel, ranks, repickUntil); }
 
-	public MagicData withSelected(Optional<Identifier> s) { return new MagicData(element, level, xp, s, home, readyAt, travel, ranks); }
+	public MagicData withSelected(Optional<Identifier> s) { return new MagicData(element, level, xp, s, home, readyAt, travel, ranks, repickUntil); }
 
-	public MagicData withHome(Optional<GlobalPos> h) { return new MagicData(element, level, xp, selected, h, readyAt, travel, ranks); }
+	public MagicData withHome(Optional<GlobalPos> h) { return new MagicData(element, level, xp, selected, h, readyAt, travel, ranks, repickUntil); }
 
-	public MagicData withReadyAt(Map<Identifier, Long> r) { return new MagicData(element, level, xp, selected, home, r, travel, ranks); }
+	public MagicData withReadyAt(Map<Identifier, Long> r) { return new MagicData(element, level, xp, selected, home, r, travel, ranks, repickUntil); }
 
-	public MagicData withTravel(boolean t) { return new MagicData(element, level, xp, selected, home, readyAt, t, ranks); }
+	public MagicData withTravel(boolean t) { return new MagicData(element, level, xp, selected, home, readyAt, t, ranks, repickUntil); }
 
-	public MagicData withRanks(Map<Identifier, Integer> r) { return new MagicData(element, level, xp, selected, home, readyAt, travel, r); }
+	public MagicData withRanks(Map<Identifier, Integer> r) { return new MagicData(element, level, xp, selected, home, readyAt, travel, r, repickUntil); }
+
+	public MagicData withRepickUntil(long t) { return new MagicData(element, level, xp, selected, home, readyAt, travel, ranks, t); }
+
+	/** True while a spent Seal's re-pick window is open at game time {@code gameTime}. */
+	public boolean repickOpen(long gameTime) {
+		return repickUntil > gameTime;
+	}
 
 	/** {@code spell}'s skill-tree rank (rank 0 if it has none). */
 	public SpellRank rank(Identifier spell) {
@@ -178,6 +199,7 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 			buf.writeIdentifier(e.getKey());
 			buf.writeByte(e.getValue());
 		}
+		buf.writeVarLong(d.repickUntil);
 	}
 
 	private static MagicData read(FriendlyByteBuf buf) {
@@ -203,6 +225,7 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 			if (!validRank(packed)) throw new DecoderException("bad rank " + packed + " for " + id);
 			ranks.put(id, packed);
 		}
-		return new MagicData(element, level, xp, selected, home, ready, travel, ranks);
+		long repickUntil = buf.readVarLong();
+		return new MagicData(element, level, xp, selected, home, ready, travel, ranks, repickUntil);
 	}
 }

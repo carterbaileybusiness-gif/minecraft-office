@@ -61,7 +61,9 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * at most {@link Targets#MAX_ENTITIES} hits per cast).
  *
  * <p>Ranks add blades (the size knob, up to {@link BladeWindGeometry#MAX_BLADES}). Forks: III {@link #WIDE} (the fan opens to
- * ±{@link BladeWindGeometry#WIDE_SPREAD}°) or {@link #LONG} (blades fly {@link BladeWindGeometry#LONG_TICKS} ticks); V
+ * ±{@link BladeWindGeometry#WIDE_SPREAD}°) or {@link #BOOMERANG} (at the end of its flight, or where a block stops it, each blade
+ * flies back the same way to where it left, striking again on the way home: each creature at most once out and once back;
+ * foliage is cut on the way out only); V
  * {@link #CLEAVE} (+80 % damage, two fewer blades) or {@link #TEMPEST} (what a blade hits is thrown {@link #TEMPEST_UP} up and
  * {@link #TEMPEST_BACK} back).
  *
@@ -72,7 +74,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 public final class BladeWind implements Spell {
 	public static final float DAMAGE = 5;
 	public static final String WIDE = "wide";
-	public static final String LONG = "long";
+	public static final String BOOMERANG = "boomerang";
 	public static final String CLEAVE = "cleave";
 	public static final String TEMPEST = "tempest";
 	public static final double TEMPEST_UP = 0.8;
@@ -119,7 +121,9 @@ public final class BladeWind implements Spell {
 		System.arraycopy(stops, 0, data, 1, stops.length);
 		int mid = specs.size() / 2;
 		Vec3 end = BladeWindGeometry.at(specs.get(mid), stops[mid]);
-		return CastOutcome.cast(ctx.fx().withTarget(end).withDuration(BladeWindGeometry.maxTicks(ctx.rank())).withData(data));
+		boolean back = BladeWindGeometry.returns(ctx.rank());
+		int life = (int) Math.ceil(BladeWindGeometry.life(BladeWindGeometry.maxTicks(ctx.rank()), back));
+		return CastOutcome.cast(ctx.fx().withTarget(end).withDuration(life).withData(data));
 	}
 
 	/**
@@ -153,14 +157,17 @@ public final class BladeWind implements Spell {
 		private final float[] stops;
 		/** Per blade: stretch index → its open batch. */
 		private final List<Map<Integer, EditBatch>> batches = new ArrayList<>();
-		/** Hit once per cast. */
+		/** Hit once per cast on the way out, and (Boomerang) once on the way back. */
 		private final Set<Integer> hit = new HashSet<>();
+		private final Set<Integer> hitBack = new HashSet<>();
+		private final boolean back;
 		private int cuts;
 
 		Effect(CastContext ctx, List<ProjectileSpec> specs, float[] stops) {
 			this.ctx = ctx;
 			this.specs = specs;
 			this.stops = stops;
+			this.back = BladeWindGeometry.returns(ctx.rank());
 			for (ProjectileSpec s : specs) {
 				frames.add(BladeWindGeometry.frame(s.velocity()));
 				batches.add(new HashMap<>());
@@ -171,25 +178,29 @@ public final class BladeWind implements Spell {
 		public boolean tick(ServerLevel level, int age) {
 			boolean flying = false;
 			for (int i = 0; i < specs.size(); i++) {
+				double end = BladeWindGeometry.life(stops[i], back);
 				double t0 = age - 1;
-				if (t0 >= stops[i]) continue;
-				double t1 = Math.min(age, stops[i]);
-				Vec3 a = BladeWindGeometry.at(specs.get(i), t0);
-				Vec3 b = BladeWindGeometry.at(specs.get(i), t1);
-				strike(level, a, b);
-				cut(level, i, a, b);
-				if (t1 < stops[i]) flying = true;
+				if (t0 >= end) continue;
+				double t1 = Math.min(age, end);
+				ProjectileSpec s = specs.get(i);
+				boolean home = t0 >= stops[i];
+				Vec3 a = BladeWindGeometry.path(s, t0, stops[i], back);
+				Vec3 b = BladeWindGeometry.path(s, home ? t1 : Math.min(t1, stops[i]), stops[i], back);
+				strike(level, a, b, home ? hitBack : hit);
+				if (!home) cut(level, i, a, b);
+				if (t1 < end) flying = true;
 			}
 			return flying;
 		}
 
-		private void strike(ServerLevel level, Vec3 a, Vec3 b) {
+		private void strike(ServerLevel level, Vec3 a, Vec3 b, Set<Integer> hit) {
 			double r = BladeWindGeometry.RADIUS;
 			boolean tempest = ctx.rank().is(TEMPEST);
 			List<LivingEntity> crossed = new ArrayList<>();
 			Map<LivingEntity, Double> at = new HashMap<>();
 			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(a, b).inflate(r),
 					e -> TargetFilter.affects(ctx.caster(), e) && !hit.contains(e.getId()))) {
+
 				AABB box = e.getBoundingBox().inflate(r);
 				if (box.contains(a)) {
 					at.put(e, 0.0);

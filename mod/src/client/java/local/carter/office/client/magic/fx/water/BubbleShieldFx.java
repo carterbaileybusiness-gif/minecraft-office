@@ -21,6 +21,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -55,6 +56,7 @@ public final class BubbleShieldFx implements SpellFx {
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.BUBBLE_COLUMN_UPWARDS_AMBIENT, SoundSource.PLAYERS, 0.8F, 1.2F, false);
 		if (kit.budget().particles(step) == step) Minecraft.getInstance().particleEngine.add(bubble);
 
+		boolean mirror = e.spellRank().is(BubbleShield.MIRROR);
 		Set<Integer> splashed = new HashSet<>();
 		Map<Integer, Vec3> seen = new HashMap<>();
 		boolean[] popped = new boolean[1];
@@ -85,6 +87,9 @@ public final class BubbleShieldFx implements SpellFx {
 				if (hit != null) {
 					splashed.add(p.getId());
 					splash(kit, level, bubble, c, hit, spare, r);
+					// Mirror: the server sends the hit back to the shooter (never as a live arrow); a jet of water shows it.
+					LivingEntity back = mirror ? BubbleShield.mirrorTarget(p, null) : null;
+					if (back != null && spare > 12) mirror(kit, level, hit, back.getBoundingBox().getCenter());
 				} else {
 					seen.put(p.getId(), p.position());
 				}
@@ -113,7 +118,20 @@ public final class BubbleShieldFx implements SpellFx {
 		level.playLocalSound(hit.x, hit.y, hit.z, SoundEvents.PLAYER_SPLASH, SoundSource.PLAYERS, 0.35F, 1.6F, false);
 	}
 
+	/** Mirror's return: a streak of water from where the arrow met the bubble to its shooter, and a splash on them. */
+	private static void mirror(FxKit kit, ClientLevel level, Vec3 from, Vec3 to) {
+		Vec3 d = to.subtract(from);
+		int n = Math.min(12, 2 + (int) (d.length() * 0.8));
+		for (int i = 1; i <= n; i++) {
+			Vec3 at = from.add(d.scale(i / (double) n));
+			kit.motes(at, i % 2 == 0 ? WaterFx.FOAM : WaterFx.LIGHT, 1, 0.03, d.normalize().scale(0.1), 0.01, GlowMote.Drift.COAST, 0.14F, 6);
+		}
+		kit.burst(to, ParticleTypes.SPLASH, 6, 0.2);
+		level.playLocalSound(to.x, to.y, to.z, SoundEvents.PLAYER_SPLASH_HIGH_SPEED, SoundSource.PLAYERS, 0.5F, 1.4F, false);
+	}
+
 	/** The bubble's middle: the caster's (interpolated), or where it was cast if they can't be seen. */
+
 	private static Vec3 centre(Entity caster, Vec3 fallback, float partial) {
 		if (caster == null || caster.isRemoved()) return fallback;
 		return BubbleShieldGeometry.centre(caster.getPosition(partial), caster.getBbHeight());

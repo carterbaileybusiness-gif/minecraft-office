@@ -143,18 +143,17 @@ public final class MagicServer {
 		return select(p, spell);
 	}
 
-	/** A player left (or the server stops, with {@code null}): forget their throttles and re-pick window. */
+	/** A player left (or the server stops, with {@code null}): forget their throttles (the re-pick window is in their data). */
 	public static void forget(@Nullable ServerPlayer p) {
 		if (p == null) {
 			SELECTS.clear();
 			TREE.clear();
-			TreeService.clear();
 		} else {
 			SELECTS.remove(p.getUUID());
 			TREE.remove(p.getUUID());
-			TreeService.forget(p);
 		}
 	}
+
 
 	/** Selects {@code spell} if it is one of the player's unlocked spells; anything else is ignored. */
 	public static boolean select(ServerPlayer p, Identifier spell) {

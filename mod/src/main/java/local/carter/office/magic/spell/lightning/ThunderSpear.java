@@ -3,7 +3,7 @@ package local.carter.office.magic.spell.lightning;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Random;
+
 import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
@@ -14,13 +14,15 @@ import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Shapes;
 import local.carter.office.magic.core.Shapes.Cell;
 import local.carter.office.magic.core.Slots;
+import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
+import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.ProjectileHit;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
-import local.carter.office.magic.spell.RankKit;
+
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
@@ -33,12 +35,15 @@ import local.carter.office.magic.tree.SpellRank;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
+
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -47,8 +52,8 @@ import net.minecraft.world.phys.Vec3;
  * creature or block. At the impact:
  * <ul>
  * <li>every creature within {@link #blast} (2.5 at a tap, 5 at full charge) that the blast reaches (nothing solid between; the
- * one it struck always) takes {@code 10 × P}; the one it struck, and every creature a control effect may take (never a boss),
- * are slowed (Slowness II, {@link #SLOW_TICKS} ticks);</li>
+ * one it struck always) takes {@code 10 × P}; every creature a control effect may take (never a boss, even the one struck) is
+ * slowed (Slowness II, {@link #SLOW_TICKS} ticks);</li>
  * <li>minor permanent change, one MEDIUM batch whose origin is the block struck (for a creature, the ground under it if within
  * {@link #GROUND_DEPTH}, else none): a bowl of radius {@link #bowl} (2 → 4) is blasted out, and sand or red sand within
  * {@link #glass} (3 → 6, the medium cap) of the origin fuses to glass.</li>
@@ -56,8 +61,10 @@ import net.minecraft.world.phys.Vec3;
  * A spear that runs out of time ends in the air with nothing.
  *
  * <p>Ranks widen the blast (the size knob, up to {@link #MAX_BLAST}; the crater keeps its charge size). Forks: III
- * {@link #JAVELIN} ({@link #JAVELIN_SPEED}× as fast, no drop) or {@link #PARALYZE} (Slowness IV for {@link #PARALYZE_TICKS});
- * V {@link #STORM} ({@link #STORM_BOLTS} sky bolts round the impact, {@link #STORM_SHARE} each within {@link #STORM_RADIUS}) or
+ * {@link #JAVELIN} ({@link #JAVELIN_SPEED}× as fast, no drop) or {@link #MAGNET} (after the blast, the impact drags creatures
+ * within {@link #MAGNET_REACH} past the blast in toward it: a control effect, never a boss); V {@link #RETURN} (after the
+ * strike the spear flies back to the caster at {@link #SPEED} a tick, striking each creature within {@link #RETURN_RADIUS} of its
+ * path once for {@link #RETURN_SHARE} of the hit; its own caster slot, skipped when the caster's effects are full) or
  * {@link #CHAIN} (arcs on to {@link #CHAIN_HOPS} more creatures within {@link #CHAIN_RANGE} at {@link #CHAIN_SHARE}).
  *
  * <p>Fx: the cast's default event (origin = eye, dir = look); the client rebuilds the flight with {@link #spec} and
@@ -80,17 +87,19 @@ public final class ThunderSpear implements Spell {
 	/** How far below a struck creature's feet the crater's ground may be. */
 	public static final int GROUND_DEPTH = 2;
 	public static final String JAVELIN = "javelin";
-	public static final String PARALYZE = "paralyze";
-	public static final String STORM = "storm";
+	public static final String MAGNET = "magnet";
+	public static final String RETURN = "return";
 	public static final String CHAIN = "chain";
 	/** Widest a ranked blast reaches (the medium radius cap). */
 	public static final double MAX_BLAST = 6;
 	public static final double JAVELIN_SPEED = 1.6;
-	public static final int PARALYZE_TICKS = 60;
-	public static final int STORM_BOLTS = 3;
-	public static final double STORM_RING = 3;
-	public static final double STORM_RADIUS = 2;
-	public static final float STORM_SHARE = 0.5F;
+	/** Magnet: how far past the blast it reaches, and how hard it drags (blocks a tick per block of distance, at most 1.5). */
+	public static final double MAGNET_REACH = 4;
+	public static final double MAGNET_PULL = 0.3;
+	/** Returning Spear: its share of the hit, the reach round its path, and its longest flight home. */
+	public static final float RETURN_SHARE = 0.5F;
+	public static final double RETURN_RADIUS = 1.0;
+	public static final int RETURN_TICKS = 40;
 	public static final int CHAIN_HOPS = 3;
 	public static final double CHAIN_RANGE = 8;
 	public static final float CHAIN_SHARE = 0.6F;
@@ -107,16 +116,12 @@ public final class ThunderSpear implements Spell {
 		return new ProjectileSpec(origin, d.scale(SPEED * JAVELIN_SPEED), 0, RADIUS, MAX_TICKS, false);
 	}
 
-	/** Storm Spear's bolts round {@code impact} (seeded: the same on the server and every client). */
-	public static List<Vec3> stormPoints(Vec3 impact, long seed) {
-		Random r = new Random(seed ^ 0x3A7L);
-		List<Vec3> out = new ArrayList<>(STORM_BOLTS);
-		double turn = r.nextDouble() * Math.PI * 2;
-		for (int i = 0; i < STORM_BOLTS; i++) {
-			double a = turn + Math.PI * 2 * i / STORM_BOLTS;
-			out.add(impact.add(Math.cos(a) * STORM_RING, 0, Math.sin(a) * STORM_RING));
-		}
-		return out;
+	/** Where the Returning Spear is {@code t} ticks after turning at {@code from}, flying at {@link #SPEED} toward {@code home}. */
+	public static Vec3 homeward(Vec3 from, Vec3 home, double t) {
+		Vec3 d = home.subtract(from);
+		double len = d.length();
+		double go = Math.min(len, SPEED * t);
+		return len < 1.0E-6 ? home : from.add(d.scale(go / len));
 	}
 
 	/** The blast's reach at {@code charge}: 2.5, 5 at full charge. */
@@ -173,21 +178,27 @@ public final class ThunderSpear implements Spell {
 
 		Vec3 from = at.subtract(dir.scale(0.3));
 		float damage = DAMAGE * ctx.power();
-		boolean paralyze = ctx.rank().is(PARALYZE);
+		double blast = blast(ctx.charge(), ctx.rank());
 		List<LivingEntity> blasted = new ArrayList<>();
-		for (LivingEntity e : Targets.radius(ctx, at, blast(ctx.charge(), ctx.rank()))) {
+		for (LivingEntity e : Targets.radius(ctx, at, blast)) {
 			if (e != direct && !Arcs.reaches(ctx, from, e.getBoundingBox())) continue;
 			Hurt.damage(ctx, e, damage);
 			blasted.add(e);
-			if (e.isAlive() && (e == direct || TargetFilter.controllable(ctx.caster(), e))) {
-				e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, paralyze ? PARALYZE_TICKS : SLOW_TICKS, paralyze ? 3 : SLOW_AMPLIFIER),
-						ctx.caster());
+			if (e.isAlive() && TargetFilter.controllable(ctx.caster(), e)) {
+				e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, SLOW_TICKS, SLOW_AMPLIFIER), ctx.caster());
 			}
 		}
-		// Storm Spear: bolts from the sky round the impact.
-		if (ctx.rank().is(STORM)) {
-			for (Vec3 p : stormPoints(at, ctx.seed())) RankKit.blast(ctx, p.add(0, 0.5, 0), STORM_RADIUS, damage * STORM_SHARE, null, 0, 0, 0);
+		// Magnet: the impact drags what is near in toward it (a control effect, within the cast's budget).
+		if (ctx.rank().is(MAGNET)) {
+			for (LivingEntity e : Targets.radius(ctx, at, blast + MAGNET_REACH)) {
+				if (!TargetFilter.controllable(ctx.caster(), e) || !Arcs.reaches(ctx, from, e.getBoundingBox()) || !Hurt.admit(ctx, e)) continue;
+				Vec3 in = at.subtract(e.position());
+				double d = Math.sqrt(in.x * in.x + in.z * in.z);
+				if (d > 1) Hurt.knock(e, in, Math.min(1.5, d * MAGNET_PULL), 0.25);
+			}
 		}
+		// Returning Spear: it flies home, striking what it passes.
+		if (ctx.rank().is(RETURN)) ActiveEffects.add(ctx, new Homeward(ctx, at, damage * RETURN_SHARE));
 		// Chain Spear: the strike leaps on from what it hit (or the nearest it blasted).
 		LivingEntity from0 = direct != null ? direct : blasted.isEmpty() ? null : blasted.getFirst();
 		if (ctx.rank().is(CHAIN) && from0 != null) {
@@ -198,7 +209,43 @@ public final class ThunderSpear implements Spell {
 		if (origin != null) crater(ctx, origin);
 	}
 
+	/** The Returning Spear: from the impact to the caster's middle, striking each creature near its path once. */
+	static final class Homeward implements LingeringEffect {
+		private final CastContext ctx;
+		private final Vec3 from;
+		private final float damage;
+		private final Set<Integer> struck = new HashSet<>();
+
+		Homeward(CastContext ctx, Vec3 from, float damage) {
+			this.ctx = ctx;
+			this.from = from;
+			this.damage = damage;
+		}
+
+		@Override
+		public boolean tick(ServerLevel level, int age) {
+			ServerPlayer p = ctx.caster();
+			if (p.isRemoved() || p.level() != level) return false;
+			Vec3 home = p.getBoundingBox().getCenter();
+			Vec3 a = homeward(from, home, age - 1), b = homeward(from, home, age);
+			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(a, b).inflate(RETURN_RADIUS),
+					e -> TargetFilter.affects(p, e) && !struck.contains(e.getId()))) {
+				AABB box = e.getBoundingBox().inflate(RETURN_RADIUS);
+				if (!box.contains(a) && box.clip(a, b).isEmpty()) continue;
+				struck.add(e.getId());
+				Hurt.damage(ctx, e, damage);
+			}
+			return b.distanceToSqr(home) > 0.25 && age < RETURN_TICKS;
+		}
+
+		@Override
+		public String toString() {
+			return "ThunderSpear.Homeward[" + ctx.caster().getScoreboardName() + "]";
+		}
+	}
+
 	/** The bowl and the glass, in one MEDIUM batch round {@code origin}. */
+
 	private static void crater(CastContext ctx, BlockPos origin) {
 		ServerLevel level = ctx.level();
 		List<Cell> bowl = Shapes.bowl(bowl(ctx.charge()), BOWL_DEPTH);

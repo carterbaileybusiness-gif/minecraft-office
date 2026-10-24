@@ -57,13 +57,14 @@ public final class BladeWindFx implements SpellFx {
 		SpellRank rank = e.spellRank();
 		List<ProjectileSpec> specs = BladeWindGeometry.specs(e.origin(), e.dir(), c, rank);
 		int flight = BladeWindGeometry.maxTicks(rank);
+		boolean home = BladeWindGeometry.returns(rank);
 		float[] data = e.data();
 		int n = specs.size();
 		float[] stops = new float[n];
 		float longest = 0;
 		for (int i = 0; i < n; i++) {
 			stops[i] = data.length > i + 1 ? Mth.clamp(data[i + 1], 0F, flight) : flight;
-			longest = Math.max(longest, stops[i]);
+			longest = Math.max(longest, (float) BladeWindGeometry.life(stops[i], home));
 		}
 		Vec3 dir = BladeWindGeometry.frame(e.dir()).forward();
 		Vec3 eye = e.origin();
@@ -81,7 +82,7 @@ public final class BladeWindFx implements SpellFx {
 		for (int i = 0; i < n; i++) {
 			// A spray of arcs: the outer blades tilt outward. Each pays the fx budget for the quads it draws a frame.
 			float roll = (float) Math.toRadians(angles[i] * 1.2);
-			Crescent blade = new Crescent(level, specs.get(i), stops[i], size, roll);
+			Crescent blade = new Crescent(level, specs.get(i), stops[i], home, size, roll);
 			if (kit.budget().particles(blade.cost()) < blade.cost()) break;
 			Minecraft.getInstance().particleEngine.add(blade);
 		}
@@ -102,20 +103,23 @@ public final class BladeWindFx implements SpellFx {
 		}
 
 		Set<Integer> struck = new HashSet<>();
+		Set<Integer> struckBack = new HashSet<>();
 		boolean[] ended = new boolean[n];
 		kit.simulate(1, Mth.ceil(longest) + 2, t -> {
 			boolean cutSound = false;
 			for (int i = 0; i < n; i++) {
 				ProjectileSpec s = specs.get(i);
-				if (t >= 1 && t - 1 < stops[i]) {
-					Vec3 a = BladeWindGeometry.at(s, t - 1);
-					Vec3 b = BladeWindGeometry.at(s, Math.min(t, stops[i]));
-					Vec3 back = s.velocity().scale(-0.04);
+				double end = BladeWindGeometry.life(stops[i], home);
+				if (t >= 1 && t - 1 < end) {
+					Vec3 a = BladeWindGeometry.path(s, t - 1, stops[i], home);
+					Vec3 b = BladeWindGeometry.path(s, Math.min(t, end), stops[i], home);
+					Vec3 back = a.subtract(b).scale(0.02);
 					kit.motes(b, PALE, n > 3 ? 1 : 2, 0.3, back, 0.03, GlowMote.Drift.SWIRL, 0.12F, 8);
 					if (t % 2 == 0) kit.trail(a, b, ParticleTypes.WHITE_ASH, 2);
-					hits(level, kit, a, b, struck, s);
+					// Boomerang: the blade strikes again on its way home (the server keeps a second set for that leg).
+					hits(level, kit, a, b, t - 1 >= stops[i] ? struckBack : struck, s);
 				}
-				if (!ended[i] && t >= stops[i] && stops[i] < flight) {
+				if (!ended[i] && !home && t >= stops[i] && stops[i] < flight) {
 					ended[i] = true;
 					Vec3 p = BladeWindGeometry.at(s, stops[i]);
 					kit.burst(p, ParticleTypes.POOF, 3, 0.06);
@@ -159,6 +163,9 @@ public final class BladeWindFx implements SpellFx {
 
 		private final ProjectileSpec spec;
 		private final float stop;
+		/** Boomerang: it turns at {@code stop} and flies home, so it rests (and fades) only at {@code end}. */
+		private final boolean home;
+		private final float end;
 		private final float size;
 		private final Vec3 forward;
 		private final Vec3 lateral;
@@ -168,16 +175,18 @@ public final class BladeWindFx implements SpellFx {
 		private final float[] width = new float[POINTS];
 		private final float[] alpha = new float[POINTS];
 
-		Crescent(ClientLevel level, ProjectileSpec spec, float stop, float size, float roll) {
+		Crescent(ClientLevel level, ProjectileSpec spec, float stop, boolean home, float size, float roll) {
 			super(level, spec.origin().x, spec.origin().y, spec.origin().z, MagicCircleRenderer.sprite("line"));
 			this.spec = spec;
 			this.stop = stop;
+			this.home = home;
+			this.end = (float) BladeWindGeometry.life(stop, home);
 			this.size = size;
 			BladeWindGeometry.Frame f = BladeWindGeometry.frame(spec.velocity());
 			this.forward = f.forward();
 			this.lateral = f.side().scale(Math.cos(roll)).add(f.up().scale(Math.sin(roll)));
 			this.upward = lateral.cross(forward);
-			this.lifetime = Mth.ceil(stop) + FADE + 1;
+			this.lifetime = Mth.ceil(end) + FADE + 1;
 			this.hasPhysics = false;
 			this.gravity = 0;
 			this.xd = 0;
@@ -188,7 +197,7 @@ public final class BladeWindFx implements SpellFx {
 		@Override
 		public void tick() {
 			age++;
-			Vec3 p = BladeWindGeometry.at(spec, Math.min(age, stop));
+			Vec3 p = BladeWindGeometry.path(spec, Math.min(age, end), stop, home);
 			xo = x;
 			yo = y;
 			zo = z;
@@ -203,19 +212,20 @@ public final class BladeWindFx implements SpellFx {
 		@Override
 		public void extract(QuadParticleRenderState state, Camera camera, float partial) {
 			float now = age + partial;
-			float past = Math.max(0, now - stop);
+			float past = Math.max(0, now - end);
 			float fade = 1 - past / FADE;
 			if (fade <= 0.02F) {
 				return;
 			}
 			float a = Math.min(1F, 0.35F + now) * fade;
 			float grow = 1 + 0.5F * past / FADE;
-			double t = Math.min(now, stop);
+			double t = Math.min(now, end);
 			Vec3 cam = camera.position();
 			// Afterimages (the edge only) first, then the blade.
-			if (t > 0.8) arc(state, cam, BladeWindGeometry.at(spec, t - 0.8), a * 0.18F, size * 0.92F * grow, 0.9, false);
-			if (t > 0.4) arc(state, cam, BladeWindGeometry.at(spec, t - 0.4), a * 0.4F, size * 0.96F * grow, 0.95, false);
-			arc(state, cam, BladeWindGeometry.at(spec, t), a, size * grow, 1, true);
+			if (t > 0.8) arc(state, cam, BladeWindGeometry.path(spec, t - 0.8, stop, home), a * 0.18F, size * 0.92F * grow, 0.9, false);
+			if (t > 0.4) arc(state, cam, BladeWindGeometry.path(spec, t - 0.4, stop, home), a * 0.4F, size * 0.96F * grow, 0.95, false);
+			arc(state, cam, BladeWindGeometry.path(spec, t, stop, home), a, size * grow, 1, true);
+
 		}
 
 		/** Fx-budget particles this blade costs: its quads a frame at their most (fully grown, both afterimages), per 50. */

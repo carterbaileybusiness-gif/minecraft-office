@@ -38,13 +38,14 @@ final class EarthTrees {
 						stat("damage", Unit.DAMAGE, (r, lv) -> r.is(EarthWall.THORNS) ? Trees.damage(EarthWall.THORN_DAMAGE, Slots.MEDIUM_A, r, lv)
 								: r.is(EarthWall.CRUMBLE) ? Trees.damage(EarthWall.CRUMBLE_DAMAGE, Slots.MEDIUM_A, r, lv) : 0)),
 				tree(SpellIds.EARTH_SPIKES, Slots.SMALL_B, "length",
-						Fork.of(EarthSpikes.IMPALE).mul(Knob.DAMAGE, 2).mul(Knob.SIZE, 0.75F), Fork.of(EarthSpikes.UPLIFT),
+						Fork.of(EarthSpikes.IMPALE).mul(Knob.DAMAGE, 2).mul(Knob.SIZE, 0.75F), Fork.of(EarthSpikes.SEEKER),
 						Fork.of(EarthSpikes.FIELD),
 						Fork.of(EarthSpikes.PETRIFY).effect(MobEffects.SLOWNESS, 40, 5).effect(MobEffects.WEAKNESS, 80, 0),
 						hit(EarthSpikes.DAMAGE, Slots.SMALL_B),
 						stat("length", Unit.BLOCKS, (r, lv) -> EarthSpikes.length(0, r)),
 						stat("lines", Unit.COUNT, (r, lv) -> r.is(EarthSpikes.FIELD) ? 3 : 1),
-						stat("lift", Unit.PERCENT, (r, lv) -> r.is(EarthSpikes.UPLIFT) ? 200 : 100)),
+						stat("seek", Unit.DEGREES, (r, lv) -> r.is(EarthSpikes.SEEKER) ? 2 * EarthSpikes.SEEKER_ANGLE : 0)),
+
 				tree(SpellIds.QUAKE, Slots.MEDIUM_B, "radius",
 						Fork.of(Quake.AFTERSHOCK), Fork.of(Quake.FISSURE).effect(MobEffects.SLOWNESS, 60, 1), Fork.of(Quake.TECTONIC),
 						Fork.of(Quake.PULL),

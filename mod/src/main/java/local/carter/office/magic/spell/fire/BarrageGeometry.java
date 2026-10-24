@@ -44,11 +44,12 @@ public final class BarrageGeometry {
 	public static final double BLAST = 2.5;
 	/** Least share of the sky drop kept under a roof. */
 	public static final double MIN_LIFT = 0.15;
-	/** Most fireballs a ranked volley throws. */
+	/** Most fireballs the ranks' size knob gives (before a fork's extra), and most a forked volley throws (Carpet's +2). */
 	public static final int MAX_COUNT = 9;
-	/** Carpet's spread, Rapid Volley's interval, Heavy Shells' blast and crater. */
+	public static final int MAX_FORKED = 11;
+	/** Carpet's spread, Guided Shells' reach past the spread, Heavy Shells' blast and crater. */
 	public static final double CARPET_SPREAD = 1.6;
-	public static final int RAPID_INTERVAL = 2;
+	public static final double GUIDED_REACH = 3;
 	public static final double HEAVY_BLAST = 3.5;
 	public static final double HEAVY_CRATER = 2.0;
 
@@ -68,11 +69,13 @@ public final class BarrageGeometry {
 	}
 
 	/**
-	 * Fireballs at {@code charge} and {@code rank}: {@code round(3 × ChargeMath.size(charge) × the size knob) + the forks' extra},
-	 * 1 to {@link #MAX_COUNT}.
+	 * Fireballs at {@code charge} and {@code rank}: {@code round(3 × ChargeMath.size(charge) × the size knob)} capped at
+	 * {@link #MAX_COUNT} first, then the forks' extra (Carpet's +2, Heavy Shells' −1), 1 to {@link #MAX_FORKED}. The cap comes
+	 * before the fork, so Carpet's two extra fireballs still land at full charge.
 	 */
 	public static int count(float charge, SpellRank rank) {
-		return Math.clamp(Math.round(TAP_COUNT * ChargeMath.size(charge) * rank.mul(Knob.SIZE) + rank.add(Knob.COUNT)), 1, MAX_COUNT);
+		int base = Math.min(MAX_COUNT, Math.round(TAP_COUNT * ChargeMath.size(charge) * rank.mul(Knob.SIZE)));
+		return Math.clamp(base + Math.round(rank.add(Knob.COUNT)), 1, MAX_FORKED);
 	}
 
 	/** The spread factor at {@code rank}: {@link #CARPET_SPREAD} for Carpet, else 1. */
@@ -80,9 +83,16 @@ public final class BarrageGeometry {
 		return rank.is(FireballBarrage.CARPET) ? CARPET_SPREAD : 1;
 	}
 
-	/** Ticks between fireballs at {@code rank}: {@link #RAPID_INTERVAL} for Rapid Volley, else {@link #INTERVAL}. */
-	public static int interval(SpellRank rank) {
-		return rank.is(FireballBarrage.RAPID) ? RAPID_INTERVAL : INTERVAL;
+	/** How far from the aim point Guided Shells look for creatures: the volley's spread plus {@link #GUIDED_REACH}. */
+	public static double guidedReach(int count, SpellRank rank) {
+		return spread(count) * spreadMul(rank) + GUIDED_REACH;
+	}
+
+	/** {@code aims} with the first ones moved onto {@code targets} (Guided Shells: one fireball per creature, the rest as seeded). */
+	public static List<Vec3> guide(List<Vec3> aims, List<Vec3> targets) {
+		List<Vec3> out = new ArrayList<>(aims);
+		for (int i = 0; i < Math.min(out.size(), targets.size()); i++) out.set(i, targets.get(i));
+		return out;
 	}
 
 	/** Each impact's blast radius at {@code rank}. */
@@ -126,10 +136,16 @@ public final class BarrageGeometry {
 
 	/** As {@link #volley(Vec3, Vec3, long, int, float[])} with the spread times {@code spreadMul}, one fireball every {@code interval}. */
 	public static List<Ball> volley(Vec3 point, Vec3 dir, long seed, int count, float[] lifts, double spreadMul, int interval) {
-		List<Vec3> aims = aims(point, seed, count, spreadMul);
+		return volley(aims(point, seed, count, spreadMul), dir, lifts, interval);
+	}
+
+	/** The volley onto the given {@code aims} (Guided Shells move some onto creatures, {@link #guide}). */
+	public static List<Ball> volley(List<Vec3> aims, Vec3 dir, float[] lifts, int interval) {
+		int count = aims.size();
 		Vec3 drop = drop(dir);
 		List<Ball> out = new ArrayList<>(count);
 		for (int i = 0; i < count; i++) {
+
 			double lift = i < lifts.length ? Mth.clamp(lifts[i], MIN_LIFT, 1) : 1;
 			Vec3 aim = aims.get(i);
 			Vec3 origin = aim.add(drop.scale(lift));

@@ -44,7 +44,8 @@ public final class MagicTooltips {
 				ours = seal();
 			} else {
 				Optional<Element> e = mc.player == null ? Optional.empty() : MagicAttachments.get(mc.player).element();
-				if (e.isEmpty() || !materials(e.get()).contains(stack.getItem())) return;
+				// Only on a stack the cost check would take (RankCost.plain: not enchanted, damaged or renamed).
+				if (e.isEmpty() || !materials(e.get()).contains(stack.getItem()) || !RankCost.plain(stack)) return;
 				ours = material(e.get());
 			}
 			int max = Math.min(MAX_WIDTH, mc.getWindow().getGuiScaledWidth() / 2);

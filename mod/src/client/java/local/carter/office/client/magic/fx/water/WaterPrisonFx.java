@@ -68,9 +68,21 @@ public final class WaterPrisonFx implements SpellFx {
 		level.playLocalSound(centre.x, centre.y, centre.z, SoundEvents.BUBBLE_COLUMN_WHIRLPOOL_AMBIENT, SoundSource.PLAYERS, 0.8F, 1F, false);
 
 		ball(level, kit, r, centre, radius, life, held.length > 0 ? held[0] : -1);
-		// Twin Prison's second sphere, and Whirlpool's drag round it.
+		// Twin Prison's second sphere.
 		if (data.length >= 4 && held.length > 1) ball(level, kit, r, new Vec3(data[1], data[2], data[3]), radius, life, held[1]);
-		if (e.spellRank().is(WaterPrison.WHIRLPOOL)) RankFx.vortex(kit, level, centre, radius + WaterPrison.WHIRLPOOL_REACH, life, WaterFx.LIGHT);
+		// Hurl: the burst throws a jet of water the way the caster looks.
+		if (e.spellRank().is(WaterPrison.HURL)) {
+			kit.simulate(1, life + 1, t -> {
+				if (t != life) return;
+				Entity caster = level.getEntity(e.casterId());
+				Vec3 way = caster != null ? caster.getLookAngle() : look;
+				for (int i = 0; i < 10; i++) {
+					Vec3 at = centre.add(way.scale(0.4 * i));
+					kit.motes(at, i % 2 == 0 ? WaterFx.FOAM : WaterFx.LIGHT, 1, 0.1, way.scale(0.25), 0.03, GlowMote.Drift.FALL, 0.18F, 10);
+				}
+				RankFx.blast(kit, level, centre, radius, WaterFx.LIGHT, ParticleTypes.SPLASH);
+			});
+		}
 	}
 
 	/** One ball: ghost water in its air cells, the membrane, bubbles and the current; it collapses at its end or its prisoner's. */

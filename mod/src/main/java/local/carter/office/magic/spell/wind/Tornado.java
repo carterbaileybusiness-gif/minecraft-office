@@ -17,6 +17,8 @@ import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.HitBudget;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
+
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
@@ -53,7 +55,8 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * No block changes.
  *
  * <p>Ranks widen the funnel (the size knob). Forks: III {@link #LONG_STORM} (lasts {@link #LONG_STORM_LIFE}× as long) or
- * {@link #SANDBLAST} (hurts every {@link #SANDBLAST_EVERY} ticks); V {@link #TWIN} (a second tornado leaves
+ * {@link #DEBRIS} (every {@link #DEBRIS_EVERY} ticks the funnel hurls a chunk of debris at the nearest creature outside it within
+ * {@link #DEBRIS_REACH} of its axis, in its sight: {@link #DEBRIS_DAMAGE}{@code × P}); V {@link #TWIN} (a second tornado leaves
  * {@link #TWIN_ANGLE}° to the side; its own caster slot) or {@link #EYE} (radius {@link #EYE_RADIUS}×, pull in twice as hard).
  *
  * <p>Fx: {@code target} = the start (on the ground), {@code dir} = the level travel direction, {@code duration} = the life in
@@ -69,11 +72,13 @@ public final class Tornado implements Spell {
 	/** Velocities are synced to clients every this many ticks. */
 	static final int SYNC_EVERY = 2;
 	public static final String LONG_STORM = "long_storm";
-	public static final String SANDBLAST = "sandblast";
+	public static final String DEBRIS = "debris";
 	public static final String TWIN = "twin";
 	public static final String EYE = "eye";
 	public static final float LONG_STORM_LIFE = 1.6F;
-	public static final int SANDBLAST_EVERY = 5;
+	public static final int DEBRIS_EVERY = 20;
+	public static final double DEBRIS_REACH = 8;
+	public static final float DEBRIS_DAMAGE = 3;
 	public static final float TWIN_ANGLE = 30;
 	public static final double EYE_RADIUS = 1.5;
 	public static final double EYE_PULL = 2;
@@ -200,7 +205,7 @@ public final class Tornado implements Spell {
 			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, reach,
 					e -> catches(ctx, e) && TornadoGeometry.inReach(base, e.position(), r)));
 			caught.sort(Comparator.comparingDouble(e -> e.position().distanceToSqr(base)));
-			boolean hurt = age % (ctx.rank().is(SANDBLAST) ? SANDBLAST_EVERY : TornadoGeometry.HURT_EVERY) == 0;
+			boolean hurt = age % TornadoGeometry.HURT_EVERY == 0;
 			boolean sync = age % SYNC_EVERY == 0;
 			int n = 0;
 			int clips = 0;
@@ -224,7 +229,21 @@ public final class Tornado implements Spell {
 					Hurt.damage(ctx, l, TornadoGeometry.HURT * ChargeMath.size(ctx.charge()) * ctx.rank().mul(Knob.DAMAGE));
 				}
 			}
+			if (age > 0 && age % DEBRIS_EVERY == 0 && ctx.rank().is(DEBRIS)) debris(level, base, r);
 			return age < geo.life();
+		}
+
+		/** Debris: a chunk hurled from the funnel at the nearest creature outside it (never through a wall). */
+		private void debris(ServerLevel level, Vec3 base, double r) {
+			Vec3 from = base.add(0, 1.5, 0);
+			for (LivingEntity l : Targets.radius(ctx, from, r + DEBRIS_REACH)) {
+				Vec3 m = l.getBoundingBox().getCenter();
+				double dx = m.x - base.x, dz = m.z - base.z;
+				if (dx * dx + dz * dz <= r * r) continue;
+				if (!RankKit.reaches(level, from, l.getBoundingBox()) || !hurtBudget.admit(l)) continue;
+				Hurt.damage(ctx, l, DEBRIS_DAMAGE * ctx.power());
+				return;
+			}
 		}
 
 		@Override

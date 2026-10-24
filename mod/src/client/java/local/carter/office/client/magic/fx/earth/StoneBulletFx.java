@@ -11,7 +11,9 @@ import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ProjectileSpec;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.TargetFilter;
+
 import local.carter.office.magic.spell.earth.StoneBullet;
 import local.carter.office.magic.tree.SpellRank;
 
@@ -55,14 +57,14 @@ public final class StoneBulletFx implements SpellFx {
 	private static final int CRUMB_CAP = 110;
 	private static final int IMPACT_CRUMBS = 10;
 
-	/** Ricochet: a chip of the stone leaps from {@code at} to the nearest other creature this client sees within range. */
+	/** Ricochet: a chip of the stone leaps from {@code at} to the nearest other creature this client sees within range and in sight. */
 	private static void ricochet(FxKit kit, ClientLevel level, int casterId, Vec3 at) {
 		Entity next = null;
 		double best = StoneBullet.RICOCHET_RANGE * StoneBullet.RICOCHET_RANGE;
 		for (Entity en : level.getEntities((Entity) null, new AABB(at, at).inflate(StoneBullet.RICOCHET_RANGE),
 				x -> x.getId() != casterId && TargetFilter.affects(null, x))) {
 			double d = en.getBoundingBox().getCenter().distanceToSqr(at);
-			if (d > 1.5 && d < best) {
+			if (d > 1.5 && d < best && RankKit.reaches(level, at, en.getBoundingBox())) {
 				best = d;
 				next = en;
 			}

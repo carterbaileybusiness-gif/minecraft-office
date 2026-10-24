@@ -14,9 +14,11 @@ import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
+import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.tree.Knob;
 import local.carter.office.magic.tree.SpellRank;
 
@@ -42,7 +44,9 @@ import net.minecraft.world.phys.Vec3;
  * thrown {@link #UP} up ({@link #liftable}). Small spell: no block changes, the spikes are the client's ghost blocks.
  *
  * <p>Ranks lengthen the line (the size knob). Forks: III {@link #IMPALE} (twice the damage, the line 25 % shorter; knobs) or
- * {@link #UPLIFT} (thrown twice as high); V {@link #FIELD} (three lines, ±{@link #FIELD_ANGLE}°, from the same first cell; each
+ * {@link #SEEKER} (the line bends toward the nearest creature spells may hurt within {@link #SEEKER_ANGLE}° of the flat look and
+ * the line's reach, in the caster's sight; the fx's {@code dir} carries the bent way); V {@link #FIELD} (three lines,
+ * ±{@link #FIELD_ANGLE}°, from the same first cell; each
  * creature is struck once) or {@link #PETRIFY} (Slowness VI and Weakness, riders).
  *
  * <p>Fx: {@code target} = bottom centre of the first cell, {@code dir} = the flat look, {@code duration} = the line's length in
@@ -53,10 +57,11 @@ public final class EarthSpikes implements Spell {
 	public static final float DAMAGE = 4;
 	public static final double UP = 0.6;
 	public static final String IMPALE = "impale";
-	public static final String UPLIFT = "uplift";
+	public static final String SEEKER = "seeker";
 	public static final String FIELD = "field";
 	public static final String PETRIFY = "petrify";
 	public static final float FIELD_ANGLE = 20;
+	public static final double SEEKER_ANGLE = 40;
 
 	/** The line's length at {@code charge} and {@code rank} (the size knob, Impale's shortening), at least 1. */
 	public static int length(float charge, SpellRank rank) {
@@ -89,14 +94,32 @@ public final class EarthSpikes implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		ServerPlayer p = ctx.caster();
 		Vec3 forward = forward(ctx.look(), p.getYRot());
-		BlockPos start = EarthSpikesGeometry.start(p.position(), forward);
 		int length = length(ctx.charge(), ctx.rank());
+		if (ctx.rank().is(SEEKER)) forward = seek(ctx, forward, length);
+		BlockPos start = EarthSpikesGeometry.start(p.position(), forward);
 		List<List<BlockPos>> paths = new ArrayList<>();
 		for (Vec3 f : lines(forward, ctx.rank())) paths.add(EarthSpikesGeometry.path(start, f, length, solid(ctx.level())));
 		if (!ActiveEffects.add(ctx, new Burst(ctx, paths, forward))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		int longest = 1;
 		for (List<BlockPos> path : paths) longest = Math.max(longest, path.size());
-		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(start)).withDuration(longest).withData(length));
+		return CastOutcome.cast(ctx.fx().withDir(forward).withTarget(Vec3.atBottomCenterOf(start)).withDuration(longest).withData(length));
+	}
+
+	/**
+	 * Seeker: the flat way from the caster's feet to the nearest creature spells may hurt within {@link #SEEKER_ANGLE}° of
+	 * {@code forward} and {@code length} + 1 blocks, in the caster's sight; {@code forward} if there is none.
+	 */
+	static Vec3 seek(CastContext ctx, Vec3 forward, int length) {
+		Vec3 feet = ctx.caster().position();
+		double cos = Math.cos(Math.toRadians(SEEKER_ANGLE));
+		for (LivingEntity e : Targets.radius(ctx, feet, length + 1)) {
+			Vec3 to = e.position().subtract(feet);
+			Vec3 flat = new Vec3(to.x, 0, to.z);
+			if (flat.lengthSqr() < 1) continue;
+			flat = flat.normalize();
+			if (flat.dot(forward) >= cos && RankKit.reaches(ctx.level(), ctx.eye(), e.getBoundingBox())) return flat;
+		}
+		return forward;
 	}
 
 	/** The flat look, or the body's facing when looking straight up or down. */
@@ -146,7 +169,8 @@ public final class EarthSpikes implements Spell {
 		public boolean tick(ServerLevel level, int age) {
 			int i = age - 1;
 			boolean more = false;
-			double up = UP * (ctx.rank().is(UPLIFT) ? 2 : 1);
+			double up = UP;
+
 			float damage = DAMAGE * ctx.power();
 			for (List<BlockPos> path : paths) {
 				if (i >= path.size()) continue;

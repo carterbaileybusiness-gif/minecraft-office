@@ -92,6 +92,9 @@ public class BalanceGameTests {
 	static final int SETTLE_RANKED = 400;
 	/** Health of the ranked tests' zombies. */
 	static final float TOUGH = 1000;
+	/** Half-width of the ranked Fireball Barrage's zombie grid: the widest ranked volley's landing disc. */
+	static final int SPREAD_GRID = 8;
+
 
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 
@@ -151,7 +154,7 @@ public class BalanceGameTests {
 		add(SpellIds.FIRE_BOLT, p(16, 5, 10), p(16, 4, 10), false, true);
 		add(SpellIds.FIRE_WALL, p(16, 3, 10), p(16, 4, 9), true, true);
 		add(SpellIds.FLAME_DASH, p(16, 5, 12), null, false, false);
-		add(SpellIds.FIREBALL_BARRAGE, p(16, 3, 12), p(16, 4, 12), true, true);
+		add(SpellIds.FIREBALL_BARRAGE, p(16, 3, 14), p(16, 4, 14), true, true);
 		add(SpellIds.METEOR, p(16, 3, 14), p(16, 4, 14), true, true);
 		// Water
 		add(SpellIds.WATER_BULLET, p(16, 5, 10), p(16, 4, 10), false, true);
@@ -265,7 +268,16 @@ public class BalanceGameTests {
 		boolean small = slot == Slots.SMALL_A || slot == Slots.SMALL_B;
 		boolean ultimate = slot == Slots.ULTIMATE;
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
-		if (c.at() != null) {
+		if (c.at() != null && id.equals(SpellIds.FIREBALL_BARRAGE)) {
+			// A ranked volley lands up to spread(n) × Carpet's 1.6 from the aim (8 for 10 fireballs, 8.8 for 11) at seeded spots: a
+			// 3 × 3 crowd can be missed by every fireball of one cast (Windows CI run 40116275385, Carpet + Rapid Volley: each of its
+			// 9 fireballs misses the crowd's blast reach with p ≈ 0.7, all of them about 3 % of runs). So the crowd covers the whole
+			// landing disc, one zombie every 2 blocks over ±8 (81 of them, past the cap): every spot in the disc is within 1.5 of
+			// one, inside a fireball's 2.5 blast.
+			for (int dx = -SPREAD_GRID; dx <= SPREAD_GRID; dx += 2) {
+				for (int dz = -SPREAD_GRID; dz <= SPREAD_GRID; dz += 2) tough(MagicTestKit.dummy(h, c.at().offset(dx, 0, dz)));
+			}
+		} else if (c.at() != null) {
 			boolean movable = id.equals(SpellIds.QUAKE);
 			int n = c.crowd() ? CROWD : 1;
 			for (int i = 0; i < n; i++) {

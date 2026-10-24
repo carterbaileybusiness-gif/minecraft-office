@@ -38,8 +38,8 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>Ranks lengthen the blink (the size knob). Forks: III {@link #STATIC_STEP} ({@link #STATIC_DAMAGE}{@code × P} within
  * {@link #STATIC_RADIUS} of where you leave and where you land) or {@link #QUICK} (cooldown −50 %, a knob); V {@link #THUNDERCLAP}
- * (landing: Slowness III and thrown back within {@link #CLAP_RADIUS}) or {@link #SURGE} (Speed II and Haste II for
- * {@link #SURGE_TICKS}).
+ * (landing: Slowness III and thrown back within {@link #CLAP_RADIUS}) or {@link #SURGE} (out of the blink at a run:
+ * carried {@link #SURGE_SPEED} along the look, Speed II for {@link #SURGE_TICKS}, at most half the cooldown).
  *
  * <p>Fx: {@code origin} = the eye where the blink started, {@code target} = where the caster's feet ended, {@code data} =
  * {@code {eyeHeight, travelled}} (the feet started at {@code origin − (0, eyeHeight, 0)}).
@@ -57,7 +57,9 @@ public final class Blink implements Spell {
 	public static final double STATIC_RADIUS = 2.5;
 	public static final float STATIC_DAMAGE = 3;
 	public static final double CLAP_RADIUS = 4;
-	public static final int SURGE_TICKS = 100;
+	/** Surge: the speed it carries out of the blink, and Speed II for this long (capped at half the cooldown: 1 s, 0.5 s with Quick Charge). */
+	public static final double SURGE_SPEED = 1.2;
+	public static final int SURGE_TICKS = 20;
 
 	@Override
 	public Identifier id() {
@@ -89,8 +91,9 @@ public final class Blink implements Spell {
 		// Hemmed in (a wall right in front, a ceiling overhead): no blink, and nothing spent.
 		if (w.travelled() < MIN_TRAVEL) return CastOutcome.fizzle(BLOCKED_KEY);
 		Vec3 end = Motion.teleportSafe(p, w.end());
-		Motion.dash(p, Vec3.ZERO, NO_FALL_TICKS);
 		SpellRank rank = ctx.rank();
+		// Surge: out of the blink at a run, carried on along the look.
+		Motion.dash(p, rank.is(SURGE) ? surge(ctx.look()) : Vec3.ZERO, NO_FALL_TICKS);
 		if (rank.is(STATIC_STEP)) {
 			float damage = STATIC_DAMAGE * ctx.power();
 			RankKit.blast(ctx, from.add(0, 1, 0), STATIC_RADIUS, damage, null, 0, 0, 0);
@@ -100,16 +103,21 @@ public final class Blink implements Spell {
 			RankKit.afflict(ctx, end.add(0, 1, 0), CLAP_RADIUS, MobEffects.SLOWNESS, 40, 2);
 			RankKit.blast(ctx, end.add(0, 1, 0), CLAP_RADIUS, 0, null, 0, 1.0, 0.4);
 		}
-		if (rank.is(SURGE)) {
-			p.addEffect(new MobEffectInstance(MobEffects.SPEED, SURGE_TICKS, 1), p);
-			p.addEffect(new MobEffectInstance(MobEffects.HASTE, SURGE_TICKS, 1), p);
-		}
+		if (rank.is(SURGE)) p.addEffect(new MobEffectInstance(MobEffects.SPEED, RankKit.buffTicks(ctx, SURGE_TICKS), 1), p);
 		float eye = p.getEyeHeight();
 		return CastOutcome.cast(fx.withTarget(end).withData(eye, (float) w.travelled()));
 	}
 
+	/** Surge's carry out of the blink: {@link #SURGE_SPEED} along the level look, a little up. */
+	public static Vec3 surge(Vec3 look) {
+		Vec3 f = new Vec3(look.x, 0, look.z);
+		f = f.lengthSqr() < 1.0E-6 ? Vec3.ZERO : f.normalize();
+		return f.scale(SURGE_SPEED).add(0, 0.1, 0);
+	}
+
 	/**
 	 * Whether {@code p}'s body (in its current pose) fits with its feet at {@code at}: inside the world border, clear of every
+
 	 * block collider, and touching no lava or fire.
 	 */
 	static boolean fits(ServerPlayer p, Vec3 at) {

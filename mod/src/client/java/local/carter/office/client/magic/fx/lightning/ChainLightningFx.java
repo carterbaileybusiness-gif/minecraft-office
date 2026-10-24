@@ -77,12 +77,29 @@ public final class ChainLightningFx implements SpellFx {
 			forks(kit, level, rank, chain, hop, to, seed);
 			last[0] = to;
 		});
+		// Live Wire: the chain stays live, crackling from link to link again on each of the server's pulses.
+		if (rank.is(ChainLightning.LIVE_WIRE)) {
+			int pulseShare = Math.max(0, kit.budget().particlesLeft() / (ChainLightning.WIRE_PULSES + 1));
+			kit.simulate(ChainLightning.WIRE_EVERY, ChainLightning.WIRE_EVERY * ChainLightning.WIRE_PULSES + 1, t -> {
+				if (t == 0) return;
+				Allowance a = new Allowance(pulseShare);
+				Vec3 prev = null;
+				for (int i = 0; i < chain.length; i++) {
+					Entity body = level.getEntity(chain[i]);
+					if (body == null || !body.isAlive()) continue;
+					Vec3 at = body.getBoundingBox().getCenter();
+					if (prev != null) Volts.channel(kit, level, a, prev, at, LightningLook.hopSeed(seed + t, i), LightningLook.HOP, LightningLook.HOP_STRAND);
+					Volts.crawl(kit, level, a, chain[i], LightningLook.crawlSeed(seed + t, i));
+					prev = at;
+				}
+			});
+		}
 	}
 
-	/** The forks at hop {@code hop}: Thunderstorm's splash round each target, Overload's blast at the last. */
+	/** The forks at hop {@code hop}: Overload's blast at the last. */
 	private static void forks(FxKit kit, ClientLevel level, SpellRank rank, int[] chain, int hop, Vec3 at, long seed) {
-		if (rank.is(ChainLightning.THUNDERSTORM)) RankFx.blast(kit, level, at, ChainLightning.STORM_RADIUS, LightningLook.YELLOW, ParticleTypes.ELECTRIC_SPARK);
 		if (hop == chain.length - 1 && rank.is(ChainLightning.OVERLOAD)) {
+
 			RankFx.blast(kit, level, at, ChainLightning.OVERLOAD_RADIUS, LightningLook.CORE, ParticleTypes.ELECTRIC_SPARK);
 			RankFx.skyBolt(kit, level, at, seed + 977, Element.LIGHTNING.argb());
 		}

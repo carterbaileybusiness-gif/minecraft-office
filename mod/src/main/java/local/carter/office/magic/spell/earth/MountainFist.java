@@ -153,7 +153,7 @@ public final class MountainFist implements Spell {
 		int height = height(ctx.grimoireLevel(), ctx.rank());
 		BlockState surface = surfaceMaterial(level, target.below());
 		if (!ActiveEffects.add(ctx, new Rise(ctx, target, surface, baseRadius, height))) return CastOutcome.fizzle(CastService.BUSY_KEY);
-		if (ctx.rank().is(STONE_SKIN)) p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, SKIN_TICKS, 1), p);
+		if (ctx.rank().is(STONE_SKIN)) p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, RankKit.buffTicks(ctx, SKIN_TICKS), 1), p);
 		FxEvent fx = ctx.fx();
 		return CastOutcome.cast(fx.withDir(dir).withTarget(Vec3.atBottomCenterOf(target)).withDuration(MountainFistGeometry.RISE)
 				.withData(baseRadius, height, MountainFistGeometry.debris(ctx.grimoireLevel())));

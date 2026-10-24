@@ -40,7 +40,8 @@ import net.minecraft.world.phys.Vec3;
  * never through a wall) takes {@code 3 × P} and burns for {@code FIRE_TICKS × (1 + charge)} ticks, each once. No block changes.
  *
  * <p>Ranks widen the burning reach (the size knob). Forks: III {@link #OVERDRIVE} (dashes {@link #OVERDRIVE_SPEED}× as fast, so as
- * far) or {@link #PHOENIX} (Fire Resistance and Resistance I for {@link #PHOENIX_TICKS}); V {@link #COMET} (the dash ends in a blast
+ * far) or {@link #PHOENIX} (puts the caster out; Fire Resistance and Resistance I for {@link #PHOENIX_TICKS}, at most half the
+ * cooldown); V {@link #COMET} (the dash ends in a blast
  * of {@code 5 × P} within {@link #COMET_RADIUS}, throwing foes back) or {@link #WAKE} (burnt foes slowed and burning three times as
  * long).
  *
@@ -62,7 +63,8 @@ public final class FlameDash implements Spell {
 	public static final String COMET = "comet";
 	public static final String WAKE = "wake";
 	public static final float OVERDRIVE_SPEED = 1.4F;
-	public static final int PHOENIX_TICKS = 80;
+	/** Wanted, before the no-permanent-buff cap ({@code RankKit.buffTicks}: half the 2 s cooldown, so 1 s). */
+	public static final int PHOENIX_TICKS = 20;
 	public static final double COMET_RADIUS = 3;
 	public static final float COMET_DAMAGE = 5;
 	public static final double COMET_KNOCK = 1.0;
@@ -112,9 +114,13 @@ public final class FlameDash implements Spell {
 		if (!ActiveEffects.add(ctx, trail)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Motion.dash(p, dir.scale(speed).add(0, UP, 0), NO_FALL_TICKS);
 		if (ctx.rank().is(PHOENIX)) {
-			p.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, PHOENIX_TICKS, 0), p);
-			p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, PHOENIX_TICKS, 0), p);
+			// Rises from its own flames: put out, then guarded for the start of the dash (never longer than half the cooldown).
+			int guard = RankKit.buffTicks(ctx, PHOENIX_TICKS);
+			p.extinguishFire();
+			p.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, guard, 0), p);
+			p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, guard, 0), p);
 		}
+
 		return CastOutcome.cast(ctx.fx().withTarget(start).withDuration(BURN_TICKS).withData((float) speed));
 	}
 

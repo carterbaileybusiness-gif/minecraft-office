@@ -1,5 +1,6 @@
 package local.carter.office.client.magic.fx.fire;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -58,8 +59,16 @@ public final class FireballBarrageFx implements SpellFx {
 		int count = data.length > 0 ? Math.max(1, Math.round(data[0])) : BarrageGeometry.count(e.charge(), rank);
 		float[] lifts = new float[count];
 		for (int i = 0; i < count; i++) lifts[i] = data.length > i + 1 ? data[i + 1] : 1F;
-		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(e.target(), e.dir(), e.seed(), count, lifts, BarrageGeometry.spreadMul(rank),
-				BarrageGeometry.interval(rank));
+		List<Vec3> aims = BarrageGeometry.aims(e.target(), e.seed(), count, BarrageGeometry.spreadMul(rank));
+		// Guided Shells: the fireballs the server put on creatures fall on them here too.
+		List<Vec3> onto = new ArrayList<>();
+
+		for (int id : e.entities()) {
+			Entity t = level.getEntity(id);
+			if (t == null) break;
+			onto.add(t.position());
+		}
+		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(BarrageGeometry.guide(aims, onto), e.dir(), lifts, BarrageGeometry.INTERVAL);
 		boolean heavy = rank.is(FireballBarrage.HEAVY);
 		RandomSource r = kit.random();
 
