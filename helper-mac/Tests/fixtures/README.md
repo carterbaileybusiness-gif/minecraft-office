@@ -67,6 +67,15 @@ Swift change alters them without the fixtures being committed.
 | `secure_input.bin` | SECURE_INPUT = 78 | `{"on":true}` |
 | `cursor.bin` | CURSOR = 79 | `{"h":1080,"slot":1,"w":1920,"x":100,"y":200}` |
 | `walk.bin` | WALK = 80 | `{"keys":["forward","jump"]}` (movement keys held for Minecraft while dragging; `[]` = stop) |
+| `hello_features.bin` | HELLO = 1 | `{"features":["screens"],"mcPid":4242,"token":"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff","version":1}` |
+| `welcome_features.bin` | WELCOME = 64 | `{"accessibility":true,"features":["screens"],"screenRecording":true,"version":1}` |
+| `list_displays.bin` | LIST_DISPLAYS = 24 | `{}` |
+| `displays.bin` | DISPLAYS = 81 | `{"displays":[{"h":900,"id":"37D8832A-2D66-02CA-B9F7-8F30A301B230","main":true,"name":"MacBook","slot":0,"w":1440,"x":0,"y":0},{"h":1080,"id":"9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D","main":false,"name":"LG","slot":0,"w":1920,"x":-1920,"y":-180},{"h":1080,"id":"5A1E0F00-0000-4000-8000-0000000000A1","main":false,"slot":1,"w":1920,"x":1440,"y":0}]}` (the Office display has no `name`) |
+| `set_origins.bin` | SET_ORIGINS = 25 | `{"origins":[{"slot":1,"x":1440,"y":-180}]}` |
+| `identify.bin` | IDENTIFY = 26 | `{"labels":[{"display":"37D8832A-2D66-02CA-B9F7-8F30A301B230","label":"A"},{"display":"9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D","label":"B"},{"display":"5A1E0F00-0000-4000-8000-0000000000A1","label":"1"}]}` |
+| `capture_monitor.bin` | CAPTURE = 5 | `{"display":"9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D","fps":5,"kind":"main","maxW":1920,"surface":9}` (Mirror of the LG monitor) |
+| `work_begin_monitor.bin` | WORK_BEGIN = 22 | `{"button":"left","display":"9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D","h":1080,"slot":0,"w":1920,"x":960,"y":540}` |
+| `cursor_monitor.bin` | CURSOR = 79 | `{"display":"9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D","h":1080,"slot":0,"w":1920,"x":100,"y":200}` |
 
 (`\|` above is a table escape; the bytes contain a plain `|`.)
 
@@ -175,4 +184,28 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   `busy`.
 - TYPING_EXIT / DRAG_ENDED reasons: `esc`, `minecraft`, `elsewhere` / `released`, `cancelled`.
 - `windowKey` = `"<bundleId>|<CGWindowID>"` (id after the last `|`; bundle id may be empty).
+- **The display map ("screens" feature).** HELLO and WELCOME may carry `features` (a list of strings; absent = none).
+  Protocol version stays 1. Gating, both directions: the mod sends LIST_DISPLAYS, SET_ORIGINS, IDENTIFY or a
+  `display` key only when the WELCOME listed `"screens"`; the helper sends a reconfiguration DISPLAYS or a CURSOR
+  `display` only when the HELLO listed `"screens"` (DISPLAYS answering LIST_DISPLAYS / SET_ORIGINS needs no extra
+  check: only a "screens" mod asks). A side one release older would close the connection on the unknown type.
+  The helper's WELCOME always lists `"screens"`.
+  - Screen ids are CGDisplay UUID strings (`CGDisplayCreateUUIDFromDisplayID`), opaque to the mod; monitor `name`s
+    are short ("MacBook", "LG"; never on Office displays) and never leave the owner's computer.
+  - LIST_DISPLAYS → `DISPLAYS {displays:[{id, slot, main, name?, x, y, w, h}]}`: every online screen, global points
+    (top-left origin); slot 0 = a real monitor, 1–4 = that Office display; `main` = the main display.
+  - SET_ORIGINS `{origins:[{slot, x, y}]}` moves the listed Office displays to those origins in one display
+    configuration. Each must not overlap any screen and must share ≥ 1 pt of edge with a screen (else
+    `ERROR bad_request` — "… overlaps …" / "… must touch a screen" — and nothing moves); then DISPLAYS. The helper
+    remembers the arrangement and uses it when it creates the displays again.
+  - IDENTIFY `{labels:[{display, label}]}` shows each label big on that screen for 3 s (click-through overlays);
+    unknown ids are skipped. No reply.
+  - `display` on CAPTURE kind `main` = mirror that monitor instead of the main display (Minecraft still excluded; a
+    monitor that is not online → the main display). On slot-0 POINTER_DOWN / MOVE / UP, CLICK, SCROLL, WORK_BEGIN =
+    the pixel is of that monitor's picture. On CURSOR (slot 0) = the cursor is on that mirrored monitor, `x`, `y`, `w`,
+    `h` in its points.
+  - Rules (encoder and decoder, both sides; otherwise malformed): SET_ORIGINS 1–4 entries, slots 1–4, unique;
+    IDENTIFY 1–16 labels, label 1–2 characters, display id 1–64; DISPLAYS ≤ 16 entries, slot 0–4, w, h > 0, id 1–64;
+    `display` (1–64) on CAPTURE only with kind `main`, on pointer / scroll / work-begin / cursor only with slot 0.
+    Lengths count UTF-16 code units.
 - `mcWindowFrame` and WINDOWS `w`/`h` are global points, top-left origin (Quartz window coordinates).

@@ -129,10 +129,12 @@ import ScreenCaptureKit
         case .openApp(let p):
             if !AXIsProcessTrusted() { askAccessibilityOnce() }
             launcher.open(p)
+        case .listDisplays, .setOrigins, .identify:
+            sendError("bad_request", "\(message.type): not yet")
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
-             .apps, .icons, .appResult, .secureInput, .cursor, .walk:
+             .apps, .icons, .appResult, .secureInput, .cursor, .walk, .displays:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
     }
