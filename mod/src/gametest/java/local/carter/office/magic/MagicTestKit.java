@@ -92,6 +92,13 @@ public final class MagicTestKit {
 	public static final BlockPos STAND = new BlockPos(16, 4, 4);
 	/** XP levels every {@link #caster} starts with. */
 	public static final int XP_LEVELS = 30;
+	/**
+	 * GameTest environment for tests that expect terrain edits to land: {@code @GameTest(environment = MagicTestKit.TERRAIN_ENV)}.
+	 * Tests in one environment run as one batch, and the fallback claim rule sees every hologram emitter and every online
+	 * player's home and respawn point, including other tests' (the default batch has hologram tests placing emitters). Tests
+	 * here must never place an emitter or set a home or respawn point; a test that does needs an environment of its own.
+	 */
+	public static final String TERRAIN_ENV = "office-test:magic_terrain";
 
 	private static final Map<Entity, GameTestHelper> OWNERS = new WeakHashMap<>();
 	private static final Map<GameTestHelper, TestState> TESTS = new IdentityHashMap<>();
