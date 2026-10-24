@@ -83,7 +83,7 @@ Builder numbers (spec §7 left them to us; one source each):
 - Hand signs: length 6 at L7, 5 at L8, 4 at L9–10. Limit `20 + 12 × length` ticks, plus 10 ticks server grace. No two equal arrows in
   a row. Fizzle: `ceil(base / 2)` mana spent (30), 100-tick cooldown, no XP levels spent.
 - Budgets per cast: ≤ 64 entities affected, ≤ 48 falling blocks. Medium edits ≤ 256 blocks, ultimate ≤ 1500. Global applier
-  ≤ 256 block changes per tick. ≤ 32 lingering effects server-wide (projectiles have their own cap of 64). Client fx ≤ 400 particles
+  ≤ 256 block changes per tick. ≤ 12 lingering effects per caster and ≤ 128 server-wide (teleport channels exempt from the server-wide cap) (projectiles have their own cap of 64). Client fx ≤ 400 particles
   (ultimate ≤ 1500) and ≤ 128 ghost blocks.
 - `CastFx` range: 64 blocks (128 for ultimates).
 - Element colours (ARGB), defined once in `Element.java`; the texture script parses them: Fire `FFFF6A1A`, Water `FF2F8CFF`,

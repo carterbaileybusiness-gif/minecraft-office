@@ -15,7 +15,7 @@ import java.util.Map;
  */
 public final class RockLedger {
 	public static final int MAX_LIVE = 256;
-	public static final int MAX_PER_CASTER = 96;
+	public static final int MAX_PER_CASTER = 160;
 
 	private final Map<Integer, Integer> perCaster = new HashMap<>();
 	private int live;
@@ -39,6 +39,11 @@ public final class RockLedger {
 
 	public int live() {
 		return live;
+	}
+
+	/** How many more rocks {@code casterId} may have right now (both caps). */
+	public int room(int casterId) {
+		return Math.max(0, Math.min(MAX_LIVE - live, MAX_PER_CASTER - of(casterId)));
 	}
 
 	public int of(int casterId) {

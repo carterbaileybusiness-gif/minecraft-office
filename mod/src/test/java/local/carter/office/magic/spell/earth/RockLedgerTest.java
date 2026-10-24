@@ -23,6 +23,17 @@ class RockLedgerTest {
 	}
 
 	@Test
+	void roomIsWhatBothCapsStillAllow() {
+		RockLedger l = new RockLedger();
+		assertEquals(RockLedger.MAX_PER_CASTER, l.room(1));
+		for (int i = 0; i < 100; i++) l.admit(1);
+		assertEquals(RockLedger.MAX_PER_CASTER - 100, l.room(1));
+		for (int i = 0; i < 150; i++) l.admit(2);
+		assertEquals(RockLedger.MAX_LIVE - 250, l.room(3), "the total cap binds for a newcomer");
+		assertEquals(Math.min(RockLedger.MAX_LIVE - 250, RockLedger.MAX_PER_CASTER - 100), l.room(1));
+	}
+
+	@Test
 	void totalCapHolds() {
 		RockLedger l = new RockLedger();
 		int caster = 0;

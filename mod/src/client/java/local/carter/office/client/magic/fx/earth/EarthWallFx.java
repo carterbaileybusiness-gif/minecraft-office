@@ -88,23 +88,24 @@ public final class EarthWallFx implements SpellFx {
 		level.playLocalSound(centre.x, centre.y, centre.z, SoundEvents.RAVAGER_STEP, SoundSource.PLAYERS, 0.9F, 0.5F, false);
 		level.playLocalSound(centre.x, centre.y, centre.z, SoundEvents.ROOTED_DIRT_BREAK, SoundSource.PLAYERS, 1.0F, 0.55F, false);
 
-		// The rise: one cancellable timer raises, lands and checks each column and keeps their rocks and chips on its leash.
+		// One cancellable timer for the wall's whole life (one of FxKit's shared timer slots per wall): it raises, lands and checks
+		// each column, keeps their rocks and chips on its leash, waits out the wall's life, then hands the fall to a short timer of
+		// its own as it ends.
 		Map<Integer, Column> columns = new HashMap<>();
 		Set<Integer> planned = new HashSet<>();
 		RockLedger.Leash rise = new RockLedger.Leash(EarthStones.now());
-		EarthFx.drive(kit, rise, EarthWallGeometry.LAST_PLACE + HOLD + CHIP_LIFE + 2, t -> {
-			for (int k : g.order()) {
-				if (g.riseStart(k) == t) rise(kit, rise, crumbs, level, g, k, cells, planned, columns, fx, fz);
-			}
-			for (int k : g.order()) {
-				if (g.placeTick(k) == t) land(kit, rise, crumbs, level, g, k, c, columns.get(k));
-				if (g.placeTick(k) + HOLD == t) puffMissing(kit, crumbs, level, columns.get(k));
-			}
-		});
-
-		// The fall: a cancellable timer waits out the wall's life, then the columns sink on a leash of their own.
+		int risen = EarthWallGeometry.LAST_PLACE + HOLD;
 		int sinkAt = EarthWallGeometry.DURATION - 1 - SINK_LEAD;
-		EarthFx.leash(kit, sinkAt + 1, t -> {
+		EarthFx.drive(kit, rise, sinkAt + 1, t -> {
+			if (t <= risen) {
+				for (int k : g.order()) {
+					if (g.riseStart(k) == t) rise(kit, rise, crumbs, level, g, k, cells, planned, columns, fx, fz);
+				}
+				for (int k : g.order()) {
+					if (g.placeTick(k) == t) land(kit, rise, crumbs, level, g, k, c, columns.get(k));
+					if (g.placeTick(k) + HOLD == t) puffMissing(kit, crumbs, level, columns.get(k));
+				}
+			}
 			if (t == sinkAt) sink(kit, level, columns, fx, fz, fallCrumbs, fallDust);
 		});
 	}

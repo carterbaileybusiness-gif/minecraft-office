@@ -73,7 +73,7 @@ public final class GravityWell implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 centre = centre(ctx);
 		int life = WellGeometry.life(ctx.charge());
-		if (!ActiveEffects.add(ctx.level(), new Well(ctx, centre, life))) return CastOutcome.fizzle("magic.office.busy");
+		if (!ActiveEffects.add(ctx, new Well(ctx, centre, life))) return CastOutcome.fizzle("magic.office.busy");
 		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withData((float) WellGeometry.RADIUS));
 	}
 

@@ -13,6 +13,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.DustParticleOptions;
+import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
@@ -38,6 +39,9 @@ public final class EarthFx {
 		EarthStones.register();
 		SpellFxRegistry.register(SpellIds.STONE_BULLET, new StoneBulletFx());
 		SpellFxRegistry.register(SpellIds.EARTH_WALL, new EarthWallFx());
+		SpellFxRegistry.register(SpellIds.EARTH_SPIKES, new EarthSpikesFx());
+		SpellFxRegistry.register(SpellIds.QUAKE, new QuakeFx());
+		SpellFxRegistry.register(SpellIds.MOUNTAIN_FIST, new MountainFistFx());
 	}
 
 	static BlockParticleOption crumbs(BlockState s) {
@@ -97,6 +101,47 @@ public final class EarthFx {
 		}
 	}
 
+	/**
+	 * A share of an event's particle budget set aside for one phase of a long visual (an eruption, a rise, a shatter), so the
+	 * phases that come first can never starve the ones that come later. Drawing asks the share first and the event's budget second.
+	 */
+	static final class Share {
+		private int left;
+
+		Share(int particles) {
+			this.left = Math.max(0, particles);
+		}
+
+		/** Up to {@code want} from this share alone, for a kit call that charges the event's budget itself. */
+		int take(int want) {
+			int granted = Math.max(0, Math.min(want, left));
+			left -= granted;
+			return granted;
+		}
+
+		/** Up to {@code want} from this share and the event's budget both, for particles added straight to the level ({@link #spray}). */
+		int spend(FxKit kit, int want) {
+			return kit.budget().particles(take(want));
+		}
+
+		int left() {
+			return left;
+		}
+	}
+
+	/**
+	 * {@code n} particles (already paid for out of the event's budget) flung from about {@code at} ({@code spread} either way) at up
+	 * to {@code speed}; {@code up} keeps them rising.
+	 */
+	static void spray(ClientLevel level, ParticleOptions p, Vec3 at, int n, double spread, double speed, boolean up) {
+		RandomSource r = level.getRandom();
+		for (int i = 0; i < n; i++) {
+			Vec3 v = sphere(r).scale(speed * (0.35 + 0.65 * r.nextDouble()));
+			level.addParticle(p, at.x + (r.nextDouble() - 0.5) * 2 * spread, at.y + (r.nextDouble() - 0.5) * 2 * spread,
+					at.z + (r.nextDouble() - 0.5) * 2 * spread, v.x, up ? Math.abs(v.y) : v.y, v.z);
+		}
+	}
+
 	/** {@code v} normalised (+Z if it has no length). */
 	static Vec3 unit(Vec3 v) {
 		double l = v.length();
@@ -113,7 +158,7 @@ public final class EarthFx {
 
 	/**
 	 * Throws a small chip of {@code state} from {@code at} with {@code velocity}: it tumbles under gravity, bounces once off the
-	 * ground it meets in {@code level} and settles, shrinking away over its last ticks. The flight is worked out now (one
+	 * ground it meets in {@code level} and settles, shrinking away over its last ticks. A chip a block has since come up over is hidden. The flight is worked out now (one
 	 * position per tick against the world as it is) and drawn smoothly between ticks. Costs one ghost block of the event.
 	 */
 	static void chip(FxKit kit, RockLedger.Leash leash, ClientLevel level, BlockState state, Vec3 at, Vec3 velocity, float size, int life) {
@@ -141,7 +186,12 @@ public final class EarthFx {
 		float yaw0 = r.nextFloat() * 360F;
 		EarthStones.add(kit.event().casterId(), leash, state, life, (t, out) -> {
 			int i = Math.min(path.size() - 2, (int) t);
-			out.at(path.get(i).lerp(path.get(i + 1), t - i));
+			Vec3 here = path.get(i).lerp(path.get(i + 1), t - i);
+			// Buried by a block that came up after it was thrown (the next wall column rising over where it lies): gone, never
+			// drawn inside the block, unlit and black.
+			BlockPos in = BlockPos.containing(here);
+			if (level.getBlockState(in).isCollisionShapeFullBlock(level, in)) return false;
+			out.at(here);
 			float spin = Math.min(t, life * 0.6F);
 			out.yaw = yaw0 + spinA * spin;
 			out.pitch = spinB * spin;

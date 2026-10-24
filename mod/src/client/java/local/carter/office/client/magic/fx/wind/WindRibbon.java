@@ -25,6 +25,8 @@ final class WindRibbon {
 	private static final float BLOB_STEP = 0.3F;
 	private static final float BLOB_SIZE = 1.5F;
 	private static final float BLOB_LIGHT = 0.22F;
+	/** A blob is at least this many steps across. */
+	private static final float BLOB_SPAN = 2.2F;
 	/** The crisp line: its pieces as a share of the thickness. */
 	private static final float LINE_SIZE = 0.55F;
 	/** Pieces are never closer than this (blocks), however thin the stroke gets: tapered tips stay cheap. */
@@ -40,6 +42,8 @@ final class WindRibbon {
 	private final Quaternionf q = new Quaternionf();
 	private final TextureAtlasSprite line = MagicCircleRenderer.sprite("line");
 	private final TextureAtlasSprite glow = MagicCircleRenderer.sprite("glow");
+	/** Coarse strokes use the larger, smoother glow (big blobs of the small one show its texels as beads). */
+	private final TextureAtlasSprite soft = MagicCircleRenderer.sprite("soft");
 
 	/**
 	 * Draws {@code pts} (world positions) with thickness {@code width[i]} and brightness {@code alpha[i]} at point {@code i}: the
@@ -47,7 +51,20 @@ final class WindRibbon {
 	 * {@code rgb} at half brightness instead).
 	 */
 	void draw(QuadParticleRenderState state, Vec3 cam, Vec3[] pts, float[] width, float[] alpha, int rgb, float coreShare, int coreRgb) {
-		pass(state, cam, pts, width, alpha, BLOB_STEP, BLOB_SIZE, glow, rgb, BLOB_LIGHT);
+		draw(state, cam, pts, width, alpha, rgb, coreShare, coreRgb, 1F);
+	}
+
+	/**
+	 * As {@link #draw(QuadParticleRenderState, Vec3, Vec3[], float[], float[], int, float, int)}, with the glow blobs spaced
+	 * {@code coarse} times wider (and brighter to match): for big strokes seen from afar (a tornado's funnel), at a fraction of
+	 * the quads ({@link #pieces(Vec3[], float[], float, boolean)}). A negative {@code coreShare} draws the soft glow alone, with no
+	 * crisp line.
+	 */
+	void draw(QuadParticleRenderState state, Vec3 cam, Vec3[] pts, float[] width, float[] alpha, int rgb, float coreShare, int coreRgb, float coarse) {
+		pass(state, cam, pts, width, alpha, BLOB_STEP * coarse, BLOB_SIZE, coarse > 1 ? soft : glow, rgb, BLOB_LIGHT * Math.min(2F, coarse));
+		if (coreShare < 0) {
+			return;
+		}
 		if (coreShare > 0) {
 			pass(state, cam, pts, width, alpha, LINE_SIZE, LINE_SIZE, line, coreRgb, coreShare);
 		} else {
@@ -59,6 +76,9 @@ final class WindRibbon {
 	private void pass(QuadParticleRenderState state, Vec3 cam, Vec3[] pts, float[] width, float[] alpha, float step, float size,
 			TextureAtlasSprite sprite, int rgb, float light) {
 		var layer = LightPipeline.glow();
+		// No gaps: a line piece is at least as long as the step to the next, and a glow blob (whose light fades well inside its
+		// quad) at least 2.2 steps across, so thin strokes (where MIN_STEP sets the spacing) never break into dashes or beads.
+		float span = sprite == line ? 1F : BLOB_SPAN;
 		float carry = 0;
 		for (int i = 0; i + 1 < pts.length; i++) {
 			Vec3 p0 = pts[i];
@@ -75,13 +95,16 @@ final class WindRibbon {
 				float w = Math.max(0.02F, width[i] + (width[i + 1] - width[i]) * f);
 				float a = (alpha[i] + (alpha[i + 1] - alpha[i]) * f) * light;
 				float advance = Math.max(MIN_STEP, w * step);
-				float at = Math.min(length, s + advance / 2);
+				// Centred on its own stretch even past a corner, so it meets the next stretch's first piece with no gap; on the last
+				// stretch it is pulled back so the stroke never runs past its end.
+				float at = s + advance / 2;
+				if (i + 2 == pts.length) at = Math.min(at, Math.max(0F, length - advance / 2));
 				if (a > 0.004F) {
 					float mx = (float) (p0.x - cam.x) + dir.x * at;
 					float my = (float) (p0.y - cam.y) + dir.y * at;
 					float mz = (float) (p0.z - cam.z) + dir.z * at;
 					along(mx, my, mz);
-					state.add(layer, mx, my, mz, q.x, q.y, q.z, q.w, w * size / 2, sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1(),
+					state.add(layer, mx, my, mz, q.x, q.y, q.z, q.w, Math.max(w * size, advance * span) / 2, sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1(),
 							LightPipeline.light(a, rgb), LightCoordsUtil.FULL_BRIGHT);
 				}
 				s += advance;
@@ -92,7 +115,12 @@ final class WindRibbon {
 
 	/** Quads {@link #draw} lays for {@code pts} with thicknesses {@code width} (both passes). */
 	static int pieces(Vec3[] pts, float[] width) {
-		return count(pts, width, BLOB_STEP) + count(pts, width, LINE_SIZE);
+		return pieces(pts, width, 1F, true);
+	}
+
+	/** Quads the coarse {@link #draw} lays for {@code pts} with thicknesses {@code width}: the glow, and the crisp line if {@code line}. */
+	static int pieces(Vec3[] pts, float[] width, float coarse, boolean line) {
+		return count(pts, width, BLOB_STEP * coarse) + (line ? count(pts, width, LINE_SIZE) : 0);
 	}
 
 	/** What a visual drawing {@code quads} quads a frame costs in fx-budget particles: one per {@value #QUADS_PER_PARTICLE}, at least one. */

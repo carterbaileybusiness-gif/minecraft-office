@@ -120,7 +120,7 @@ public final class FireballBarrage implements Spell {
 		for (int i = 0; i < count; i++) lifts[i] = (float) lift(level, aims.get(i), drop);
 		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(point, dir, ctx.seed(), count, lifts);
 		// The volley flies its own fireballs, so once it is running every one of them flies (nothing else can take their slots).
-		if (!ActiveEffects.add(level, new Volley(ctx, volley))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, new Volley(ctx, volley))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 
 		float[] data = new float[1 + count];
 		data[0] = count;

@@ -10,5 +10,8 @@ public final class LightningFx {
 	public static void register() {
 		SpellFxRegistry.register(SpellIds.SPARK, new SparkFx());
 		SpellFxRegistry.register(SpellIds.CHAIN_LIGHTNING, new ChainLightningFx());
+		SpellFxRegistry.register(SpellIds.BLINK, new BlinkFx());
+		SpellFxRegistry.register(SpellIds.THUNDER_SPEAR, new ThunderSpearFx());
+		SpellFxRegistry.register(SpellIds.CHIDORI_STRIKE, new ChidoriStrikeFx());
 	}
 }

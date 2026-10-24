@@ -9,5 +9,8 @@ public final class EarthSpells {
 	public static void register() {
 		SpellRegistry.register(new StoneBullet());
 		SpellRegistry.register(new EarthWall());
+		SpellRegistry.register(new EarthSpikes());
+		SpellRegistry.register(new Quake());
+		SpellRegistry.register(new MountainFist());
 	}
 }

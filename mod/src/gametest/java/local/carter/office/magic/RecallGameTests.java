@@ -1,7 +1,9 @@
 package local.carter.office.magic;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.cast.RecallSpell;
@@ -10,6 +12,8 @@ import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.item.MagicItems;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.ActiveEffects;
+import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.SpellRegistry;
 
@@ -184,6 +188,35 @@ public class RecallGameTests {
 			h.assertValueEqual(rec.cancels().size(), 0, "nothing cancelled");
 			h.assertValueEqual(rec.fx(p).size(), 1, "still one fx");
 			h.assertValueEqual(recall(p), Result.COOLDOWN, "cooling down");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
+	public void recallStartsAtGlobalEffectCap(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		setHome(h, p, HOME);
+		List<LingeringEffect> fillers = new ArrayList<>();
+		// Other players fill the server-wide cap and it is emptied again within this one server tick.
+		try {
+			UUID other = UUID.randomUUID();
+			while (ActiveEffects.count() < ActiveEffects.MAX) {
+				if (ActiveEffects.count(other) >= ActiveEffects.MAX_PER_CASTER) other = UUID.randomUUID();
+				LingeringEffect f = CastGameTests.idleEffect();
+				h.assertTrue(ActiveEffects.add(h.getLevel(), other, f), "filler refused below the cap");
+				fillers.add(f);
+			}
+			h.assertTrue(ActiveEffects.full(p.getUUID()), "a lingering spell would be refused");
+			h.assertValueEqual(recall(p), Result.CAST, "Recall at the global cap");
+			h.assertTrue(RecallSpell.channeling(p), "channeling");
+			h.assertValueEqual(ActiveEffects.count(p.getUUID()), 1, "the channel counts toward its caster");
+		} finally {
+			for (LingeringEffect f : fillers) ActiveEffects.remove(f);
+		}
+		h.runAfterDelay(62, () -> {
+			assertAt(h, p, centre(HOME), "at home");
+			h.assertFalse(RecallSpell.channeling(p), "channel over");
+			h.assertValueEqual(ActiveEffects.count(p.getUUID()), 0, "channel gone");
 			h.succeed();
 		});
 	}

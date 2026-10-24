@@ -97,12 +97,12 @@ public final class BladeWind implements Spell {
 	@Override
 	public CastOutcome cast(CastContext ctx) {
 		// Decide before any side effect: a full effect list fizzles for free.
-		if (ActiveEffects.count() >= ActiveEffects.MAX) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (ActiveEffects.full(ctx.caster().getUUID())) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		List<ProjectileSpec> specs = BladeWindGeometry.specs(ctx.eye(), ctx.look(), ctx.charge());
 		float[] stops = new float[specs.size()];
 		for (int i = 0; i < stops.length; i++) stops[i] = (float) flightTime(ctx.level(), specs.get(i));
 		Effect effect = new Effect(ctx, specs, stops);
-		if (!ActiveEffects.add(ctx.level(), effect)) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, effect)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		float[] data = new float[stops.length + 1];
 		data[0] = stops.length;
 		System.arraycopy(stops, 0, data, 1, stops.length);

@@ -84,7 +84,7 @@ public final class TidalPush implements Spell {
 		Vec3 start = Vec3.atBottomCenterOf(ctx.caster().blockPosition());
 		TidalWaveGeometry wave = new TidalWaveGeometry(start, look);
 		Wave effect = new Wave(ctx, wave);
-		if (!ActiveEffects.add(level, effect)) return CastOutcome.fizzle("magic.office.busy");
+		if (!ActiveEffects.add(ctx, effect)) return CastOutcome.fizzle("magic.office.busy");
 
 		// The shove.
 		List<Integer> shoved = new ArrayList<>();

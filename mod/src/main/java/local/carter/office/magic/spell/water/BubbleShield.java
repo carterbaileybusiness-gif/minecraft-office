@@ -78,7 +78,10 @@ public final class BubbleShield implements Spell {
 		ServerPlayer caster = ctx.caster();
 		int life = BubbleShieldGeometry.duration(ctx.charge());
 		Bubble bubble = new Bubble(ctx, life);
-		if (!ActiveEffects.add(ctx.level(), bubble)) return CastOutcome.fizzle("magic.office.busy");
+		// at the per-caster cap, the bubble being refreshed frees its own slot first
+		Bubble current = ACTIVE.get(caster.getUUID());
+		if (current != null && ActiveEffects.count(caster.getUUID()) >= ActiveEffects.MAX_PER_CASTER) ActiveEffects.remove(current);
+		if (!ActiveEffects.add(ctx, bubble)) return CastOutcome.fizzle("magic.office.busy");
 		Bubble old = ACTIVE.put(caster.getUUID(), bubble);
 		if (old != null) ActiveEffects.remove(old);
 		caster.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, life, RESISTANCE_AMPLIFIER, false, false, true), caster);

@@ -86,7 +86,7 @@ public final class WaterPrison implements Spell {
 		}
 		int life = WaterPrisonGeometry.duration(ctx.charge());
 		Prison prison = new Prison(ctx, centre, life, target);
-		if (!ActiveEffects.add(ctx.level(), prison)) return CastOutcome.fizzle("magic.office.busy");
+		if (!ActiveEffects.add(ctx, prison)) return CastOutcome.fizzle("magic.office.busy");
 		int[] held = target == null ? new int[0] : new int[] {target.getId()};
 		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withEntities(held).withData((float) WaterPrisonGeometry.RADIUS));
 	}
