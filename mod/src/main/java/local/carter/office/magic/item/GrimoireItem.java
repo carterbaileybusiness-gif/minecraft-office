@@ -67,7 +67,7 @@ public class GrimoireItem extends Item {
 		if (data.element().isEmpty()) return open(player, OpenGrimoire.Mode.CHOOSE);
 		if (mainHand) return open(player, OpenGrimoire.Mode.INFO);
 		// Pre-checks (both sides, from synced data) so a hopeless charge never starts; release re-checks everything.
-		Optional<Spell> spell = data.selected().flatMap(SpellRegistry::get);
+		Optional<Spell> spell = data.selected().flatMap(id -> SpellRegistry.get(player.getUUID(), id));
 		if (spell.isEmpty()) return InteractionResult.PASS;
 		Component blocked = CastService.chargeBlocker(player, data, spell.get());
 		if (blocked != null) {

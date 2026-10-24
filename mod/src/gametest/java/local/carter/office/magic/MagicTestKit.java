@@ -8,7 +8,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import org.jspecify.annotations.Nullable;
@@ -55,6 +57,8 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.ai.goal.GoalSelector;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.animal.wolf.Wolf;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -80,7 +84,8 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>GameTests in one batch run at the same time on one server, so the kit keeps per-test state: the {@link Recorder} only
  * sees events of its own test's players (or, failing that, events inside its test's bounds), and {@link #override} probes are
- * removed when the test ends. Give concurrent probes distinct ids. GameTest servers have no spawn protection and the kit clears
+ * seen only by its own test's kit players (lookups without a player, such as {@code SpellRegistry.get(id)}, never see them)
+ * and are removed when the test ends. GameTest servers have no spawn protection and the kit clears
  * respawn configs, so the fallback claim rule only reacts to what a test sets up.
  */
 public final class MagicTestKit {
@@ -189,6 +194,7 @@ public final class MagicTestKit {
 		own(h, p);
 		TestState s = state(h);
 		s.players.add(p.getId());
+		s.uuids.add(p.getUUID());
 		s.playerObjects.add(p);
 	}
 
@@ -213,9 +219,9 @@ public final class MagicTestKit {
 
 	// ---- Casting ----
 
-	/** {@code CastService.cast} for the registered (or overridden) spell {@code spell}. */
+	/** {@code CastService.cast} for the registered spell {@code spell}, or {@code p}'s override of it. */
 	public static Result cast(ServerPlayer p, Identifier spell, float charge) {
-		Spell s = SpellRegistry.get(spell).orElseThrow(() -> new IllegalArgumentException("no spell " + spell));
+		Spell s = SpellRegistry.get(p.getUUID(), spell).orElseThrow(() -> new IllegalArgumentException("no spell " + spell));
 		return CastService.cast(p, s, charge);
 	}
 
@@ -230,9 +236,20 @@ public final class MagicTestKit {
 		return CastService.answer(p, c.id(), HandSigns.sequence(c.seed(), c.length()));
 	}
 
-	/** Lays {@code s} over the registry until this test ends. */
+	/**
+	 * Lays {@code s} over the registry until this test ends, for this test's kit players only: every player the kit made for
+	 * {@code h}, before or after this call (respawns included). Other tests, and lookups without a player, still see the
+	 * registered spells, so a probe may reuse a real spell's id or (element, slot).
+	 */
 	public static void override(GameTestHelper h, Spell s) {
-		state(h).cleanups.add(SpellRegistry.overrideForTesting(s));
+		TestState st = state(h);
+		st.cleanups.add(SpellRegistry.overrideForTesting(s, st.uuids::contains));
+	}
+
+	/** As {@link #override}, but for the kit player {@code p} alone (and its respawns); removed when its test ends. */
+	public static void overrideFor(ServerPlayer p, Spell s) {
+		UUID owner = p.getUUID();
+		state(helperOf(p)).cleanups.add(SpellRegistry.overrideForTesting(s, owner::equals));
 	}
 
 	/** A test spell at {@code office-test:<path>} that casts {@code ctx.fx()}. Tweak it with {@code with…}, install with {@link #override}. */
@@ -265,6 +282,37 @@ public final class MagicTestKit {
 		z.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.CARVED_PUMPKIN));
 		own(h, z);
 		return z;
+	}
+
+	/**
+	 * A zombie target that physics moves: like {@link #dummy} (20 hp, persistent, pumpkin head) but with AI on, so gravity,
+	 * knockback, pushes and pulls move it ({@link #dummy} is NoAI, and a NoAI mob never moves, so its knockback reads 0).
+	 * Every goal and target goal is removed, loot pickup and reinforcements are off: it stands still, attacks no one and
+	 * only moves when something moves it. Use it wherever a test measures movement of a mob.
+	 */
+	public static Zombie movableDummy(GameTestHelper h, BlockPos rel) {
+		Zombie z = h.spawn(EntityTypes.ZOMBIE, rel);
+		z.removeAllGoals(g -> true);
+		targetSelector(z).removeAllGoals(g -> true);
+		z.setTarget(null);
+		z.setCanPickUpLoot(false);
+		z.getAttribute(Attributes.SPAWN_REINFORCEMENTS_CHANCE).setBaseValue(0);
+		z.getAttribute(Attributes.MAX_HEALTH).setBaseValue(20);
+		z.setHealth(20);
+		z.setPersistenceRequired();
+		z.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.CARVED_PUMPKIN));
+		own(h, z);
+		return z;
+	}
+
+	private static GoalSelector targetSelector(Mob m) {
+		try {
+			Field f = Mob.class.getDeclaredField("targetSelector");
+			f.setAccessible(true);
+			return (GoalSelector) f.get(m);
+		} catch (ReflectiveOperationException e) {
+			throw new IllegalStateException("Mob.targetSelector not found", e);
+		}
 	}
 
 	/** A villager (no AI, persistent): spells must spare it. */
@@ -536,6 +584,8 @@ public final class MagicTestKit {
 	private static final class TestState {
 		final GameTestHelper helper;
 		final Set<Integer> players = new HashSet<>();
+		/** Kit players' UUIDs: the owners of this test's overrides. */
+		final Set<UUID> uuids = ConcurrentHashMap.newKeySet();
 		final List<ServerPlayer> playerObjects = new ArrayList<>();
 		final List<AutoCloseable> cleanups = new ArrayList<>();
 		@Nullable Recorder recorder;

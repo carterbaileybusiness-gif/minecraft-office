@@ -216,7 +216,8 @@ public final class SpellWheel {
 	public static @Nullable Spell spellAt(MagicData d, int slot) {
 		Element e = d.element().orElse(null);
 		if (e == null) return null;
-		return SpellRegistry.at(e, slot).orElse(null);
+		var self = Minecraft.getInstance().player;
+		return SpellRegistry.at(self == null ? null : self.getUUID(), e, slot).orElse(null);
 	}
 
 	/** The spell at {@code slot} when the player may select it (registered and unlocked), or null. */

@@ -75,7 +75,8 @@ public final class HandSignScreen extends Screen {
 		List<Integer> held = new ArrayList<>();
 		for (int key : keys.keySet()) if (InputConstants.isKeyDown(key)) held.add(key);
 		this.input = new HandSignInput(HandSigns.sequence(c.seed(), c.length()), keys, gameTick(), c.limitTicks(), held);
-		Optional<Spell> spell = SpellRegistry.get(c.spell());
+		var self = Minecraft.getInstance().player;
+		Optional<Spell> spell = SpellRegistry.get(self == null ? null : self.getUUID(), c.spell());
 		this.colour = colourOf(spell.orElse(null));
 		this.spellName = Component.translatable("spell." + c.spell().getNamespace() + "." + c.spell().getPath());
 	}
