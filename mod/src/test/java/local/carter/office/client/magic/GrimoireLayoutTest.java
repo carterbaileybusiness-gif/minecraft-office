@@ -123,6 +123,31 @@ class GrimoireLayoutTest {
 		for (int[] wh : MORE) assertFriendsFit(wh[0], wh[1]);
 	}
 
+	/** Spells, Friends, How to cast: every tab on screen, apart, top to bottom, beside the book. */
+	@Test
+	void everyTabHasATooltip() {
+		assertEquals(GrimoireLayout.TABS, GrimoireLayout.TAB_TIPS.length);
+	}
+
+	@Test
+	void threeTabsFit() {
+		List<int[]> all = new java.util.ArrayList<>(List.of(SIZES));
+		all.addAll(List.of(MORE));
+		for (int[] wh : all) {
+			String at = wh[0] + "x" + wh[1];
+			GrimoireLayout.Layout l = GrimoireLayout.layout(wh[0], wh[1]);
+			assertEquals(3, GrimoireLayout.TABS);
+			assertEquals(3, l.tabs().size(), at);
+			for (int i = 0; i < 3; i++) {
+				Rect t = l.tabs().get(i);
+				assertTrue(t.insideScreen(wh[0], wh[1], 0), at + ": tab " + i + " " + t);
+				assertTrue(t.bottom() < l.book().bottom(), at + ": tab " + i + " above the book's bottom");
+				for (int j = i + 1; j < 3; j++) assertFalse(t.overlaps(l.tabs().get(j)), at + ": tabs " + i + " and " + j + " overlap");
+				if (i > 0) assertTrue(t.y() > l.tabs().get(i - 1).y(), at + ": tabs top to bottom");
+			}
+		}
+	}
+
 	@Test
 	void friendRowAtFindsRows() {
 		GrimoireLayout.Layout l = GrimoireLayout.layout(640, 360);

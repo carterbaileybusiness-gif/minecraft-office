@@ -8,12 +8,14 @@ import org.jspecify.annotations.Nullable;
 
 import com.mojang.blaze3d.platform.InputConstants;
 
+import local.carter.office.client.magic.MagicClient;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.LevelCurve;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.net.MagicPayloads.SelectSpell;
 import local.carter.office.magic.spell.SpellCost;
 import local.carter.office.magic.spell.SpellIds;
@@ -33,8 +35,9 @@ import net.minecraft.util.Util;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 /**
- * Reading your grimoire (main-hand use while bound). Two index tabs on the book's left edge switch between Spells and Friends
- * (click them, or Left / Right); the Friends tab is {@link FriendsPage} (Travel to a friend). Spells tab: left page: your element's sigil, the grimoire level, xp to the next
+ * Reading your grimoire (main-hand use while bound). Index tabs on the book's left edge switch between Spells, Friends and How
+ * to cast (click them, or Left / Right step through them); the Friends tab is {@link FriendsPage} (Travel to a friend), How to
+ * cast is two pages of handbook text. Spells tab: left page: your element's sigil, the grimoire level, xp to the next
  * level and your Recall home. Right page: the six spells of your wheel (icon, name, mana, cooldown; locked ones greyed with a
  * padlock and the level that unlocks them); clicking an unlocked one (or Enter / 1–6) selects it, marked by a ribbon in your
  * element's colour. Footer: how to cast from the off hand. Nothing scrolls; not a pause screen.
@@ -58,14 +61,14 @@ public final class GrimoireScreen extends Screen {
 	private long shakeAt;
 	private float ribbonY = Float.NaN;
 	private final List<FormattedCharSequence> lines = new ArrayList<>();
-	/** 0 = Spells, 1 = Friends. */
+	/** {@link #TAB_SPELLS}, {@link #TAB_FRIENDS} or {@link #TAB_HOWTO}. */
 	private int tab;
 	/** When the spell rows start sliding in (the opening, or a switch back to Spells). */
 	private long rowsFrom = openedAt;
 	private long tabAt = openedAt - 1000;
 	private final float[] tabHover = new float[GrimoireLayout.TABS];
 	private final FriendsPage friends = new FriendsPage(this);
-	public static final int TAB_SPELLS = 0, TAB_FRIENDS = 1;
+	public static final int TAB_SPELLS = 0, TAB_FRIENDS = 1, TAB_HOWTO = 2;
 
 	public GrimoireScreen() {
 		super(Component.translatable("item.office.grimoire"));
@@ -83,7 +86,7 @@ public final class GrimoireScreen extends Screen {
 		return friends;
 	}
 
-	/** Shows tab {@code t} ({@link #TAB_SPELLS} or {@link #TAB_FRIENDS}). */
+	/** Shows tab {@code t} (0 to {@link GrimoireLayout#TABS} - 1). */
 	public void setTab(int t) {
 		if (t == tab || t < 0 || t >= GrimoireLayout.TABS) return;
 		tab = t;
@@ -96,6 +99,18 @@ public final class GrimoireScreen extends Screen {
 
 	public boolean introDone() {
 		return Util.getMillis() - openedAt >= ROW_DELAY_MS + 5 * ROW_STAGGER_MS + ROW_MS + 30;
+	}
+
+	/** Closing it with the Grimoire still in the main hand: it only opens here, so say where it casts from (rate limited). */
+	@Override
+	public void onClose() {
+		super.onClose();
+		var player = minecraft.player;
+		if (player != null && player.isAlive() && GrimoireItem.isGrimoire(player.getMainHandItem())
+				&& data().element().isPresent() && MagicClient.holdHint().tryShow()) {
+			minecraft.gui.hud.setOverlayMessage(Component.translatable("magic.office.hold_hint",
+					minecraft.options.keySwapOffhand.getTranslatedKeyMessage()), false);
+		}
 	}
 
 	@Override
@@ -135,6 +150,7 @@ public final class GrimoireScreen extends Screen {
 			return true;
 		}
 		if (tab == TAB_FRIENDS) return friends.click(l, event.x(), event.y()) || super.mouseClicked(event, doubleClick);
+		if (tab != TAB_SPELLS) return super.mouseClicked(event, doubleClick);
 		int row = l.rowAt(event.x(), event.y());
 		if (row >= 0) {
 			select(row);
@@ -146,10 +162,11 @@ public final class GrimoireScreen extends Screen {
 	@Override
 	public boolean keyPressed(KeyEvent event) {
 		if (event.isLeft() || event.isRight()) {
-			setTab(event.isLeft() ? TAB_SPELLS : TAB_FRIENDS);
+			setTab(Math.clamp(tab + (event.isLeft() ? -1 : 1), 0, GrimoireLayout.TABS - 1));
 			return true;
 		}
 		if (tab == TAB_FRIENDS) return friends.key(event) || super.keyPressed(event);
+		if (tab != TAB_SPELLS) return super.keyPressed(event);
 		if (event.isUp() || event.isDown() || event.isCycleFocus()) {
 			boolean back = event.isUp() || (event.isCycleFocus() && event.hasShiftDown());
 			int from = focus >= 0 ? focus : selectedRow();
@@ -238,11 +255,15 @@ public final class GrimoireScreen extends Screen {
 		tabs(g, l, e, mouseX, mouseY, now, dt, open);
 		float content = UiKit.clamp01((now - openedAt - OPEN_MS * 0.55f) / 220f) * UiKit.easeOut((now - tabAt) / 200f);
 		if (content > 0f) {
-			if (tab == TAB_FRIENDS) {
-				friends.draw(g, font, l, e, mouseX, mouseY, now, dt, content);
-			} else {
-				leftPage(g, l, d, e, now, content);
-				rightPage(g, l, d, e, now, dt, content);
+			// An explicit case per tab: adding a tab without its page fails loudly instead of drawing the wrong one.
+			switch (tab) {
+				case TAB_SPELLS -> {
+					leftPage(g, l, d, e, now, content);
+					rightPage(g, l, d, e, now, dt, content);
+				}
+				case TAB_FRIENDS -> friends.draw(g, font, l, e, mouseX, mouseY, now, dt, content);
+				case TAB_HOWTO -> howToPages(g, l, content);
+				default -> throw new IllegalStateException("no page for tab " + tab);
 			}
 		}
 		footer(g, l, open);
@@ -363,9 +384,19 @@ public final class GrimoireScreen extends Screen {
 			float cx = x0 + visible / 2f + Math.max(1, Math.round(u)) / 2f, cy = (y0 + y1) / 2f;
 			float icon = Math.min(visible - 3 * u, r.h() - 8 * u);
 			float ik = (active ? 1f : 0.75f + 0.25f * tabHover[i]) * k;
-			if (i == TAB_SPELLS) {
+			switch (i) {
+			case TAB_SPELLS: {
 				UiKit.centredTexture(g, UiKit.sigil(e), 64, cx, cy, icon, 0f, UiKit.alpha(UiKit.WHITE, ik));
-			} else {
+				break;
+			}
+			case TAB_HOWTO: {
+				// A "?" in the tab's own ink.
+				Component q = Component.literal("?");
+				float qs = UiKit.crisp(icon / 9f);
+				UiKit.centred(g, font, q, cx, cy - 4.5f * qs, qs, UiKit.alpha(active ? UiKit.INK : 0xFFE9DCB8, ik), false);
+				break;
+			}
+			case TAB_FRIENDS: {
 				float fs = Math.round(icon * 0.78f);
 				java.util.UUID a = others.size() > 0 ? others.get(0) : null, b = others.size() > 1 ? others.get(1) : null;
 				var skinA = a != null ? FriendsPage.skin(a) : net.minecraft.client.resources.DefaultPlayerSkin.getDefaultSkin();
@@ -380,11 +411,32 @@ public final class GrimoireScreen extends Screen {
 					UiKit.rounded(g, Math.round(bx), Math.round(by), Math.round(bx + bw), Math.round(by + 9 * bs), UiKit.alpha(0xFFB33A2A, k));
 					UiKit.centred(g, font, n, bx + bw / 2f, by + 0.5f * bs, bs, UiKit.alpha(UiKit.WHITE, k), false);
 				}
+				break;
+			}
+			default:
+				throw new IllegalStateException("no icon for tab " + i);
 			}
 			if (i == hovered) {
-				g.setTooltipForNextFrame(font, Component.translatable(i == TAB_SPELLS ? "magic.office.tab_spells" : "magic.office.tab_friends"),
-						mouseX, mouseY);
+				g.setTooltipForNextFrame(font, Component.translatable(GrimoireLayout.TAB_TIPS[i]), mouseX, mouseY);
 			}
+		}
+	}
+
+	/** How to cast: the handbook's Casting text on the left page, the hand-signs sentence and its keys on the right. */
+	private void howToPages(GuiGraphicsExtractor g, GrimoireLayout.Layout l, float k) {
+		pageText(g, l.leftPage(), Component.translatable("magic.office.howto_cast"), l.unit(), k);
+		pageText(g, l.rightPage(), Component.translatable("magic.office.howto_signs").append("\n\n")
+				.append(Component.translatable("magic.office.signs_hint")), l.unit(), k);
+	}
+
+	/** Wraps {@code text} into {@code page}, shrinking the (crisp) scale until it fits; nothing scrolls. */
+	private void pageText(GuiGraphicsExtractor g, Rect page, Component text, float unit, float k) {
+		int maxLines = Math.max(1, (int) (page.h() / ((GrimoireLayout.LINE + 1) * unit)));
+		float s = UiKit.wrap(font, text, page.w(), unit, maxLines, lines);
+		float y = page.y();
+		for (FormattedCharSequence line : lines) {
+			UiKit.text(g, font, line, page.x(), y, s, UiKit.alpha(UiKit.INK, k), false);
+			y += 10 * s;
 		}
 	}
 
@@ -525,7 +577,11 @@ public final class GrimoireScreen extends Screen {
 
 	private void footer(GuiGraphicsExtractor g, GrimoireLayout.Layout l, float k) {
 		Rect f = l.footer();
-		Component hint = Component.translatable(tab == TAB_FRIENDS ? "magic.office.friends_hint" : "magic.office.hint");
+		Component hint = Component.translatable(switch (tab) {
+			case TAB_SPELLS, TAB_HOWTO -> "magic.office.hint";
+			case TAB_FRIENDS -> "magic.office.friends_hint";
+			default -> throw new IllegalStateException("no footer for tab " + tab);
+		});
 		float s = UiKit.wrap(font, hint, f.w(), l.unit(), 2, lines);
 		float total = lines.size() * 10 * s - s;
 		float y = f.y() + (f.h() - total) / 2f;
