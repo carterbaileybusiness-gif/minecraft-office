@@ -24,8 +24,11 @@ import local.carter.office.core.Shape;
 class MapPressTest {
 	private static final Screen MAIN = new Screen("MAIN", 0, true, "MacBook", 0, 0, 1440, 900);
 	private static final Screen OFFICE_1 = new Screen("O1", 1, false, null, 1440, 0, 1920, 1080);
-	/** The widget's screens area: a 160 × 80 panel at (18, 34) less its margin, above a one-line status line. */
-	private static final Rect AREA = MapLayout.area(18, 34, 160, 80, 1);
+	/**
+	 * The widget's screens area: the settings screen's full-width map row, a 336 × 117 panel at (45, 112), less its
+	 * margin, above a one-line status line.
+	 */
+	private static final Rect AREA = MapLayout.area(45, 112, 336, 117, 1);
 	private static final int AX = AREA.x();
 	private static final int AY = AREA.y();
 	private static final int AW = AREA.w();

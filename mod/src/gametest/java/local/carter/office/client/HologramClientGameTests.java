@@ -1215,10 +1215,11 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			new Screen("O4", 4, false, null, 7200, 0, 1920, 1080)), ScreenList.Abilities.ALL);
 
 	/**
-	 * The display map (Task 10) in Extend and in Mirror, in a 1080p window at GUI scales 1-4 and in the default 854 × 480
-	 * window at its largest (the tightest fit): the map and its buttons lie inside the window and overlap no other widget,
-	 * and every box lies inside the map panel. Screenshot each, and in Extend one with a display moved but not Applied (its
-	 * real spot dotted) and the mouse over another box.
+	 * The display map (Task 10) in Extend and in Mirror, in a 1080p window at GUI scales 1-4, in the default 854 × 480
+	 * window at its largest (240 high) and at 320 × 240 scaled (1280 × 960 at 4): the map has its own row across both
+	 * columns; no widget leaves the window or overlaps another; every box lies inside the map panel, which the arrangement
+	 * fills one way. Screenshot each, and in Extend one with a display moved but not Applied (its real spot dotted) and the
+	 * mouse over another box.
 	 */
 	private void settingsMapFitsAtEveryGuiScale(final ClientGameTestContext context, final TestSingleplayerContext sp) {
 		int savedScale = context.computeOnClient(mc -> mc.options.guiScale().get());
@@ -1242,7 +1243,9 @@ public class HologramClientGameTests implements FabricClientGameTest {
 					pendingMoveShows(context, name + "-pending-move");
 				}
 				context.getInput().resizeWindow(854, 480);
-				openMapAt(context, mode, 4, name + "-854x480"); // GUI scale 4 is clamped to 2 here: the tightest layout
+				openMapAt(context, mode, 4, name + "-854x480"); // GUI scale 4 is clamped to 2 here: the shortest layout
+				context.getInput().resizeWindow(1280, 960);
+				openMapAt(context, mode, 4, name + "-320x240"); // the narrowest and shortest GUI Minecraft allows
 			}
 		} finally {
 			context.getInput().resizeWindow(854, 480);
@@ -1436,24 +1439,66 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		}
 		int w = screen.width;
 		int h = screen.height;
-		for (var m : mine) {
+		java.util.List<net.minecraft.client.gui.components.AbstractWidget> all = new java.util.ArrayList<>();
+		for (var child : screen.children()) {
+			if (child instanceof net.minecraft.client.gui.components.AbstractWidget o) {
+				all.add(o);
+			}
+		}
+		if (!all.containsAll(mine)) {
+			return "the map or its buttons aren't on the screen";
+		}
+		// no widget (the map, its buttons, Shape / Shows / privacy, Pick up and Done) leaves the window or overlaps another
+		for (int i = 0; i < all.size(); i++) {
+			var m = all.get(i);
 			if (m.getX() < 0 || m.getY() < 0 || m.getRight() > w || m.getBottom() > h) {
 				return m.getMessage().getString() + " " + m.getRectangle() + " leaves the " + w + " x " + h + " window";
 			}
-			for (var child : screen.children()) {
-				if (child instanceof net.minecraft.client.gui.components.AbstractWidget o && o != m
-						&& o.getRectangle().intersects(m.getRectangle())) {
+			for (int j = i + 1; j < all.size(); j++) {
+				var o = all.get(j);
+				if (o.getRectangle().intersects(m.getRectangle())) {
 					return m.getMessage().getString() + " overlaps " + o.getMessage().getString();
 				}
 			}
 		}
 		local.carter.office.client.interact.DisplayMap map = screen.displayMap();
+		// the map has a row of its own across both columns: from the left column's Shape buttons to the right column's
+		// privacy buttons, every other widget wholly above or below it
+		int colLeft = Integer.MAX_VALUE, colRight = Integer.MIN_VALUE;
+		for (var o : all) {
+			String text = o.getMessage().getString();
+			if (text.equals("16:9")) {
+				colLeft = o.getX();
+			} else if (text.equals("Show to…")) {
+				colRight = o.getRight();
+			}
+		}
+		if (map.getX() != colLeft || map.getRight() != colRight) {
+			return "the map " + map.getRectangle() + " should span both columns (" + colLeft + ".." + colRight + ")";
+		}
+		for (var o : all) {
+			if (o != map && o.getBottom() > map.getY() && o.getY() < map.getBottom()) {
+				return o.getMessage().getString() + " " + o.getRectangle() + " shares the map's row " + map.getRectangle();
+			}
+		}
+		int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
 		for (Screen s : map.model().drawOrder()) {
 			local.carter.office.client.platform.Platform.Rect b = map.boxOnScreen(s.id());
 			if (b == null || b.x() < map.getX() + 2 || b.y() < map.getY() + 2 || b.x() + b.w() > map.getRight() - 2
 					|| b.y() + b.h() > map.getBottom() - 2) {
 				return "box " + s.id() + " " + b + " leaves the map panel " + map.getRectangle();
 			}
+			minX = Math.min(minX, b.x());
+			minY = Math.min(minY, b.y());
+			maxX = Math.max(maxX, b.x() + b.w());
+			maxY = Math.max(maxY, b.y() + b.h());
+		}
+		// one scale fills the panel one way: its width (less the margin), or its height (less the margin and status line)
+		int margin = local.carter.office.client.screens.MapLayout.MARGIN;
+		if (maxX - minX < map.getWidth() - 2 * margin - 2
+				&& maxY - minY < map.getHeight() - 2 * margin - local.carter.office.client.screens.MapLayout.statusHeight(2) - 2) {
+			return "the arrangement " + minX + "," + minY + ".." + maxX + "," + maxY + " fills neither way of the map panel "
+					+ map.getRectangle();
 		}
 		return null;
 	}
