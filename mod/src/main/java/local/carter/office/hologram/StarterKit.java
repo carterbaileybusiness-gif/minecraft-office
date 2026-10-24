@@ -134,6 +134,8 @@ public final class StarterKit {
 				+ "Big spells change the land, but never inside someone else's claim."},
 		{"Recall", "Shift + cast Recall to mark home (anywhere, any dimension).\n\n"
 				+ "Cast Recall to channel for 3 s and go home. Taking damage cancels it. 60 s cooldown, no mana."},
+		{"Travel", "Open your Grimoire → Friends → click a friend; they accept; 3 s later you're there.\n\n"
+				+ "Shares Recall's cooldown.\n/magic travel off to refuse requests."},
 		{"Also", "Talk: press V for voice chat; friends nearby hear you (check its settings for the talk key).\n\n"
 				+ "Claim your office: press ' and claim the chunks around it. Party friends can still build."},
 	};

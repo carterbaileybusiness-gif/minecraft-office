@@ -27,6 +27,7 @@ import local.carter.office.magic.item.MagicItems;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
+import local.carter.office.magic.net.MagicPayloads.TravelRoster;
 import local.carter.office.magic.net.MagicSender;
 import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.CastContext;
@@ -398,6 +399,8 @@ public final class MagicTestKit {
 		private final List<Title> titles = new ArrayList<>();
 		private final List<Integer> cancels = new ArrayList<>();
 		private final List<Sent<OpenGrimoire.Mode>> opens = new ArrayList<>();
+		private final List<Sent<Component>> chats = new ArrayList<>();
+		private final List<Sent<TravelRoster>> rosters = new ArrayList<>();
 
 		private Recorder() {}
 
@@ -429,6 +432,20 @@ public final class MagicTestKit {
 
 		public List<OpenGrimoire.Mode> opens() { return opens.stream().map(Sent::value).toList(); }
 
+		/** Chat lines sent to {@code p} (travel requests and their outcomes). */
+		public List<Component> chats(ServerPlayer p) { return chats.stream().filter(c -> c.player() == p).map(Sent::value).toList(); }
+
+		/** Translation keys of the chat lines sent to {@code p}. */
+		public List<String> chatKeys(ServerPlayer p) { return chats(p).stream().map(Recorder::key).toList(); }
+
+		/** Translation keys of the action-bar messages sent to {@code p}. */
+		public List<String> messageKeys(ServerPlayer p) {
+			return messages.stream().filter(m -> m.player() == p).map(m -> key(m.value())).toList();
+		}
+
+		/** Rosters sent to {@code p}. */
+		public List<TravelRoster> rosters(ServerPlayer p) { return rosters.stream().filter(r -> r.player() == p).map(Sent::value).toList(); }
+
 		public void clear() {
 			fx.clear();
 			challenges.clear();
@@ -436,6 +453,8 @@ public final class MagicTestKit {
 			titles.clear();
 			cancels.clear();
 			opens.clear();
+			chats.clear();
+			rosters.clear();
 		}
 
 		private static String key(Component c) {
@@ -495,6 +514,20 @@ public final class MagicTestKit {
 			Recorder r = route(p);
 			if (r != null) r.titles.add(new Recorder.Title(p, title, subtitle));
 			else MagicServer.network().title(p, title, subtitle);
+		}
+
+		@Override
+		public void chat(ServerPlayer p, Component c) {
+			Recorder r = route(p);
+			if (r != null) r.chats.add(new Recorder.Sent<>(p, c));
+			else MagicServer.network().chat(p, c);
+		}
+
+		@Override
+		public void roster(ServerPlayer p, TravelRoster roster) {
+			Recorder r = route(p);
+			if (r != null) r.rosters.add(new Recorder.Sent<>(p, roster));
+			else MagicServer.network().roster(p, roster);
 		}
 	}
 

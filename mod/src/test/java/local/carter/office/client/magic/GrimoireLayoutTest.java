@@ -77,4 +77,60 @@ class GrimoireLayoutTest {
 		}
 		assertEquals(-1, l.rowAt(l.leftPage().cx(), l.leftPage().cy()));
 	}
+
+	/** The Friends tab at the Task 9 sizes and more: header, 8 rows and pager inside the right page, nothing overlapping. */
+	private static void assertFriendsFit(int w, int h) {
+		String at = w + "x" + h;
+		GrimoireLayout.Layout l = GrimoireLayout.layout(w, h);
+		GrimoireLayout.Friends f = l.friends();
+		Rect page = l.rightPage();
+		assertTrue(inside(page, f.header()), at + ": header " + f.header() + " outside " + page);
+		assertTrue(f.header().h() >= 9 + 2, at + ": header holds a line");
+		List<Rect> rows = f.rows();
+		assertEquals(GrimoireLayout.FRIEND_ROWS, rows.size(), at);
+		for (int i = 0; i < rows.size(); i++) {
+			Rect r = rows.get(i);
+			assertTrue(inside(page, r), at + ": friend row " + i + " " + r + " outside " + page);
+			assertTrue(r.h() >= 12, at + ": friend row " + i + " is " + r.h() + " high (a head and a name need 12)");
+			assertTrue(r.y() >= f.header().bottom(), at + ": row " + i + " under the header");
+			for (int j = i + 1; j < rows.size(); j++) assertFalse(r.overlaps(rows.get(j)), at + ": friend rows " + i + " and " + j);
+		}
+		for (Rect arrow : List.of(f.prev(), f.next())) {
+			assertTrue(inside(f.header(), arrow), at + ": pager arrow " + arrow + " in the header");
+			assertTrue(arrow.w() >= 9, at + ": arrow big enough to click");
+		}
+		assertFalse(f.prev().overlaps(f.next()), at + ": arrows overlap");
+		assertTrue(f.next().x() - f.prev().right() >= 18, at + ": room for the page number between the arrows");
+		// The requests switch sits at the bottom of the left page, under the state line.
+		assertTrue(inside(l.leftPage(), f.toggle()), at + ": switch " + f.toggle());
+		assertTrue(f.toggle().y() > l.xpTextY() + 9, at + ": switch under the state line");
+		// Tabs: on screen, on the book's left edge, apart; the book stays centred.
+		assertEquals(GrimoireLayout.TABS, l.tabs().size());
+		for (int i = 0; i < l.tabs().size(); i++) {
+			Rect t = l.tabs().get(i);
+			assertTrue(t.insideScreen(w, h, MARGIN), at + ": tab " + i + " " + t);
+			assertTrue(t.x() < l.book().x() && t.right() > l.book().x(), at + ": tab " + i + " sticks out of the left edge");
+			assertTrue(t.bottom() <= l.book().bottom(), at + ": tab " + i + " beside the book");
+			assertEquals(i, l.tabAt(t.x() + 1, t.cy()), at + ": tabAt");
+			if (i > 0) assertFalse(t.overlaps(l.tabs().get(i - 1)), at + ": tabs overlap");
+		}
+		assertTrue(Math.abs(l.book().cx() - w / 2) <= 1, at + ": book centred");
+	}
+
+	@Test
+	void friendsPageFits() {
+		for (int[] wh : SIZES) assertFriendsFit(wh[0], wh[1]);
+		for (int[] wh : MORE) assertFriendsFit(wh[0], wh[1]);
+	}
+
+	@Test
+	void friendRowAtFindsRows() {
+		GrimoireLayout.Layout l = GrimoireLayout.layout(640, 360);
+		for (int i = 0; i < GrimoireLayout.FRIEND_ROWS; i++) {
+			Rect r = l.friends().rows().get(i);
+			assertEquals(i, l.friends().rowAt(r.cx(), r.cy()));
+		}
+		assertEquals(-1, l.friends().rowAt(l.friends().header().cx(), l.friends().header().cy()));
+		assertEquals(-1, l.tabAt(l.book().cx(), l.book().cy()));
+	}
 }

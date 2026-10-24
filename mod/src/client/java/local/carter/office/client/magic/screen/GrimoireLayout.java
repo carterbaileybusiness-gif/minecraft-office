@@ -7,11 +7,20 @@ import local.carter.office.client.magic.screen.SignLayout.Rect;
 
 /**
  * Where the grimoire screen draws, in GUI units: the open book as large as the screen allows (up to 8× its texture, 3:2),
- * a two-line footer hint under it, the left page (sigil, level, xp bar, home) and six spell rows filling the right page.
- * Text is drawn at {@link Layout#unit()} (an integer that grows with the book); nothing scrolls at any size.
+ * two index tabs (Spells, Friends) sticking out of its left edge, a two-line footer hint under it, the left page (sigil,
+ * level, xp bar, home) and six spell rows filling the right page; on the Friends tab ({@link Friends}) the right page holds a
+ * header with the pager and {@link #FRIEND_ROWS} friend rows. Text is drawn at {@link Layout#unit()} (an integer that grows
+ * with the book); nothing scrolls at any size.
  */
 public final class GrimoireLayout {
 	public static final int ROWS = 6;
+	/** Friends per page of the Friends tab (more turn pages with the arrows). */
+	public static final int FRIEND_ROWS = 8;
+	/** Index tabs: Spells, Friends. */
+	public static final int TABS = 2;
+	/** How far a tab sticks out of the book, and its height, per text unit. */
+	private static final int TAB_OUT = 16;
+	private static final int TAB_H = 24;
 	/** Font line height. */
 	public static final int LINE = 9;
 	private static final float MAX_SCALE = 8f;
@@ -29,15 +38,35 @@ public final class GrimoireLayout {
 	 * @param homeY    top of the home block (up to two lines) at the bottom of the left page
 	 */
 	public record Layout(Rect book, Rect leftPage, Rect rightPage, List<Rect> rows, Rect footer, float unit, Rect sigil, int levelY,
-			Rect xpBar, int xpTextY, int homeY) {
-		/** The row under the point, or -1. */
-		public int rowAt(double x, double y) {
-			for (int i = 0; i < rows.size(); i++) {
-				Rect r = rows.get(i);
-				if (x >= r.x() && x < r.right() && y >= r.y() && y < r.bottom()) return i;
-			}
+			Rect xpBar, int xpTextY, int homeY, List<Rect> tabs, Friends friends) {
+		/** The tab under the point, or -1. */
+		public int tabAt(double x, double y) {
+			for (int i = 0; i < tabs.size(); i++) if (contains(tabs.get(i), x, y)) return i;
 			return -1;
 		}
+
+		/** The row under the point, or -1. */
+		public int rowAt(double x, double y) {
+			for (int i = 0; i < rows.size(); i++) if (contains(rows.get(i), x, y)) return i;
+			return -1;
+		}
+	}
+
+	/**
+	 * The Friends tab's right page: a header line (title on the left, {@code prev} · page · {@code next} on the right) over
+	 * {@link #FRIEND_ROWS} rows (head, name, why a friend is unavailable); and the requests switch at the bottom of the left
+	 * page ({@code toggle}, where the home block sits on the Spells tab).
+	 */
+	public record Friends(Rect header, List<Rect> rows, Rect prev, Rect next, Rect toggle) {
+		/** The friend row under the point, or -1. */
+		public int rowAt(double x, double y) {
+			for (int i = 0; i < rows.size(); i++) if (contains(rows.get(i), x, y)) return i;
+			return -1;
+		}
+	}
+
+	static boolean contains(Rect r, double x, double y) {
+		return x >= r.x() && x < r.right() && y >= r.y() && y < r.bottom();
 	}
 
 	private GrimoireLayout() {}
@@ -49,7 +78,10 @@ public final class GrimoireLayout {
 		float unit = Math.max(1f, Math.round(Math.min(scale0, MAX_SCALE) / SCALE_PER_UNIT));
 		int footerH = Math.round((2 * LINE + 4) * unit);
 		int gap = Math.round(4 * unit);
-		float scale = Math.min(MAX_SCALE, Math.min((w - 2f * margin) / ChoiceLayout.TEX_W, (h - 2f * margin - footerH - gap) / ChoiceLayout.TEX_H));
+		// The tabs stick out on the left; the same room is kept on the right (the ribbon), so the book stays centred.
+		int tabOut = Math.round(TAB_OUT * unit);
+		float scale = Math.min(MAX_SCALE, Math.min((w - 2f * margin - 2f * tabOut) / ChoiceLayout.TEX_W,
+				(h - 2f * margin - footerH - gap) / ChoiceLayout.TEX_H));
 		int bw = (int) Math.floor(ChoiceLayout.TEX_W * scale);
 		int bh = (int) Math.floor(ChoiceLayout.TEX_H * scale);
 		int blockH = bh + gap + footerH;
@@ -86,6 +118,37 @@ public final class GrimoireLayout {
 		Rect xpBar = new Rect(left.cx() - barW / 2, barY, barW, Math.round(5 * unit));
 		int xpTextY = xpBar.bottom() + Math.round(3 * unit);
 		int homeY = left.bottom() - pad - homeH;
-		return new Layout(book, left, right, List.copyOf(rows), footer, unit, sigil, levelY, xpBar, xpTextY, homeY);
+
+		// Index tabs on the book's left edge, a little below its top; the part under the cover is hidden by the book.
+		int tabH = Math.round(TAB_H * unit);
+		int tabGap = Math.max(1, Math.round(2 * unit));
+		int tabTuck = Math.round(6 * unit);
+		List<Rect> tabs = new ArrayList<>(TABS);
+		int ty = book.y() + Math.round(book.h() * 0.16f);
+		for (int i = 0; i < TABS; i++) {
+			tabs.add(new Rect(book.x() - tabOut, ty, tabOut + tabTuck, tabH));
+			ty += tabH + tabGap;
+		}
+		Rect toggle = new Rect(left.x(), homeY, left.w(), homeH);
+		return new Layout(book, left, right, List.copyOf(rows), footer, unit, sigil, levelY, xpBar, xpTextY, homeY, List.copyOf(tabs),
+				friends(right, unit, toggle));
+	}
+
+	private static Friends friends(Rect right, float unit, Rect toggle) {
+		int headerH = Math.max(LINE + 2, Math.round((LINE + 4) * unit));
+		Rect header = new Rect(right.x(), right.y(), right.w(), headerH);
+		int top = header.bottom() + Math.max(1, Math.round(2 * unit));
+		int rowGap = Math.max(1, Math.round(right.h() * 0.008f));
+		int rowH = (right.bottom() - top - (FRIEND_ROWS - 1) * rowGap) / FRIEND_ROWS;
+		List<Rect> rows = new ArrayList<>(FRIEND_ROWS);
+		int y = top;
+		for (int i = 0; i < FRIEND_ROWS; i++) {
+			rows.add(new Rect(right.x(), y, right.w(), rowH));
+			y += rowH + rowGap;
+		}
+		int arrow = headerH;
+		Rect next = new Rect(right.right() - arrow, right.y(), arrow, arrow);
+		Rect prev = new Rect(next.x() - arrow - Math.round(22 * unit), right.y(), arrow, arrow);
+		return new Friends(header, List.copyOf(rows), prev, next, toggle);
 	}
 }

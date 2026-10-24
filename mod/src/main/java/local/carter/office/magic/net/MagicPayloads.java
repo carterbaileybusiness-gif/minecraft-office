@@ -1,5 +1,10 @@
 package local.carter.office.magic.net;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
 import io.netty.handler.codec.DecoderException;
 import io.netty.handler.codec.EncoderException;
 import org.jspecify.annotations.Nullable;
@@ -22,6 +27,10 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 public final class MagicPayloads {
 	/** Most arrows a hand-sign answer may carry. */
 	public static final int MAX_SIGNS = 6;
+	/** Most players a {@link TravelRoster} lists. */
+	public static final int MAX_FRIENDS = 128;
+	/** Longest player name a {@link TravelRoster} carries (vanilla names are at most 16). */
+	public static final int MAX_NAME = 16;
 
 	private MagicPayloads() {}
 
@@ -106,7 +115,83 @@ public final class MagicPayloads {
 		}
 	}
 
+	/**
+	 * The grimoire's Friends page: every other online player (name order, at most {@link #MAX_FRIENDS}) with whether they accept
+	 * travel requests, and the viewer's own travel state ({@code waitingFor}/{@code ticksLeft} only while {@link State#WAITING}).
+	 * The viewer's Recall cooldown is not here: the client reads it from its own synced {@code MagicData}.
+	 */
+	public record TravelRoster(List<Friend> friends, State state, Optional<UUID> waitingFor, int ticksLeft) implements CustomPacketPayload {
+		/** READY: can ask; WAITING: a request is open; TRAVELLING: a travel channel runs; BUSY: another channel, hand signs or a charge. */
+		public enum State { READY, WAITING, TRAVELLING, BUSY }
+
+		public record Friend(UUID id, String name, boolean accepts) {
+			public Friend {
+				if (name.length() > MAX_NAME) name = name.substring(0, MAX_NAME);
+			}
+		}
+
+		public static final TravelRoster EMPTY = new TravelRoster(List.of(), State.READY, Optional.empty(), 0);
+		public static final Type<TravelRoster> TYPE = new Type<>(OfficeMod.id("travel_roster"));
+		public static final StreamCodec<FriendlyByteBuf, TravelRoster> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeVarInt(p.friends.size());
+					for (Friend f : p.friends) {
+						buf.writeUUID(f.id());
+						buf.writeUtf(f.name(), MAX_NAME);
+						buf.writeBoolean(f.accepts());
+					}
+					buf.writeEnum(p.state);
+					buf.writeOptional(p.waitingFor, (b, id) -> b.writeUUID(id));
+					buf.writeVarInt(p.ticksLeft);
+				},
+				buf -> {
+					int n = buf.readVarInt();
+					if (n < 0 || n > MAX_FRIENDS) throw new DecoderException("too many friends: " + n);
+					List<Friend> friends = new ArrayList<>(n);
+					for (int i = 0; i < n; i++) friends.add(new Friend(buf.readUUID(), buf.readUtf(MAX_NAME), buf.readBoolean()));
+					State state = readEnum(buf, State.class);
+					Optional<UUID> waiting = buf.readOptional(b -> b.readUUID());
+					return new TravelRoster(friends, state, waiting, buf.readVarInt());
+				});
+
+		/** Keeps at most {@link #MAX_FRIENDS} friends (so every instance encodes). */
+		public TravelRoster {
+			friends = List.copyOf(friends.size() > MAX_FRIENDS ? friends.subList(0, MAX_FRIENDS) : friends);
+			ticksLeft = Math.max(0, ticksLeft);
+		}
+
+		@Override
+		public Type<TravelRoster> type() {
+			return TYPE;
+		}
+	}
+
 	// ---- Client to server ----
+
+	/** Ask to travel to {@code target} (a click on the Friends page). */
+	public record TravelRequest(UUID target) implements CustomPacketPayload {
+		public static final Type<TravelRequest> TYPE = new Type<>(OfficeMod.id("travel_request"));
+		public static final StreamCodec<FriendlyByteBuf, TravelRequest> CODEC = StreamCodec.of(
+				(buf, p) -> buf.writeUUID(p.target),
+				buf -> new TravelRequest(buf.readUUID()));
+
+		@Override
+		public Type<TravelRequest> type() {
+			return TYPE;
+		}
+	}
+
+	/** The Friends page is showing: send me a {@link TravelRoster}. */
+	public record TravelRosterQuery() implements CustomPacketPayload {
+		public static final TravelRosterQuery INSTANCE = new TravelRosterQuery();
+		public static final Type<TravelRosterQuery> TYPE = new Type<>(OfficeMod.id("travel_roster_query"));
+		public static final StreamCodec<FriendlyByteBuf, TravelRosterQuery> CODEC = StreamCodec.unit(INSTANCE);
+
+		@Override
+		public Type<TravelRosterQuery> type() {
+			return TYPE;
+		}
+	}
 
 	public record ChooseElement(Element element) implements CustomPacketPayload {
 		public static final Type<ChooseElement> TYPE = new Type<>(OfficeMod.id("choose_element"));
@@ -180,10 +265,13 @@ public final class MagicPayloads {
 		s2c.register(CastFx.TYPE, CastFx.CODEC);
 		s2c.register(FxCancel.TYPE, FxCancel.CODEC);
 		s2c.register(SignChallenge.TYPE, SignChallenge.CODEC);
+		s2c.register(TravelRoster.TYPE, TravelRoster.CODEC);
 
 		var c2s = PayloadTypeRegistry.serverboundPlay();
 		c2s.register(ChooseElement.TYPE, ChooseElement.CODEC);
 		c2s.register(SelectSpell.TYPE, SelectSpell.CODEC);
 		c2s.register(SignAnswer.TYPE, SignAnswer.CODEC);
+		c2s.register(TravelRequest.TYPE, TravelRequest.CODEC);
+		c2s.register(TravelRosterQuery.TYPE, TravelRosterQuery.CODEC);
 	}
 }
