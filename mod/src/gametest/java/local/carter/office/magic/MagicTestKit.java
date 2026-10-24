@@ -594,20 +594,38 @@ public final class MagicTestKit {
 			this.helper = helper;
 		}
 
+		/** Runs every cleanup and disconnect even if one throws, always drops this test's state, then rethrows the first failure. */
 		void finish() {
-			for (AutoCloseable c : cleanups) {
-				try {
-					c.close();
-				} catch (Exception e) {
-					throw new IllegalStateException(e);
+			@Nullable IllegalStateException failure = null;
+			try {
+				for (AutoCloseable c : cleanups) {
+					try {
+						c.close();
+					} catch (Exception e) {
+						failure = collect(failure, e);
+					}
 				}
+				cleanups.clear();
+				for (ServerPlayer p : playerObjects) {
+					try {
+						disconnect(p);
+					} catch (RuntimeException e) {
+						failure = collect(failure, e);
+					}
+				}
+				playerObjects.clear();
+			} finally {
+				TESTS.remove(helper);
+				boolean anyRecorder = TESTS.values().stream().anyMatch(s -> s.recorder != null);
+				if (!anyRecorder) MagicServer.setSenderForTesting(null);
 			}
-			cleanups.clear();
-			for (ServerPlayer p : playerObjects) disconnect(p);
-			playerObjects.clear();
-			TESTS.remove(helper);
-			boolean anyRecorder = TESTS.values().stream().anyMatch(s -> s.recorder != null);
-			if (!anyRecorder) MagicServer.setSenderForTesting(null);
+			if (failure != null) throw failure;
+		}
+
+		private static IllegalStateException collect(@Nullable IllegalStateException first, Exception e) {
+			if (first == null) return new IllegalStateException("MagicTestKit cleanup failed", e);
+			first.addSuppressed(e);
+			return first;
 		}
 	}
 

@@ -1,8 +1,10 @@
 package local.carter.office.magic;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import local.carter.office.OfficeMod;
 import local.carter.office.magic.cast.ElementChoice;
@@ -33,6 +35,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.ai.goal.GoalSelector;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.block.Blocks;
@@ -332,6 +336,7 @@ public class MagicCoreGameTests {
 	 * while lookups without a player still see the real Recall; two probes at FIRE slot 0 are each selected and cast by their
 	 * own player only; a test-wide override reaches a kit player made after it.
 	 */
+	@SuppressWarnings("removal") // makeMockServerPlayerInLevel: a real player outside the kit
 	@GameTest(structure = MagicTestKit.ARENA)
 	public void overridesAreScopedToTheirPlayers(GameTestHelper h) {
 		Spell realRecall = SpellRegistry.get(SpellIds.RECALL).orElseThrow();
@@ -391,21 +396,51 @@ public class MagicCoreGameTests {
 		h.assertValueEqual(SpellRegistry.at(late.getUUID(), Element.FIRE, Slots.RECALL), Optional.of(realRecall), "...but not A's or B's");
 		h.assertValueEqual(SpellRegistry.at(a.getUUID(), Element.FIRE, 1), Optional.<Spell>of(shared), "A sees it too");
 		h.assertTrue(SpellRegistry.get(shared.id()).isEmpty(), "no player: no override");
+
+		// Outsiders: a UUID no kit player has, and a real player the kit did not make, see none of this test's probes.
+		UUID stranger = UUID.randomUUID();
+		h.assertTrue(SpellRegistry.at(stranger, Element.FIRE, 1).isEmpty(), "a random UUID: no test-wide override");
+		h.assertTrue(SpellRegistry.get(stranger, shared.id()).isEmpty(), "a random UUID: not by id either");
+		h.assertValueEqual(SpellRegistry.at(stranger, Element.FIRE, Slots.RECALL), Optional.of(realRecall), "a random UUID: the real Recall");
+		ServerPlayer outsider = h.makeMockServerPlayerInLevel();
+		try {
+			h.assertTrue(SpellRegistry.at(outsider.getUUID(), Element.FIRE, 1).isEmpty(), "a non-kit player: no test-wide override");
+			h.assertTrue(SpellRegistry.at(outsider.getUUID(), Element.FIRE, 0).isEmpty(), "a non-kit player: no per-player probe");
+			h.assertValueEqual(SpellRegistry.get(outsider.getUUID(), SpellIds.RECALL), Optional.of(realRecall), "a non-kit player: the real Recall");
+		} finally {
+			MagicTestKit.disconnect(outsider);
+		}
+		// otherPlayer is a kit player of this test, so it gets the test-wide probe (by design) but not A's or B's own.
+		ServerPlayer other = MagicTestKit.otherPlayer(h, new BlockPos(8, 4, 8));
+		h.assertValueEqual(SpellRegistry.at(other.getUUID(), Element.FIRE, 1), Optional.<Spell>of(shared), "otherPlayer: the test-wide probe");
+		h.assertTrue(SpellRegistry.at(other.getUUID(), Element.FIRE, 0).isEmpty(), "otherPlayer: not A's or B's FIRE 0 probe");
+		h.assertValueEqual(SpellRegistry.at(other.getUUID(), Element.FIRE, Slots.RECALL), Optional.of(realRecall), "otherPlayer: the real Recall");
 		h.succeed();
 	}
 
-	/** A movable dummy has no goals, stands still on its own, and knockback moves it. */
-	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 60)
-	public void movableDummyStandsStillButTakesKnockback(GameTestHelper h) {
+	/**
+	 * A movable dummy has no goals or target goals, stands still and leaves a survival player beside it alone for 40 ticks,
+	 * and knockback moves it.
+	 */
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 80)
+	public void movableDummyStandsStillButTakesKnockback(GameTestHelper h) throws ReflectiveOperationException {
 		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 12));
+		ServerPlayer p = MagicTestKit.otherPlayer(h, new BlockPos(17, 4, 12));
 		h.assertFalse(z.isNoAi(), "AI on, so physics applies");
 		h.assertTrue(z.getGoalSelector().getAvailableGoals().isEmpty(), "no goals");
+		Field target = Mob.class.getDeclaredField("targetSelector");
+		target.setAccessible(true);
+		h.assertTrue(((GoalSelector) target.get(z)).getAvailableGoals().isEmpty(), "no target goals");
 		h.assertFalse(z.canPickUpLoot(), "no loot pickup");
 		h.assertTrue(z.isPersistenceRequired(), "persistent");
+		float health = p.getHealth();
 		Vec3 start = z.position();
-		h.runAfterDelay(20, () -> {
+		h.onEachTick(() -> {
+			if (z.getTarget() != null) h.fail("the dummy targeted " + z.getTarget());
+			if (p.getHealth() < health) h.fail("the player beside the dummy was hurt: " + p.getHealth());
+		});
+		h.runAfterDelay(40, () -> {
 			h.assertTrue(z.position().subtract(start).horizontalDistance() < 0.01, "stands still: moved " + z.position().subtract(start));
-			h.assertTrue(z.getTarget() == null, "targets no one");
 			Vec3 before = z.position();
 			h.assertTrue(Hurt.knock(z, new Vec3(0, 0, 1), 1.0, 0.2), "knockable");
 			h.runAfterDelay(10, () -> {
