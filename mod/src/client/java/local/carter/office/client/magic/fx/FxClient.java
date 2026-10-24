@@ -31,6 +31,8 @@ public final class FxClient {
 		ChargeCircles.register();
 		GrimoireParticles.register();
 		ClientTickEvents.END_CLIENT_TICK.register(Shake::tick);
+		// Shader pack on or off: re-read every tick too (the magic particle group also re-reads it every frame it draws).
+		ClientTickEvents.END_CLIENT_TICK.register(mc -> ShaderCompat.refresh());
 		ClientTickEvents.END_CLIENT_TICK.register(FxClient::leaveWorld);
 		ClientPlayNetworking.registerGlobalReceiver(CastFx.TYPE, (payload, ctx) -> play(ctx.client(), payload.event()));
 		ClientPlayNetworking.registerGlobalReceiver(FxCancel.TYPE, (payload, ctx) -> FxKit.cancel(payload.casterId()));

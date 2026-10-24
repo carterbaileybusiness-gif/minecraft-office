@@ -15,6 +15,7 @@ import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GhostBlocks;
 import local.carter.office.client.magic.fx.LightPipeline;
 import local.carter.office.client.magic.fx.Shake;
+import local.carter.office.client.magic.fx.ShaderCompat;
 import local.carter.office.client.render.FrameStats;
 import local.carter.office.magic.MagicTestKit;
 import local.carter.office.magic.core.Element;
@@ -63,6 +64,7 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 			chargeCircleGrowsRingByRing(context);
 			releaseDrawsTheCastCircle(context);
 			improvedTransparency(context);
+			shaderPackPath(context);
 			recallCircles(context, sp, stand);
 			boltGhostBlocksAndShake(context, stand);
 			chargeInDaylight(context, sp);
@@ -148,6 +150,31 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 		if (outside < 0.08) throw new AssertionError("the full charge circle barely shows from the front: " + outside);
 		context.runOnClient(mc -> mc.options.setCameraType(CameraType.FIRST_PERSON));
 		context.waitTicks(1);
+	}
+
+	/**
+	 * The shader-pack path (no Iris here, so it is forced): magic drawn on vanilla's translucent layer must still show. Seen from the
+	 * front at full charge, against the same view idle.
+	 */
+	private static void shaderPackPath(ClientGameTestContext context) {
+		context.runOnClient(mc -> ShaderCompat.setOverrideForTesting(ShaderCompat.Path.PLAIN));
+		try {
+			BufferedImage idle = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-plain-idle-third-front");
+			context.getInput().holdMouse(MOUSE_RIGHT);
+			context.waitFor(mc -> mc.player.getTicksUsingItem() >= 46, 200);
+			BufferedImage full = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-plain-charge-full-third-front");
+			context.getInput().releaseMouse(MOUSE_RIGHT);
+			double changed = changedShare(idle, full, 0.3, 0.2, 0.7, 0.8);
+			System.out.println(String.format(java.util.Locale.ROOT, "[fx] shader-pack (plain) path: circle changed %.3f", changed));
+			if (changed < 0.05) throw new AssertionError("on the shader-pack path the charge circle barely shows: " + changed);
+			context.waitTicks(30);
+		} finally {
+			context.runOnClient(mc -> {
+				ShaderCompat.setOverrideForTesting(null);
+				mc.options.setCameraType(CameraType.FIRST_PERSON);
+			});
+			context.waitTicks(2);
+		}
 	}
 
 	/** Switches the camera, lets two frames pass, and takes a screenshot. */

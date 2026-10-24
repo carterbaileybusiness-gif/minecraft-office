@@ -88,7 +88,7 @@ public abstract class CircleParticle extends SingleQuadParticle implements Light
 
 	@Override
 	protected Layer getLayer() {
-		return LightPipeline.GLOW;
+		return LightPipeline.glow();
 	}
 
 	@Override

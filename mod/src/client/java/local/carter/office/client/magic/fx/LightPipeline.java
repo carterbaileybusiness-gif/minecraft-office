@@ -69,6 +69,31 @@ public final class LightPipeline {
 	 */
 	public static final SingleQuadParticle.Layer DARK = new SingleQuadParticle.Layer(false, TextureAtlas.LOCATION_PARTICLES, DARK_PIPELINE);
 
+	/** The layer for magic light this frame: {@link #GLOW}, or vanilla's translucent layer under a shader pack ({@link ShaderCompat}). */
+	public static SingleQuadParticle.Layer glow() {
+		return ShaderCompat.current() == ShaderCompat.Path.PLAIN ? SingleQuadParticle.Layer.TRANSLUCENT : GLOW;
+	}
+
+	/** The layer for darkness this frame: {@link #DARK}, or vanilla's translucent layer under a shader pack. */
+	public static SingleQuadParticle.Layer dark() {
+		return ShaderCompat.current() == ShaderCompat.Path.PLAIN ? SingleQuadParticle.Layer.TRANSLUCENT : DARK;
+	}
+
+	/** A light's vertex colour for {@link #glow()} this frame ({@link ShaderCompat#encode}). */
+	public static int light(float intensity, int rgb) {
+		return ShaderCompat.encode(ShaderCompat.current(), intensity, rgb);
+	}
+
+	/**
+	 * A darkness's vertex colour for {@link #dark()} this frame: what to take away ({@link #darkColor}) at {@code intensity} in alpha,
+	 * or, on a shader pack, the deep shade of {@code tint} that taking it away would leave, laid over the world.
+	 */
+	public static int darkness(float intensity, int tint) {
+		int a = Math.round(Math.max(0F, Math.min(1F, intensity)) * 255) << 24;
+		int take = darkColor(tint);
+		return ShaderCompat.current() == ShaderCompat.Path.PLAIN ? a | (~take & 0xFFFFFF) : a | take;
+	}
+
 	/** The particle group circles and bolts are kept and drawn in. */
 	public static final ParticleRenderType GROUP = new ParticleRenderType(OfficeMod.id("magic_fx").toString(), "OM");
 
@@ -108,6 +133,7 @@ public final class LightPipeline {
 		@Override
 		public ParticleGroupRenderState extractRenderState(Frustum frustum, Camera camera, float partial) {
 			long start = System.nanoTime();
+			ShaderCompat.refresh(); // once a frame: a shader pack may have been switched on or off
 			try {
 				extractAll(frustum, camera, partial);
 			} finally {
@@ -130,10 +156,17 @@ public final class LightPipeline {
 				} catch (RuntimeException ex) {
 					// One broken visual must never take the frame down (vanilla's quad group does the same).
 					particle.remove();
+					if (!warned) {
+						warned = true;
+						LOGGER.warn("[office] A magic visual failed to draw and was removed", ex);
+					}
 				}
 			}
 		}
 	}
+
+	private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("office");
+	private static boolean warned;
 
 	/** Time spent laying out circles and bolts, for measurements (render thread). */
 	private static long extractNanos;

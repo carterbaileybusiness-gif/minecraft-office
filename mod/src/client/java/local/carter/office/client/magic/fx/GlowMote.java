@@ -87,6 +87,12 @@ public final class GlowMote extends SingleQuadParticle {
 
 	/** Brightness in the colour, alpha kept full (the particle shader drops fragments under a tenth of alpha). */
 	private void glow(float k) {
+		if (ShaderCompat.current() == ShaderCompat.Path.PLAIN) {
+			// Under a shader pack it is drawn translucent: the colour as is, the brightness in alpha.
+			setColor(red, green, blue);
+			setAlpha(k);
+			return;
+		}
 		setColor(red * k, green * k, blue * k);
 		setAlpha(1F);
 	}
@@ -98,6 +104,6 @@ public final class GlowMote extends SingleQuadParticle {
 
 	@Override
 	protected Layer getLayer() {
-		return LightPipeline.GLOW;
+		return LightPipeline.glow();
 	}
 }

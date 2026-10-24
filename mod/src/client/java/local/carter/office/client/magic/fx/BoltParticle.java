@@ -183,7 +183,7 @@ public final class BoltParticle extends SingleQuadParticle implements LightPipel
 
 	@Override
 	protected Layer getLayer() {
-		return LightPipeline.GLOW;
+		return LightPipeline.glow();
 	}
 
 	@Override

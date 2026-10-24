@@ -164,7 +164,9 @@ public final class MagicCircleRenderer {
 	private TextureAtlasSprite soft;
 	private final TextureAtlasSprite[] runes = new TextureAtlasSprite[RUNES];
 	private final TextureAtlasSprite[] runesBack = new TextureAtlasSprite[RUNES];
-	private final SingleQuadParticle.Layer layer = LightPipeline.GLOW;
+	private SingleQuadParticle.Layer layer = LightPipeline.GLOW;
+	/** Our glow pipeline draws both sides; the shader-pack fallback (vanilla translucent) culls, so pieces are laid twice there. */
+	private boolean twoSided;
 
 	/** Looked-up fx sprites; emptied after every resource reload ({@link #registerReload}). Render thread only. */
 	private static final Map<String, TextureAtlasSprite> SPRITES = new HashMap<>();
@@ -215,6 +217,8 @@ public final class MagicCircleRenderer {
 			return;
 		}
 		this.state = state;
+		layer = LightPipeline.glow();
+		twoSided = layer != LightPipeline.GLOW;
 		sprites();
 		plane.set(f.plane);
 		plane.transform(axisU.set(1, 0, 0));
@@ -458,7 +462,7 @@ public final class MagicCircleRenderer {
 	 * multiplied out by hand (no trigonometry or allocation beyond one table sine and cosine per piece).
 	 */
 	private void piece(TextureAtlasSprite sprite, float u, float v, float rot, float half, int argb) {
-		if ((argb & 0xFFFFFF) == 0 || half <= 0) {
+		if ((argb & 0xFFFFFF) == 0 || (argb >>> 24) == 0 || half <= 0) {
 			return;
 		}
 		float s = Mth.sin(rot * 0.5F);
@@ -467,8 +471,16 @@ public final class MagicCircleRenderer {
 		float qy = plane.y * c - plane.x * s;
 		float qz = plane.z * c + plane.w * s;
 		float qw = plane.w * c - plane.z * s;
-		state.add(layer, cx + axisU.x * u + axisV.x * v, cy + axisU.y * u + axisV.y * v, cz + axisU.z * u + axisV.z * v, qx, qy, qz, qw, half,
-				sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1(), argb, LightCoordsUtil.FULL_BRIGHT);
+		float px = cx + axisU.x * u + axisV.x * v;
+		float py = cy + axisU.y * u + axisV.y * v;
+		float pz = cz + axisU.z * u + axisV.z * v;
+		state.add(layer, px, py, pz, qx, qy, qz, qw, half, sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1(), argb,
+				LightCoordsUtil.FULL_BRIGHT);
+		if (twoSided) {
+			// Vanilla's translucent layer culls back faces: the back as well, turned half round its own y axis (Wildercord's Facing.flip).
+			state.add(layer, px, py, pz, -qz, qw, qx, -qy, half, sprite.getU0(), sprite.getU1(), sprite.getV0(), sprite.getV1(), argb,
+					LightCoordsUtil.FULL_BRIGHT);
+		}
 	}
 
 	/**
@@ -485,15 +497,12 @@ public final class MagicCircleRenderer {
 	}
 
 	/**
-	 * Additive light of {@code rgb} at {@code intensity}: premultiplied into the colour with the alpha kept full, because the particle
-	 * shader discards fragments under a tenth of alpha, which would cut every soft glow off at a hard, stepped edge.
+	 * Light of {@code rgb} at {@code intensity} for this frame's path ({@link ShaderCompat#encode}): additive light premultiplied
+	 * into the colour with alpha full (the particle shader discards fragments under a tenth of alpha, which would cut every soft
+	 * glow off at a hard, stepped edge); under a shader pack, the colour with the intensity in alpha.
 	 */
 	static int light(float intensity, int rgb) {
-		float k = Mth.clamp(intensity, 0F, 1F);
-		int r = Math.round(((rgb >> 16) & 0xFF) * k);
-		int g = Math.round(((rgb >> 8) & 0xFF) * k);
-		int b = Math.round((rgb & 0xFF) * k);
-		return 0xFF000000 | (r << 16) | (g << 8) | b;
+		return LightPipeline.light(intensity, rgb);
 	}
 
 	static int lighter(int rgb, float t) {
