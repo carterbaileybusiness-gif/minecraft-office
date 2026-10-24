@@ -65,9 +65,34 @@ public final class StarterKit {
 	 * fresh copy unless the player already holds a current one.
 	 */
 	public static HandbookResult giveOrUpdateHandbook(final ServerPlayer player) {
-		ItemStack fresh = handbook();
-		List<Filterable<Component>> current = fresh.get(DataComponents.WRITTEN_BOOK_CONTENT).pages();
-		Inventory inv = player.getInventory();
+		Replaced done = replaceOutdated(player.getInventory());
+		if (done.replaced()) {
+			return HandbookResult.UPDATED;
+		}
+		if (done.hasCurrent()) {
+			return HandbookResult.ALREADY_CURRENT;
+		}
+		give(player, handbook());
+		return HandbookResult.GIVEN;
+	}
+
+	/**
+	 * On join: replaces outdated handbooks anywhere in the inventory (main, armour, off hand) and says so in chat. Never
+	 * gives a copy. Returns whether anything was replaced (and the message sent).
+	 */
+	public static boolean refreshOnJoin(final ServerPlayer player) {
+		if (!replaceOutdated(player.getInventory()).replaced()) {
+			return false;
+		}
+		player.sendSystemMessage(Component.literal("Your Office Handbook was updated."));
+		return true;
+	}
+
+	private record Replaced(boolean replaced, boolean hasCurrent) {}
+
+	/** Replaces every outdated copy (same title, different pages) in place; reports whether it did and whether a current one is held. */
+	private static Replaced replaceOutdated(final Inventory inv) {
+		List<Filterable<Component>> current = handbook().get(DataComponents.WRITTEN_BOOK_CONTENT).pages();
 		boolean replaced = false;
 		boolean hasCurrent = false;
 		for (int i = 0; i < inv.getContainerSize(); i++) {
@@ -82,14 +107,17 @@ public final class StarterKit {
 				}
 			}
 		}
-		if (replaced) {
-			return HandbookResult.UPDATED;
+		return new Replaced(replaced, hasCurrent);
+	}
+
+	/** Body of the handbook page with this title (what follows the bold title and blank line). */
+	public static String pageBody(final String title) {
+		for (String[] page : PAGES) {
+			if (page[0].equals(title)) {
+				return page[1];
+			}
 		}
-		if (hasCurrent) {
-			return HandbookResult.ALREADY_CURRENT;
-		}
-		give(player, fresh);
-		return HandbookResult.GIVEN;
+		throw new IllegalArgumentException("no handbook page titled " + title);
 	}
 
 	public static ItemStack handbook() {

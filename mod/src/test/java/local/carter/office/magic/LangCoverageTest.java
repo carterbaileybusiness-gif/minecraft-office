@@ -64,6 +64,15 @@ class LangCoverageTest {
 	}
 
 	@Test
+	void onboardingKeysExist() throws Exception {
+		JsonObject lang = lang();
+		for (String k : List.of("item.office.grimoire.tip_unbound", "item.office.grimoire.tip_bound", "item.office.grimoire.tip_cast",
+				"item.office.rebinding_seal.tip")) {
+			assertText(lang, k);
+		}
+	}
+
+	@Test
 	void everyElementHasNameMottoAndSigil() throws Exception {
 		JsonObject lang = lang();
 		for (Element e : Element.values()) {

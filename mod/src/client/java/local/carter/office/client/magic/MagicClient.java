@@ -42,6 +42,7 @@ public final class MagicClient {
 		ClientPlayNetworking.registerGlobalReceiver(OpenGrimoire.TYPE, (payload, ctx) -> onOpenGrimoire(ctx.client(), payload));
 		ManaBarHud.register();
 		TravelClient.register();
+		MagicTooltips.register();
 
 		// Spell visuals (Task 10): the fx core, Recall, and each element lane's fx.
 		FxClient.register();

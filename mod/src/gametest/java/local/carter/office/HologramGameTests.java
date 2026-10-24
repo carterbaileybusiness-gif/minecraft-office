@@ -406,6 +406,53 @@ public class HologramGameTests {
 		h.succeed();
 	}
 
+	/** An outdated copy of the handbook (same title, other pages). */
+	private static ItemStack outdatedHandbook() {
+		ItemStack old = StarterKit.handbook();
+		WrittenBookContent fresh = old.get(DataComponents.WRITTEN_BOOK_CONTENT);
+		old.set(DataComponents.WRITTEN_BOOK_CONTENT, new WrittenBookContent(fresh.title(), fresh.author(), 0,
+				List.of(Filterable.passThrough(Component.literal("Wand: craft runes at the Spell Binding Table."))), true));
+		return old;
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void joinReplacesOutdatedHandbooksAndSaysSo(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			a.getInventory().setItem(7, outdatedHandbook());
+			a.setItemInHand(InteractionHand.OFF_HAND, outdatedHandbook());
+			h.assertTrue(StarterKit.refreshOnJoin(a), "replaced outdated copies and said so");
+			List<Filterable<Component>> current = StarterKit.handbook().get(DataComponents.WRITTEN_BOOK_CONTENT).pages();
+			h.assertTrue(a.getInventory().getItem(7).get(DataComponents.WRITTEN_BOOK_CONTENT).pages().equals(current), "slot 7 current");
+			h.assertTrue(a.getOffhandItem().get(DataComponents.WRITTEN_BOOK_CONTENT).pages().equals(current),
+					"off hand current");
+			h.assertValueEqual(countHandbooks(a), 2, "still two handbooks");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void joinWithCurrentOrNoHandbookIsSilent(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			a.getInventory().setItem(7, StarterKit.handbook());
+			h.assertFalse(StarterKit.refreshOnJoin(a), "current copy: silent");
+			h.assertValueEqual(countHandbooks(a), 1, "still one handbook");
+			clearHandbooks(a);
+			h.assertFalse(StarterKit.refreshOnJoin(a), "no handbook: silent");
+			h.assertValueEqual(countHandbooks(a), 0, "never gives a copy on join");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
 	@GameTest
 	public void handbookIsAboutGrimoireNotWizards(GameTestHelper h) {
 		StringBuilder text = new StringBuilder();
