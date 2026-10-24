@@ -6,7 +6,7 @@ Welcome! This is our private Minecraft server where you can put **hologram monit
 **Jump to:** [What you need](#1-what-you-need) · [Prism](#2-install-prism-launcher) · [Modpack](#3-add-the-modpack) ·
 [Memory](#4-memory) · [Join](#5-join-the-server) · [Your screens](#6-your-screens) ·
 [Holograms](#7-using-holograms) · [Voice, waystones, claims](#8-voice-chat-waystones-and-claims) ·
-[Magic](#9-magic-in-10-minutes) · [Problems](#10-something-wrong)
+[Magic](#9-magic) · [Problems](#10-something-wrong)
 
 ---
 
@@ -216,19 +216,9 @@ Good to know:
 - **Claims** (protect your office): press **'** (apostrophe) and claim the chunks around your office. Friends you add
   to your party can still build there.
 
-## 9. Magic in 10 minutes
+## 9. Magic
 
-Magic is normal survival, no commands. Hover over any item and press **R** to see how it is made (JEI).
-
-1. **Wand:** 1 coal + 1 stick (coal top-right, stick bottom-left). Fire wand = gunpowder + gold ingot. Hold it and
-   right-click to cast.
-2. **Runes** (like arrows for spells): 1 stone + an amethyst shard (Arcane), gunpowder or coal (Fire), or a snowball
-   (Frost) in the crafting grid gives 2 runes.
-3. **Spell Binding Table:** 1 book, 2 amethyst shards, 1 gold ingot, 3 polished diorite. Put bookshelves around it.
-4. **First spell book:** put a plain book in the table and choose Arcane, Fire or Frost (costs 1 XP level).
-5. **Equip the book** (it has its own slot), hold a wand, and cast.
-6. **Dress the part:** wizard robes (lapis + wool) make spells stronger. Wizard Merchants in villages sell wands,
-   staves and robes for emeralds.
+Magic: Grimoire (coming in the Office mod). Nothing to install separately; it arrives with a mod update.
 
 Your starter kit also has an **Office Handbook** book with the basics.
 

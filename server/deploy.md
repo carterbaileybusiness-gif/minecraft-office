@@ -31,8 +31,6 @@ relay builder.
 8. Whitelist the five players: `whitelist add <name>` for each (the template sets `white-list=true` and
    `enforce-whitelist=true`). `op` Carter only.
 9. Pregenerate the world before announcing: see `server/pregen.md`.
-10. Note: the first start prints a burst of `RPG Series loot config: failed to resolve itemList ... (Probably just needs a
-    game restart)` lines. They are harmless and gone on the second start - restart once after the first boot.
 
 `pack/mods/office.pw.toml` (our own mod) does **not exist yet**. Task 15 creates it pointing at the GitHub Release asset.
 Until then the pack has no Office mod; do not look for it.
@@ -41,9 +39,8 @@ Until then the pack has no Office mod; do not look for it.
 
 World (server side only, clients do not need them): Tectonic, Terralith, Lithostitched, Incendium, Nullscape, Dungeons and
 Taverns, Towns and Towers (+ Cristel Lib), Structory, Sparse Structures (spread factor 2 = structures twice as rare, left
-at the mod's default), Structure Pool API.
-Magic (both): Wizards, Spell Engine, Spell Power Attributes, Runes (+ Bundle API), Armor Model API, Player Animation
-Library, Trinkets Updated, Cloth Config API.
+at the mod's default), Cloth Config API.
+Magic: Grimoire comes with the Office mod (not a separate pack mod; Wizards, Spell Engine and Spell Power were removed in pack 0.2.0).
 Hanging out (both): Simple Voice Chat, Waystones (+ Balm, Shogi), Open Parties and Claims (+ Forge Config API Port).
 QoL (both): JEI (+ MezzConfig), Jade, AppleSkin. Client: Mod Menu (+ Text Placeholder API).
 Performance: Lithium, FerriteCore (both); Sodium, ImmediatelyFast, Entity Culling, Dynamic FPS (client).
@@ -51,10 +48,10 @@ Optional client, off by default (Prism shows a checkbox): Iris, Distant Horizons
 Server tools (server only): Chunky (pregen), spark (`/spark tps`, profiler).
 Fabric API (both).
 
-Dependencies that packwiz did **not** pull on its own and were added by hand after checking each mod's declared required
-dependencies on Modrinth: Spell Power Attributes, Player Animation Library, Trinkets Updated, Cloth Config API (all four
-are required by Spell Engine), and Bundle API (required by Runes). If you add more mods, check their dependencies;
-packwiz only looks one level down.
+Dependencies are checked with `python3 scripts/check-pack-deps.py pack`: it reads each jar's `fabric.mod.json` and prints
+missing required ids (exit 1) and library mods nothing depends on. Two libraries are only required in Modrinth's metadata
+(not in the dependent jar), so the script keeps them on purpose: Text Placeholder API (Mod Menu) and Cloth Config API
+(Cristel Lib). If you add more mods, run the script; packwiz only looks one level down.
 
 ### Sides
 
@@ -91,7 +88,7 @@ One-time, in Prism, **nothing else running** (no Gradle, no other game). This is
 1. Create a Prism instance: Minecraft 26.3, Fabric loader 0.20.1. Add the packwiz installer as a pre-launch command
    (`$INST_JAVA -jar packwiz-installer-bootstrap.jar <pack url>`), or until the URL exists use a local server:
    in `pack/` run `python3 -m http.server 8089` and use `http://127.0.0.1:8089/pack.toml`.
-2. Launch. Mods list (Mod Menu) should show Wizards, Spell Engine, Voice Chat, Waystones, JEI, Sodium.
+2. Launch. Mods list (Mod Menu) should show Voice Chat, Waystones, JEI, Sodium.
    Optional ones (Iris, Distant Horizons, LambDynamicLights) should be unchecked and absent.
 3. The world mods (Tectonic, Terralith, ...) are server-only in the pack, so a plain singleplayer world will look vanilla.
    To see the terrain, join a server that has them: the real one, or a local one (install the server side of the pack as
@@ -99,58 +96,9 @@ One-time, in Prism, **nothing else running** (no Gradle, no other game). This is
    biomes (Terralith).
 4. While joining, check: no red "mod mismatch" or "missing registry" screen. Take a screenshot if there is.
 5. Press `V`: the Voice Chat menu opens. (Push to talk key is under Controls -> Voice Chat.)
-6. Open a recipe in JEI (hover an item, press `R`): confirm the Spell Binding Table recipe below shows up.
-7. Craft the Spell Binding Table, put 3-4 bookshelves around it, and try making a Tome of Fire from a plain book.
-   Confirm the "first 10 minutes" text below matches what you see (especially the spell-book slot and what the table asks for).
-8. Press `'` (apostrophe): the claims UI opens.
-9. Report anything that differs; the handbook text in the next section is what Task 5 copies.
-
----
-
-## Magic: your first 10 minutes (handbook text)
-
-Magic here is part of normal survival: you craft a table, a wand, and some runes. Nothing needs commands.
-Press `R` over any item in the recipe book (JEI) to see how it is made.
-
-1. **Make a Wand.** A Novice Wand is 1 coal and 1 stick (coal top-right, stick bottom-left). Better early wands:
-   Arcane = amethyst shard + gold ingot, Fire = gunpowder + gold ingot, Frost = snowball + iron ingot. Hold it and
-   right-click to cast the spell it comes with.
-2. **Make runes.** Spells use runes like a bow uses arrows. Put one piece of stone (cobblestone, blackstone...) together with
-   an amethyst shard (Arcane), gunpowder or coal (Fire), or a snowball (Frost) in the crafting grid: you get 2 runes.
-   A Crafting Altar (see JEI) makes more per craft.
-3. **Build a Spell Binding Table.** 1 book, 2 amethyst shards, 1 gold ingot, 3 polished diorite:
-   book in the top middle, amethyst left and right of the gold ingot, diorite along the bottom.
-   Put bookshelves around it, like an enchanting table. You can also find tables in village gazebos.
-4. **Make your first Spell Book.** Put a plain book into the Spell Binding Table and choose a path: Arcane, Fire or Frost.
-   It costs a little XP (the server default is 1 level). The book gives you a whole set of spells.
-5. **Equip it and hold a weapon.** Wear the spell book (it has its own slot) and hold a wand or staff to cast the book's spells.
-6. **Dress the part.** Wizard robes are lapis lazuli plus wool; they make your spells stronger and faster.
-   A Wizard Staff (1 quartz, 2 sticks) is a step up from a wand. Villagers called Wizard Merchants sell wands, staves and robes for emeralds.
-7. **Level up.** Bind more spells by coming back to the table with XP, and look for spell enchantments (Spell Infinity
-   casts without runes). Wizard buildings in villages have loot.
-
-Other things you can do in the first 10 minutes:
-- **Talk:** press `V`, nearby friends hear you (about 48 blocks).
-- **Travel:** a Warp Stone (4 amethyst, 4 ender pearls, 1 gold ingot) turns stone bricks into a Waystone; waystones you
-  have visited let you teleport between each other. Waystones also sit in the wild.
-- **Protect your office:** press `'` and claim the chunks around your office. Friends you add to your party can still build.
-
-### Sources for the magic text
-
-- Spell Binding Table recipe: Spell Engine 1.10.9 `data/spell_engine/recipe/spell_binding_table.json` (inside the jar, so
-  JEI shows the same recipe): book, amethyst_shard x2, gold_ingot, polished_diorite x3.
-- Wand and staff and robe recipes, Wizard Merchant trades, rune recipes: Wizards 3.1.4 and Runes 1.3.2 jars
-  (`data/wizards/recipe/`, `data/wizards/villager_trade/`, `data/runes/recipe/`).
-- "Obtain a Wand or Staff... Runes serve as ammunition... find a Spell Binding Table in village Gazebos, or build your
-  own (just don't forget bookshelves)... To use the spell books: equip them and hold a weapon": Wizards on Modrinth,
-  https://modrinth.com/mod/wizards
-- Spell book creation cost (1 level, requirement 1) and the default options: `config/spell_engine/server.json5`
-  generated by Spell Engine 1.10.9; Spell Engine overview: https://modrinth.com/mod/spell-engine
-- Voice Chat menu key `V`: https://modrinth.com/mod/simple-voice-chat ; claims UI key `'`:
-  https://modrinth.com/mod/open-parties-and-claims ; Waystone and Warp Stone recipes: Waystones jar `data/waystones/recipe/`.
-
-Not confirmed by anyone playing yet (step 7 of the client check): that the table asks for a plain book only (no lapis),
-the exact name of the spell-book slot, and the default Push-to-Talk key.
+6. Open a recipe in JEI (hover an item, press `R`): the recipe screen opens.
+7. Press `'` (apostrophe): the claims UI opens.
+8. Report anything that differs.
 
 ---
 
@@ -167,3 +115,9 @@ Fresh server in a scratch folder, installed with packwiz-installer-bootstrap (`-
 - `locate biome terralith:yosemite_cliffs` found one (2769 blocks away), `locate structure #minecraft:village` found one.
 - Voice chat log line: `Voice chat server started at port 24454`.
 - Server stopped cleanly with `stop`; test world deleted.
+
+### Re-check after the Grimoire pack swap (pack 0.2.0-dev, 2026-10-23)
+
+Wizards, Spell Engine, Spell Power and the libraries only they needed were removed; 78 mods loaded (27 server-side jars),
+`Done (3.991s)!`, no "Incompatible mods" or missing-dependency errors (only Forge Config API Port "recommends" Mod Menu,
+a client mod). Stopped cleanly with `stop`; test world deleted.
