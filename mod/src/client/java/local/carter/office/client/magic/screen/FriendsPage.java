@@ -426,7 +426,7 @@ public final class FriendsPage {
 			Component why = why(st, r, now);
 			float ws = 0f, ww = 0f;
 			if (why != null) {
-				ws = UiKit.fit(font.width(why), (right - tx) * 0.55f, Math.max(1f / UiKit.guiScale(), UiKit.crisp(u * 0.8f)));
+				ws = UiKit.fit(font.width(why), (right - tx) * (on ? 0.55f : 0.42f), UiKit.crisp(u * 0.8f)); // your own request reads larger
 				ww = font.width(why) * ws;
 				int wc = on ? UiKit.inkOf(e.argb()) : st == Status.OFF ? 0xFF9A3B2E
 						: st == Status.ONE_AT_A_TIME ? UiKit.alpha(UiKit.INK_SOFT, 0.7f) : UiKit.INK_SOFT;
@@ -440,7 +440,8 @@ public final class FriendsPage {
 			}
 			float nameRoom = right - ww - 3 * u - tx;
 			Component name = Component.literal(fr.name());
-			float ns = UiKit.fit(font.width(name), nameRoom, u);
+			// Names shrink down to three quarters of the text unit, then end in "…" (a 16-letter name never turns to dust).
+			float ns = Math.max(UiKit.fit(font.width(name), nameRoom, u), UiKit.crisp(u * 0.75f));
 			if (font.width(name) * ns > nameRoom) name = ellipsize(font, fr.name(), nameRoom / ns); // already at the smallest crisp scale
 			int nameCol = dim ? UiKit.alpha(UiKit.INK_SOFT, 0.55f) : grey ? UiKit.alpha(UiKit.INK_SOFT, 0.8f) : UiKit.INK;
 			UiKit.text(g, font, name, tx, rr.y() + (rr.h() - 9 * ns) / 2f, ns, UiKit.alpha(nameCol, a), false);
