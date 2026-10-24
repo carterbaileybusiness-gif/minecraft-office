@@ -46,7 +46,10 @@ public class OfficeMod implements ModInitializer {
 			}
 		});
 
-		CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> EmitterCommand.register(dispatcher));
+		CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> {
+			EmitterCommand.register(dispatcher);
+			StarterKit.registerCommand(dispatcher);
+		});
 		PlayerBlockBreakEvents.BEFORE.register(HologramEmitterBlock::allowBreak);
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			StarterKit.giveIfFirstJoin(handler.player);

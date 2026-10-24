@@ -26,7 +26,9 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.StringTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.Filterable;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.item.PrimedTnt;
@@ -89,6 +91,16 @@ public class HologramGameTests {
 			}
 		}
 		return n;
+	}
+
+	/** Mock players may already have joined with the starter kit; start from a clean slate. */
+	private static void clearHandbooks(ServerPlayer p) {
+		Inventory inv = p.getInventory();
+		for (int i = 0; i < inv.getContainerSize(); i++) {
+			if (inv.getItem(i).is(Items.WRITTEN_BOOK)) {
+				inv.setItem(i, ItemStack.EMPTY);
+			}
+		}
 	}
 
 	@GameTest
@@ -334,6 +346,74 @@ public class HologramGameTests {
 		h.assertFalse(StarterKit.giveIfFirstJoin(p), "second join gives nothing");
 		h.assertValueEqual(count(p, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), 4, "still 4 emitters");
 		h.assertValueEqual(countHandbooks(p), 1, "still 1 handbook");
+		h.succeed();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void handbookCommandGivesOne(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			h.assertValueEqual(countHandbooks(a), 0, "no handbook yet");
+			h.getLevel().getServer().getCommands().performPrefixedCommand(a.createCommandSourceStack(), "handbook");
+			h.assertValueEqual(countHandbooks(a), 1, "/handbook gives one");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void handbookCommandReplacesOutdatedInPlace(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			ItemStack old = StarterKit.handbook();
+			WrittenBookContent fresh = old.get(DataComponents.WRITTEN_BOOK_CONTENT);
+			old.set(DataComponents.WRITTEN_BOOK_CONTENT, new WrittenBookContent(fresh.title(), fresh.author(), 0,
+					List.of(Filterable.passThrough(Component.literal("Wand: craft runes at the Spell Binding Table."))), true));
+			a.getInventory().setItem(7, old);
+			h.getLevel().getServer().getCommands().performPrefixedCommand(a.createCommandSourceStack(), "handbook");
+			h.assertValueEqual(countHandbooks(a), 1, "still exactly one handbook");
+			WrittenBookContent now = a.getInventory().getItem(7).get(DataComponents.WRITTEN_BOOK_CONTENT);
+			h.assertTrue(now != null && now.pages().equals(fresh.pages()), "outdated copy replaced in the same slot");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void handbookCommandSkipsWhenAlreadyCurrent(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			a.getInventory().setItem(7, StarterKit.handbook());
+			h.getLevel().getServer().getCommands().performPrefixedCommand(a.createCommandSourceStack(), "handbook");
+			h.assertValueEqual(countHandbooks(a), 1, "no second copy when already current");
+			h.assertTrue(StarterKit.giveOrUpdateHandbook(a) == StarterKit.HandbookResult.ALREADY_CURRENT, "reports already current");
+			h.assertValueEqual(countHandbooks(a), 1, "still one copy");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	public void handbookIsAboutGrimoireNotWizards(GameTestHelper h) {
+		StringBuilder text = new StringBuilder();
+		for (Filterable<Component> page : StarterKit.handbook().get(DataComponents.WRITTEN_BOOK_CONTENT).pages()) {
+			text.append(page.raw().getString()).append('\n');
+		}
+		String all = text.toString();
+		h.assertFalse(all.contains("Wand"), "no Wand");
+		h.assertFalse(all.contains("rune"), "no rune");
+		h.assertFalse(all.contains("Rune"), "no Rune");
+		h.assertFalse(all.contains("Spell Binding"), "no Spell Binding");
+		h.assertTrue(all.contains("Grimoire"), "mentions Grimoire");
 		h.succeed();
 	}
 
