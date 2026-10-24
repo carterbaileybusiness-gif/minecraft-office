@@ -19,23 +19,12 @@ import net.fabricmc.fabric.api.gametest.v1.GameTest;
 
 /** Server GameTests for the Water lane: Water Bullet and Tidal Push (Task 14). */
 public class WaterGameTests {
-	/**
-	 * The kit's dummy is NoAI, and a NoAI mob never moves (no gravity, no knockback). Knock tests need a body that physics moves:
-	 * AI back on with every goal removed, so it stands still on its own but flies when pushed.
-	 */
-	private static Zombie mobile(Zombie z) {
-		z.setNoAi(false);
-		z.removeAllGoals(g -> true);
-		z.setCanPickUpLoot(false);
-		return z;
-	}
-
 	// ---- Water Bullet ----
 
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
 	public void waterBulletKnocksBackZombie(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 1);
-		Zombie z = mobile(MagicTestKit.dummy(h, new BlockPos(16, 4, 9)));
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 9));
 		MagicTestKit.aim(p, new BlockPos(16, 5, 9));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		double z0 = z.getZ();
@@ -86,7 +75,7 @@ public class WaterGameTests {
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
 	public void tidalPushPushesItemsAndMobs(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 2);
-		Zombie z = mobile(MagicTestKit.dummy(h, new BlockPos(16, 4, 8)));
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 8));
 		ItemEntity item = MagicTestKit.item(h, new BlockPos(17, 4, 8));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		double z0 = z.getZ();
@@ -125,7 +114,7 @@ public class WaterGameTests {
 	public void tidalWaveCarriesWhatTheConeMissed(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 2);
 		// Beside the caster, a block ahead: far outside the 35° cone, but in the 5-wide wave.
-		Zombie z = mobile(MagicTestKit.dummy(h, new BlockPos(18, 4, 5)));
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(18, 4, 5));
 		double z0 = z.getZ();
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.TIDAL_PUSH, 0f), Result.CAST, "result");
 		h.assertTrue(z.getDeltaMovement().horizontalDistance() < 0.01, "the cone missed it");
@@ -180,7 +169,7 @@ public class WaterGameTests {
 		// A slope up: one block high from z 6, two from z 7 on (the wave climbs at most 2).
 		MagicTestKit.fill(h, new BlockPos(12, 4, 6), new BlockPos(20, 4, 20), Blocks.STONE);
 		MagicTestKit.fill(h, new BlockPos(12, 5, 7), new BlockPos(20, 5, 20), Blocks.STONE);
-		Zombie z = mobile(MagicTestKit.dummy(h, new BlockPos(16, 6, 10)));
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 6, 10));
 		// Look steeply up: the cone misses the zombie, only the wave (horizontal) can reach it.
 		MagicTestKit.aim(p, new BlockPos(16, 20, 6));
 		double z0 = z.getZ();
@@ -193,7 +182,7 @@ public class WaterGameTests {
 	public void tidalWaveStopsAtWall(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 2);
 		MagicTestKit.fill(h, new BlockPos(12, 4, 7), new BlockPos(20, 6, 7), Blocks.STONE);
-		Zombie z = mobile(MagicTestKit.dummy(h, new BlockPos(16, 4, 9)));
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 9));
 		BlockPos fire = new BlockPos(14, 4, 9);
 		h.setBlock(fire.below(), Blocks.NETHERRACK);
 		h.setBlock(fire, Blocks.FIRE);
