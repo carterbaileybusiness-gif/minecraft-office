@@ -68,16 +68,16 @@ public final class StarterKit {
 		{"Working", "Mac: click your screen to work on your Mac: your mouse is the Mac's mouse, drag windows across screens, "
 				+ "type. Esc comes back. Extend screens have a Dock.\n\nWindows: click to zoom in; double-tap Esc."},
 		{"Magic", "Magic is normal survival: craft a table, a wand and runes. No commands.\n\n"
-				+ "Recipe book (JEI): hover an item and press R to see how it's made, U to see what it's used for."},
+				+ "Open the recipe book in a crafting table to see how things are made."},
 		{"1. Wand", "Novice Wand: 1 coal + 1 stick (coal top-right, stick bottom-left).\n\n"
 				+ "Better: Arcane (amethyst + gold), Fire (gunpowder + gold), Frost (snowball + iron).\n\nRight-click to cast."},
 		{"2. Runes", "Spells use runes like a bow uses arrows.\n\n1 stone (cobblestone, blackstone...) + amethyst (Arcane), "
-				+ "gunpowder or coal (Fire) or a snowball (Frost) = 2 runes. A Crafting Altar makes more (see JEI)."},
+				+ "gunpowder or coal (Fire) or a snowball (Frost) = 2 runes. A Crafting Altar makes more."},
 		{"3. The Table", "Spell Binding Table: 1 book, 2 amethyst, 1 gold ingot, 3 polished diorite.\n\n"
 				+ "Book top middle, amethyst either side of the gold, diorite along the bottom. Put bookshelves around it. "
 				+ "Village gazebos have one."},
 		{"4. Spell Book", "Put a book into the table and pick a path: Arcane, Fire or Frost. It costs a little XP "
-				+ "(about 1 level).\n\nIf it asks for more than a book, check JEI (press R on the table)."},
+				+ "(about 1 level)."},
 		{"5. Equip It", "Wear the spell book in its own slot (look for the extra slot in your inventory) and hold a wand "
 				+ "or staff to cast the book's spells."},
 		{"6. Dress Up", "Wizard robes (lapis + wool) make spells stronger and faster. A Wizard Staff (1 quartz, 2 sticks) "
@@ -86,8 +86,7 @@ public final class StarterKit {
 				+ "casts without runes.\n\nWizard buildings in villages have loot."},
 		{"Also", "Talk: press V for voice chat; friends nearby hear you (check its settings for the talk key).\n\n"
 				+ "Claim your office: press ' and claim the chunks around it. Party friends can still build."},
-		{"Travel", "A Warp Stone (4 amethyst, 4 ender pearls, 1 gold ingot) turns stone bricks into a Waystone "
-				+ "(see JEI).\n\n"
-				+ "Waystones you've visited let you teleport between them. Some sit in the wild."},
+		{"Travel", "Recall is a grimoire spell: Shift + cast it to mark your home, then cast it to return there.\n\n"
+				+ "It takes a few seconds, taking damage cancels it, and it has a one minute cooldown."},
 	};
 }
