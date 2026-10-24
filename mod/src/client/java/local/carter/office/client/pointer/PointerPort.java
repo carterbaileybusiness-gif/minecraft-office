@@ -34,6 +34,17 @@ public interface PointerPort {
 		return null;
 	}
 
+	/** One cursor report: {@link #workCursor}'s {slot, x, y, w, h} (or null) and the monitor it is on (or null). */
+	record CursorReport(int @Nullable [] at, @Nullable String display) {}
+
+	/**
+	 * {@link #workCursor} and {@link #workCursorDisplay} from the same report, so a position is never paired with another
+	 * report's monitor (which would draw it on the wrong Mirror for a frame).
+	 */
+	default CursorReport workCursorReport() {
+		return new CursorReport(workCursor(), workCursorDisplay());
+	}
+
 	/** The monitor a Mirror that wants {@code wanted} shows right now (null = the main display). */
 	default @Nullable String mirrorShown(final @Nullable String wanted) {
 		return null;

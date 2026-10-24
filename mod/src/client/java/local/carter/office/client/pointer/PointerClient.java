@@ -318,8 +318,9 @@ public final class PointerClient {
 		// taken by its first draw, so every hologram of the frame shows the same position
 		if (c.cursorSnapFrame != c.frameNo) {
 			PointerPort port = cursorAtFrameStart ? null : port();
-			c.cursorSnap = port != null ? port.workCursor() : c.cursor;
-			c.cursorSnapDisplay = port != null ? port.workCursorDisplay() : c.cursorDisplay;
+			PointerPort.CursorReport r = port != null ? port.workCursorReport() : null; // one report: no tearing
+			c.cursorSnap = r != null ? r.at() : c.cursor;
+			c.cursorSnapDisplay = r != null ? r.display() : c.cursorDisplay;
 			c.cursorSnapFrame = c.frameNo;
 		}
 		int[] now = c.cursorSnap;
@@ -388,8 +389,9 @@ public final class PointerClient {
 		}
 		if (typing.active()) {
 			mc.getFramerateLimitTracker().onInputReceived(); // input goes to the computer: no AFK frame-rate drop
-			cursor = port.workCursor();
-			cursorDisplay = port.workCursorDisplay();
+			PointerPort.CursorReport r = port.workCursorReport(); // position and monitor from the same report
+			cursor = r.at();
+			cursorDisplay = r.display();
 			followCursor(mc);
 		} else {
 			followNanos = 0;

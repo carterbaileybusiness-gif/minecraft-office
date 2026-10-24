@@ -25,9 +25,13 @@ enum ScreenRules {
 }
 
 /// Checks a SET_ORIGINS against the screens as they are (pure). `live`: the Office displays now (slot → bounds);
-/// `fixed`: every other screen (the main display and the real monitors), which never move. The request is checked as
-/// one new layout, so displays may trade places. Every Office display of the new layout must overlap nothing and be
-/// joined to a real screen by touching edges (directly or through other Office displays: never floating detached).
+/// `fixed`: every other screen, the main display first, then the real monitors; none of them ever moves. `mainSlot`:
+/// the Office display that is the main display, when the user made one main in System Settings (it is never moved:
+/// moving the main display shifts every other screen, real monitors included). The request is checked as one new
+/// layout, so displays may trade places. No Office display of the new layout may overlap anything, and the whole layout
+/// (monitors and Office displays) must stay one piece joined to the main display by touching edges: never an Office
+/// display floating detached, never a monitor left hanging off a moved Office display (macOS would move that monitor
+/// to close the gap). Shared vector V7 with the mod's `DisplaySnap.layoutValid`.
 enum OriginRequest {
     /// Why a request was refused (sent as `ERROR bad_request`).
     struct Problem: Error, Equatable {
@@ -35,10 +39,12 @@ enum OriginRequest {
         init(_ message: String) { self.message = message }
     }
 
-    static func check(_ p: SetOriginsPayload, live: [Int: CGRect], fixed: [CGRect]) -> Result<[Int: CGPoint], Problem> {
+    static func check(_ p: SetOriginsPayload, live: [Int: CGRect], fixed: [CGRect], mainSlot: Int? = nil)
+        -> Result<[Int: CGPoint], Problem> {
         var moved: [Int: CGPoint] = [:]
         for o in p.origins {
             guard live[o.slot] != nil else { return .failure(Problem("display \(o.slot) is not on")) }
+            if o.slot == mainSlot { return .failure(Problem("display \(o.slot) is the main display")) }
             moved[o.slot] = CGPoint(x: o.x, y: o.y)
         }
         var layout = live
@@ -51,19 +57,33 @@ enum OriginRequest {
                 return .failure(Problem("display \(slot) overlaps another screen"))
             }
         }
-        // joined: grow from the real screens through touching edges
-        var joined = fixed
-        var left = Set(slots)
+        // one piece: grow from the main display through touching edges, over monitors and Office displays alike
+        var joined: [CGRect] = []
+        var leftSlots = Set(slots)
+        var leftFixed = Set(fixed.indices)
+        if let main = mainSlot, let r = layout[main] {
+            joined.append(r)
+            leftSlots.remove(main)
+        } else if let r = fixed.first {
+            joined.append(r)
+            leftFixed.remove(0)
+        }
         var grew = true
-        while grew && !left.isEmpty {
+        while grew {
             grew = false
-            for slot in left.sorted() where joined.contains(where: { ScreenRules.sharedEdge(layout[slot]!, $0) >= 1 }) {
+            for slot in leftSlots.sorted() where joined.contains(where: { ScreenRules.sharedEdge(layout[slot]!, $0) >= 1 }) {
                 joined.append(layout[slot]!)
-                left.remove(slot)
+                leftSlots.remove(slot)
+                grew = true
+            }
+            for i in leftFixed.sorted() where joined.contains(where: { ScreenRules.sharedEdge(fixed[i], $0) >= 1 }) {
+                joined.append(fixed[i])
+                leftFixed.remove(i)
                 grew = true
             }
         }
-        if let lost = left.sorted().first { return .failure(Problem("display \(lost) must touch a screen")) }
+        if let lost = leftSlots.sorted().first { return .failure(Problem("display \(lost) must touch a screen")) }
+        if !leftFixed.isEmpty { return .failure(Problem("a monitor would be cut off")) }
         return .success(moved)
     }
 }

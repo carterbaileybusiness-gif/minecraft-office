@@ -3,6 +3,7 @@ package local.carter.office.client.platform;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
 
@@ -68,6 +69,12 @@ public interface Platform {
 	default boolean applyOrigins(final List<Origin> origins) {
 		return false;
 	}
+
+	/**
+	 * Runs {@code r} on the client thread with the reason (maybe null) whenever a move could not be made (Mac: the
+	 * helper's {@code ERROR bad_request / display_failed}; the map only takes it while an Apply is waiting).
+	 */
+	default void onMoveRefused(final Consumer<@Nullable String> r) {}
 
 	/** Identify: shows each label on its real screen (screen id → "A" / "1") for 3 s; false when this computer can't. */
 	default boolean identifyScreens(final Map<String, String> labelsById) {

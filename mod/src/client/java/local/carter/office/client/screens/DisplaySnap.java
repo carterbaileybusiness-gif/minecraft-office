@@ -1,6 +1,7 @@
 package local.carter.office.client.screens;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import org.jspecify.annotations.Nullable;
@@ -26,20 +27,23 @@ public final class DisplaySnap {
 	 * null when there is none.
 	 */
 	public static int @Nullable [] snap(final Rect moving, final List<Rect> fixed) {
-		int[] best = null;
-		double bestDist = Double.MAX_VALUE;
+		List<int[]> s = spots(moving, fixed);
+		return s.isEmpty() ? null : s.get(0);
+	}
+
+	/**
+	 * Every top-left corner {@code moving} could snap to among {@code fixed} (touching, overlapping nothing), nearest to
+	 * where it was dropped first; the first is {@link #snap}'s.
+	 */
+	public static List<int[]> spots(final Rect moving, final List<Rect> fixed) {
+		List<int[]> out = new ArrayList<>();
 		for (int[] c : candidates(moving, fixed)) {
-			Rect at = new Rect(c[0], c[1], moving.w(), moving.h());
-			if (overlapsAny(at, fixed)) {
-				continue;
-			}
-			double d = Math.hypot(c[0] - moving.x(), c[1] - moving.y());
-			if (d < bestDist) {
-				bestDist = d;
-				best = c;
+			if (!overlapsAny(new Rect(c[0], c[1], moving.w(), moving.h()), fixed)) {
+				out.add(c);
 			}
 		}
-		return best;
+		out.sort(Comparator.comparingDouble(c -> Math.hypot(c[0] - moving.x(), c[1] - moving.y()))); // stable: ties keep their order
+		return out;
 	}
 
 	private static List<int[]> candidates(final Rect m, final List<Rect> fixed) {
@@ -123,11 +127,19 @@ public final class DisplaySnap {
 		return false;
 	}
 
-	/**
-	 * The helper's rule for a whole arrangement: no Office display overlaps another screen, and every one reaches a real
-	 * monitor through touching edges (two Office displays touching only each other are not enough).
-	 */
+	/** {@link #layoutValid(List, List, int)} with the main display first among {@code monitors}. */
 	public static boolean layoutValid(final List<Rect> monitors, final List<Rect> offices) {
+		return layoutValid(monitors, offices, -1);
+	}
+
+	/**
+	 * The helper's rule for a whole arrangement (its {@code OriginRequest.check}, shared vector V7): no Office display
+	 * overlaps another screen, and every screen, monitors and Office displays alike, is joined to the main display through
+	 * touching edges. So no Office display floats (two touching only each other are not enough), and no monitor is left
+	 * hanging off a moved Office display (macOS would move it). The main display is {@code offices.get(mainOffice)} when
+	 * the player made an Office display main, else ({@code mainOffice} -1) the first of {@code monitors}.
+	 */
+	public static boolean layoutValid(final List<Rect> monitors, final List<Rect> offices, final int mainOffice) {
 		List<Rect> all = new ArrayList<>(monitors);
 		all.addAll(offices);
 		for (int i = 0; i < offices.size(); i++) {
@@ -137,24 +149,21 @@ public final class DisplaySnap {
 				}
 			}
 		}
-		boolean[] reached = new boolean[offices.size()];
+		int seed = mainOffice >= 0 ? monitors.size() + mainOffice : 0;
+		if (seed >= all.size()) {
+			return all.isEmpty();
+		}
+		boolean[] reached = new boolean[all.size()];
+		reached[seed] = true;
 		boolean grew = true;
 		while (grew) {
 			grew = false;
-			for (int i = 0; i < offices.size(); i++) {
-				if (reached[i]) {
-					continue;
-				}
-				boolean hit = false;
-				for (Rect m : monitors) {
-					hit |= touches(offices.get(i), m);
-				}
-				for (int j = 0; j < offices.size() && !hit; j++) {
-					hit = reached[j] && touches(offices.get(i), offices.get(j));
-				}
-				if (hit) {
-					reached[i] = true;
-					grew = true;
+			for (int i = 0; i < all.size(); i++) {
+				for (int j = 0; j < all.size() && !reached[i]; j++) {
+					if (reached[j] && touches(all.get(i), all.get(j))) {
+						reached[i] = true;
+						grew = true;
+					}
 				}
 			}
 		}

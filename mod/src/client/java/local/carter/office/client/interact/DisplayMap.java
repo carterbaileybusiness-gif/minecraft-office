@@ -17,6 +17,7 @@ import local.carter.office.client.screens.IdentifyLabels;
 import local.carter.office.client.screens.ScreenList;
 import local.carter.office.client.screens.DisplayMapModel.Choice;
 import local.carter.office.client.screens.MapLayout;
+import local.carter.office.client.screens.MapPress;
 import local.carter.office.client.screens.Screen;
 import local.carter.office.core.Mode;
 import local.carter.office.hologram.HologramBlockEntity;
@@ -60,22 +61,16 @@ public final class DisplayMap extends AbstractWidget {
 	private static final int NOTE = 0xFFA0A0A0;
 	private static final int WARNING = 0xFFFFD060;
 	private static final int INSET = 4;
-	private static final int DRAG_THRESHOLD = 3;
 
 	private final DisplayMapModel model;
 	private final Consumer<Choice> onChoice;
 	private final Runnable onChanged;
 	private final @Nullable String note;
 
-	// the press in progress
 	private int lastMouseX;
 	private int lastMouseY;
-	private @Nullable Screen pressed;
-	private double pressX;
-	private double pressY;
-	private boolean dragging;
-	/** The fit while dragging (the map doesn't rescale under the mouse). */
-	private MapLayout.@Nullable Fit frozen;
+	/** The press in progress (pure, so the click rules are unit-tested). */
+	private final MapPress press;
 
 	/**
 	 * @param onChoice a click picked something (send it)
@@ -89,6 +84,7 @@ public final class DisplayMap extends AbstractWidget {
 		this.onChoice = onChoice;
 		this.onChanged = onChanged;
 		this.note = note;
+		this.press = new MapPress(model);
 	}
 
 	public DisplayMapModel model() {
@@ -119,48 +115,26 @@ public final class DisplayMap extends AbstractWidget {
 	}
 
 	private MapLayout.Fit fit(final int[] area) {
-		MapLayout.Fit f = frozen;
+		MapLayout.Fit f = press.frozen();
 		return f != null ? f : MapLayout.fit(model.fitRects(), area[2], area[3]);
 	}
 
 	private Rect boxOf(final Screen s, final MapLayout.Fit fit, final int[] area) {
-		Rect m = fit.toMap(s.rect());
-		return new Rect(area[0] + m.x(), area[1] + m.y(), m.w(), m.h());
-	}
-
-	/** Everything drawn, bottom to top: dashed slots, monitors, Office displays, the dragged one. */
-	private List<Screen> drawOrder() {
-		List<Screen> out = new ArrayList<>(model.ghosts());
-		String drag = model.dragging();
-		Screen dragged = null;
-		for (Screen s : model.screens()) {
-			if (s.isMonitor()) {
-				out.add(s);
-			}
-		}
-		for (Screen s : model.screens()) {
-			if (!s.isMonitor()) {
-				if (s.id().equals(drag)) {
-					dragged = s;
-				} else {
-					out.add(s);
-				}
-			}
-		}
-		if (dragged != null) {
-			out.add(dragged);
-		}
-		return out;
+		return MapPress.box(s, fit, area[0], area[1]);
 	}
 
 	private @Nullable Screen screenAt(final double mx, final double my) {
 		int[] area = area(statusLines().size());
+		return MapPress.hit(model.drawOrder(), fit(area), area[0], area[1], mx, my);
+	}
+
+	/** Where screen {@code id} (or dashed slot) is drawn now, in screen coordinates, or null (client GameTests). */
+	public @Nullable Rect boxOnScreen(final String id) {
+		int[] area = area(statusLines().size());
 		MapLayout.Fit fit = fit(area);
-		List<Screen> order = drawOrder();
-		for (int i = order.size() - 1; i >= 0; i--) {
-			Rect b = boxOf(order.get(i), fit, area);
-			if (mx >= b.x() && mx < b.x() + b.w() && my >= b.y() && my < b.y() + b.h()) {
-				return order.get(i);
+		for (Screen s : model.drawOrder()) {
+			if (s.id().equals(id)) {
+				return boxOf(s, fit, area);
 			}
 		}
 		return null;
@@ -170,49 +144,21 @@ public final class DisplayMap extends AbstractWidget {
 
 	@Override
 	public void onClick(final MouseButtonEvent event, final boolean doubleClick) {
-		pressed = screenAt(event.x(), event.y());
-		pressX = event.x();
-		pressY = event.y();
-		dragging = false;
+		press.press(screenAt(event.x(), event.y()), event.x(), event.y());
 	}
 
 	@Override
 	protected void onDrag(final MouseButtonEvent event, final double dx, final double dy) {
-		Screen p = pressed;
-		if (p == null || !model.canDrag(p.id())) {
-			return;
-		}
-		if (!dragging && Math.hypot(event.x() - pressX, event.y() - pressY) <= DRAG_THRESHOLD) {
-			return;
-		}
-		if (!dragging) {
-			dragging = true;
-			frozen = fit(area(statusLines().size()));
-		}
-		MapLayout.Fit f = frozen;
-		int gx = (int) Math.round(p.x() + (event.x() - pressX) / f.scale());
-		int gy = (int) Math.round(p.y() + (event.y() - pressY) / f.scale());
-		model.drag(p.id(), gx, gy);
+		press.drag(event.x(), event.y(), () -> fit(area(statusLines().size())));
 	}
 
 	@Override
 	public void onRelease(final MouseButtonEvent event) {
-		Screen p = pressed;
-		pressed = null;
-		if (dragging && p != null) {
-			dragging = false;
-			frozen = null;
-			model.drop(p.id());
+		MapPress.Release r = press.release(screenAt(event.x(), event.y()));
+		if (r.dropped()) {
 			onChanged.run();
-			return;
-		}
-		dragging = false;
-		frozen = null;
-		if (p != null && p == screenAt(event.x(), event.y())) {
-			Choice c = model.click(p.id());
-			if (!(c instanceof Choice.None)) {
-				onChoice.accept(c);
-			}
+		} else if (!(r.choice() instanceof Choice.None)) {
+			onChoice.accept(r.choice());
 		}
 	}
 
@@ -229,13 +175,13 @@ public final class DisplayMap extends AbstractWidget {
 		List<FormattedCharSequence> lines = statusLines();
 		int[] area = area(lines.size());
 		MapLayout.Fit fit = fit(area);
-		Screen hover = isHovered() && !dragging ? screenAt(mouseX, mouseY) : null;
+		Screen hover = isHovered() && !press.dragging() ? screenAt(mouseX, mouseY) : null;
 		String shown = model.shownId();
 		g.enableScissor(area[0] - 1, area[1] - 1, area[0] + area[2] + 1, area[1] + area[3] + 1);
 		Rect shownBox = null;
-		for (Screen s : drawOrder()) {
+		for (Screen s : model.drawOrder()) {
 			Rect b = boxOf(s, fit, area);
-			drawBox(g, s, b, s == hover || s.id().equals(model.dragging()));
+			drawBox(g, s, b, MapPress.same(s, hover) || s.id().equals(model.dragging()));
 			if (s.id().equals(shown)) {
 				shownBox = b;
 			}
@@ -358,7 +304,7 @@ public final class DisplayMap extends AbstractWidget {
 
 	@Override
 	protected void handleCursor(final GuiGraphicsExtractor g) {
-		if (dragging) {
+		if (press.dragging()) {
 			g.requestCursor(CursorTypes.RESIZE_ALL);
 			return;
 		}

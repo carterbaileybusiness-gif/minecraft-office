@@ -85,6 +85,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			scrollResizes(context, sp);
 			wallMount(context, sp);
 			settingsMapFitsAtEveryGuiScale(context, sp);
+			dashedSlotClickPicksIt(context, sp);
 			offlineLook(context, sp);
 			if (Boolean.getBoolean("office.measure")) {
 				measureWork(context, sp); // opt-in, on a Mac: in-game frame rate and latency in work mode (fix round A)
@@ -1254,6 +1255,61 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			});
 			switchMode(context, sp, original);
 		}
+	}
+
+	/** One Office display: dashed slots 2, 3 and 4 right of it. */
+	private static final ScreenList ONE_OFFICE = new ScreenList(java.util.List.of(
+			new Screen("MAIN", 0, true, "MacBook", 0, 0, 1440, 900),
+			new Screen("O1", 1, false, null, 1440, 0, 1920, 1080)), ScreenList.Abilities.ALL);
+
+	/**
+	 * Review fix #1: an Extend hologram can still be pointed at an Office display that doesn't exist yet. A real mouse
+	 * press and release (through the screen, as the game delivers them) on the dashed slot 3 shows display 3; on the box of
+	 * the slot it had, back again.
+	 */
+	private void dashedSlotClickPicksIt(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		if (local.carter.office.client.platform.Platform.current() instanceof local.carter.office.client.platform.WindowsPlatform) {
+			return; // Extend is greyed on Windows: no map there
+		}
+		local.carter.office.core.Mode original = context.computeOnClient(mc -> clientHologram(mc).spec().mode());
+		switchMode(context, sp, local.carter.office.core.Mode.EXTEND);
+		int slot = context.computeOnClient(mc -> clientHologram(mc).spec().displaySlot());
+		context.runOnClient(mc -> ScreenList.setTestOverride(ONE_OFFICE));
+		try {
+			clickMapBox(context, local.carter.office.client.screens.DisplayMapModel.GHOST + 3);
+			sp.getConnection().waitForServerboundPackets();
+			context.waitFor(mc -> clientHologram(mc).spec().displaySlot() == 3, 100);
+			context.takeScreenshot("settings-map-dashed-slot-3");
+			clickMapBox(context, slot == 1 ? "O1" : local.carter.office.client.screens.DisplayMapModel.GHOST + slot);
+			sp.getConnection().waitForServerboundPackets();
+			context.waitFor(mc -> clientHologram(mc).spec().displaySlot() == slot, 100);
+		} finally {
+			context.runOnClient(mc -> {
+				mc.gui.setScreen(null);
+				ScreenList.setTestOverride(null);
+			});
+			switchMode(context, sp, original);
+		}
+	}
+
+	/** Opens the settings screen and clicks (press, then release) the middle of map box {@code id}. */
+	private void clickMapBox(final ClientGameTestContext context, final String id) {
+		context.runOnClient(mc -> mc.gui.setScreen(new HologramSettingsScreen(clientHologram(mc), "Test")));
+		context.waitTicks(2);
+		context.runOnClient(mc -> {
+			if (!(mc.gui.screen() instanceof HologramSettingsScreen screen) || screen.displayMap() == null) {
+				throw new AssertionError("the settings screen should show the display map in Extend");
+			}
+			local.carter.office.client.platform.Platform.Rect box = screen.displayMap().boxOnScreen(id);
+			if (box == null) {
+				throw new AssertionError("no box " + id + " on the map");
+			}
+			net.minecraft.client.input.MouseButtonEvent click = new net.minecraft.client.input.MouseButtonEvent(
+					box.x() + box.w() / 2.0, box.y() + box.h() / 2.0,
+					new net.minecraft.client.input.MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, 0));
+			screen.mouseClicked(click, false);
+			screen.mouseReleased(click);
+		});
 	}
 
 	/** Identify (Task 11) from the settings screen: the own hologram shows its number (Extend) or letter (Mirror) for 3 s. */

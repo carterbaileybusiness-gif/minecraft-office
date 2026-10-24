@@ -163,12 +163,18 @@ import CoreGraphics
     }
 
     /// SET_ORIGINS (already checked by OriginRequest): moves these Office displays (slot → origin, global points) in one
-    /// display configuration, for this login session like `arrange`. False when macOS refused it.
+    /// display configuration, for this login session like `arrange`. False when macOS refused it; a move refused (or a
+    /// display gone) cancels the whole configuration, so a partial move never commits.
     func apply(origins: [Int: CGPoint]) -> Bool {
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let config else { return false }
-        for (slot, origin) in origins {
-            if let id = displays[slot]?.displayID { CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y)) }
+        for (slot, origin) in origins.sorted(by: { $0.key < $1.key }) {
+            let result = displays[slot].map { CGConfigureDisplayOrigin(config, $0.displayID, Int32(origin.x), Int32(origin.y)) }
+            guard result == CGError.success else {
+                CGCancelDisplayConfiguration(config)
+                log("not moved: display \(slot) " + (result.map { "error \($0.rawValue)" } ?? "is gone"))
+                return false
+            }
         }
         let result = CGCompleteDisplayConfiguration(config, .forSession)
         log("moved \(origins.sorted { $0.key < $1.key }.map { "\($0.key) → \(Int($0.value.x)),\(Int($0.value.y))" }): "

@@ -80,4 +80,36 @@ class DisplaySnapTest {
 				"two Office displays touching only each other");
 		assertFalse(DisplaySnap.layoutValid(List.of(MAIN), List.of(d1, new Rect(2000, 0, 1920, 1080))), "overlapping each other");
 	}
+
+	/** Shared vector V7 (the helper's ArrangementTests has the same): every screen stays joined to the main display. */
+	@Test
+	void sharedVectorV7MonitorAttachedOnlyThroughOffice1() {
+		Rect lg = new Rect(3360, 0, 1920, 1080); // main | Office 1 | LG
+		assertTrue(DisplaySnap.layoutValid(List.of(MAIN, lg), List.of(new Rect(1440, 0, 1920, 1080))), "V7 as it is: one piece");
+		assertFalse(DisplaySnap.layoutValid(List.of(MAIN, lg), List.of(new Rect(-1920, 0, 1920, 1080))),
+				"V7: Office 1 moved left of main cuts LG off");
+		assertFalse(DisplaySnap.layoutValid(List.of(MAIN, lg), List.of(new Rect(5280, 0, 1920, 1080))),
+				"Office 1 joined only to the cut-off LG");
+		// an Office display that is the main display seeds the piece
+		Rect officeMain = MAIN;
+		Rect left = new Rect(-1920, 0, 1920, 1080);
+		assertTrue(DisplaySnap.layoutValid(List.of(left), List.of(officeMain, new Rect(0, -1080, 1920, 1080)), 0),
+				"around an Office main display");
+		assertFalse(DisplaySnap.layoutValid(List.of(left), List.of(officeMain, new Rect(1440, 900, 1920, 1080)), 0),
+				"only a corner of the Office main display");
+	}
+
+	@Test
+	void spotsAreNearestFirstAndStartWithSnap() {
+		Rect dropped = new Rect(1500, 40, 1920, 1080);
+		List<int[]> spots = DisplaySnap.spots(dropped, List.of(MAIN));
+		assertArrayEquals(DisplaySnap.snap(dropped, List.of(MAIN)), spots.get(0));
+		double last = -1;
+		for (int[] s : spots) {
+			double d = Math.hypot(s[0] - dropped.x(), s[1] - dropped.y());
+			assertTrue(d >= last, "nearest first");
+			last = d;
+			assertFalse(DisplaySnap.overlaps(new Rect(s[0], s[1], 1920, 1080), MAIN));
+		}
+	}
 }

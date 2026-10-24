@@ -82,16 +82,85 @@ class DisplayMapModelTest {
 	}
 
 	@Test
-	void aDropThatWouldStrandADisplayMovesNothing() {
+	void aDropThatWouldStrandADisplayTakesTheNearestSpotThatDoesnt() {
 		DisplayMapModel m = extend(ALL);
-		// O1 is O2's only link to a real monitor: dropping O1 above main would leave O2 floating
+		// O1 is O2's only link to a real monitor: above main (the nearest spot) would leave O2 floating, so O1 goes to the
+		// nearest spot that still joins O2 to main: between them, slid up as far as sharing 10 % of its edge allows
 		assertTrue(m.drag("O1", 0, -1100));
-		assertFalse(m.drop("O1"));
-		assertTrue(m.pending().isEmpty());
+		assertTrue(m.drop("O1"));
+		assertEquals(List.of(new Origin(1, 1440, -972)), m.pending());
 		// dropping it back where it is: nothing to Apply
 		assertTrue(m.drag("O1", 1450, 10));
-		assertFalse(m.drop("O1"));
+		assertTrue(m.drop("O1"));
+		assertTrue(m.pending().isEmpty());
 		assertFalse(m.canApply());
+		assertTrue(m.drag("O1", 1450, 10));
+		assertFalse(m.drop("O1"), "already there");
+	}
+
+	@Test
+	void aDropNeverCutsAMonitorOff() {
+		// shared vector V7: main | O1 | monitor DELL, attached only through O1
+		Screen dell = new Screen("DELL", 0, false, "DELL", 3360, 0, 1920, 1080);
+		DisplayMapModel m = extend(list(ScreenList.Abilities.ALL, MAIN, OFFICE_1, dell));
+		assertTrue(m.drag("O1", -1900, 0));
+		assertFalse(m.drop("O1"), "left of main would cut DELL off; the only spot joining DELL is where O1 is");
+		assertTrue(m.pending().isEmpty());
+	}
+
+	@Test
+	void anOfficeDisplayMadeMainNeverMoves() {
+		Screen officeMain = new Screen("O1", 1, true, null, 0, 0, 1920, 1080);
+		Screen built = new Screen("MB", 0, false, "MacBook", -1440, 0, 1440, 900);
+		DisplayMapModel m = extend(list(ScreenList.Abilities.ALL, officeMain, built, OFFICE_2.at(1920, 0)));
+		assertFalse(m.canDrag("O1"), "the main display");
+		assertFalse(m.drag("O1", 0, -2000));
+		assertTrue(m.canDrag("O2"));
+		assertTrue(m.drag("O2", 0, -1100));
+		assertTrue(m.drop("O2"));
+		assertEquals(List.of(new Origin(2, 0, -1080)), m.pending(), "joined to the Office main display");
+	}
+
+	@Test
+	void applyShowsApplyingThenTheAnswer() {
+		DisplayMapModel m = extend(ALL);
+		m.drag("O2", 300, -1000);
+		m.drop("O2");
+		m.applied(1000);
+		assertEquals(DisplayMapModel.APPLYING, m.status());
+		assertFalse(m.canApply());
+		assertFalse(m.canDrag("O1"), "drags wait for the helper");
+		assertFalse(m.tick(2000), "still waiting at 1 s");
+
+		// refused: the helper's short reason for 3 s, the move snaps back
+		assertTrue(m.failed("display 2 must touch a screen", 2100));
+		assertEquals("Display 2 must touch a screen", m.status());
+		assertTrue(m.pending().isEmpty());
+		assertTrue(m.canDrag("O1"));
+		m.update(ALL); // the helper's DISPLAYS follows its ERROR
+		assertEquals("Display 2 must touch a screen", m.status(), "still shown after the screen list");
+		m.tick(5099);
+		assertEquals("Display 2 must touch a screen", m.status());
+		m.tick(5100);
+		assertNull(m.status(), "gone after 3 s");
+		assertFalse(m.failed("bad request", 6000), "an error with no Apply waiting is someone else's");
+		assertNull(m.status());
+		assertEquals(DisplayMapModel.COULD_NOT_MOVE, DisplayMapModel.failureText("macOS refused the new arrangement and more"));
+		assertEquals("macOS refused it", DisplayMapModel.failureText("macOS refused it"));
+		assertEquals(DisplayMapModel.COULD_NOT_MOVE, DisplayMapModel.failureText(null));
+	}
+
+	@Test
+	void anUnansweredApplyTimesOut() {
+		DisplayMapModel m = extend(ALL);
+		m.drag("O2", 300, -1000);
+		m.drop("O2");
+		m.applied(1000);
+		assertTrue(m.tick(1000 + DisplayMapModel.APPLY_TIMEOUT_MS));
+		assertFalse(m.applying());
+		assertEquals(DisplayMapModel.COULD_NOT_MOVE, m.status());
+		assertTrue(m.canDrag("O1"), "drags unlock");
+		assertTrue(m.canApply(), "the move stays, to Apply again");
 	}
 
 	@Test
@@ -104,7 +173,7 @@ class DisplayMapModelTest {
 		m.drag("O1", 0, -1100);
 		m.drop("O1");
 		assertEquals(1, m.pending().size());
-		m.applied();
+		m.applied(0);
 		m.update(list(ScreenList.Abilities.ALL, MAIN, LG, OFFICE_1.at(0, -1080)));
 		assertTrue(m.pending().isEmpty(), "the helper's answer replaces the pending move");
 		assertEquals(-1080, m.screens().stream().filter(s -> s.id().equals("O1")).findFirst().orElseThrow().y());

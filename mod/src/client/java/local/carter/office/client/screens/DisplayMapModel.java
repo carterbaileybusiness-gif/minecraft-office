@@ -33,6 +33,14 @@ public final class DisplayMapModel {
 	/** Ids of the dashed, not-yet-existing Office displays. */
 	public static final String GHOST = "ghost:";
 	public static final String UNPLUGGED = "That screen isn't plugged in — showing A";
+	public static final String APPLYING = "Applying…";
+	public static final String COULD_NOT_MOVE = "Couldn't move it there";
+	/** No screen list this long after Apply: drags unlock again (the moves stay, to Apply again). */
+	public static final long APPLY_TIMEOUT_MS = 2000;
+	/** How long a refused or failed Apply is shown on the status line. */
+	public static final long FAILURE_SHOWN_MS = 3000;
+	/** The helper's own reason is shown when it is at most this long, else {@link #COULD_NOT_MOVE}. */
+	static final int MAX_HELPER_MESSAGE = 32;
 
 	private ScreenList list;
 	private Mode mode;
@@ -46,6 +54,10 @@ public final class DisplayMapModel {
 	private int dragY;
 	/** Apply was pressed: the next screen list (the helper's answer) replaces the pending moves. */
 	private boolean applied;
+	private long appliedAt;
+	/** A refused / failed / unanswered Apply's line, shown until {@link #failureUntil}. */
+	private @Nullable String failure;
+	private long failureUntil;
 
 	public DisplayMapModel(final ScreenList list, final Mode mode, final int displaySlot, final @Nullable String mirrorDisplay,
 			final Shape shape) {
@@ -122,6 +134,31 @@ public final class DisplayMapModel {
 		return out;
 	}
 
+	/** Everything drawn, bottom to top: dashed slots, monitors, Office displays, the dragged one. */
+	public List<Screen> drawOrder() {
+		List<Screen> out = new ArrayList<>(ghosts());
+		List<Screen> now = screens();
+		Screen dragged = null;
+		for (Screen s : now) {
+			if (s.isMonitor()) {
+				out.add(s);
+			}
+		}
+		for (Screen s : now) {
+			if (!s.isMonitor()) {
+				if (s.id().equals(dragId)) {
+					dragged = s;
+				} else {
+					out.add(s);
+				}
+			}
+		}
+		if (dragged != null) {
+			out.add(dragged);
+		}
+		return out;
+	}
+
 	/** Everything the map fits: the screens at their base spots (not following a drag) and the dashed slots. */
 	public List<Rect> fitRects() {
 		List<Rect> out = new ArrayList<>();
@@ -177,10 +214,14 @@ public final class DisplayMapModel {
 		return new Choice.None();
 	}
 
-	/** Whether {@code id} can be dragged: an existing Office display, in Extend, where displays can move. */
+	/**
+	 * Whether {@code id} can be dragged: an existing Office display, in Extend, where displays can move; never the main
+	 * display (the player may have made an Office display main: moving it would shift every other screen).
+	 */
 	public boolean canDrag(final String id) {
 		Screen s = list.byId(id);
-		return mode == Mode.EXTEND && list.abilities().canMove() && s != null && !s.isMonitor() && !applied; // not while the helper moves them
+		return mode == Mode.EXTEND && list.abilities().canMove() && s != null && !s.isMonitor() && !s.main()
+				&& !applied; // not while the helper moves them
 	}
 
 	/** The dragged display's top-left is now at (globalX, globalY) (preview only); false when it can't be dragged. */
@@ -199,9 +240,9 @@ public final class DisplayMapModel {
 	}
 
 	/**
-	 * Released: the display snaps to the nearest spot touching another screen. When there is none, or the arrangement
-	 * would break the helper's rule (every Office display reaches a real monitor, nothing overlaps), nothing moves.
-	 * Returns whether its spot changed.
+	 * Released: the display snaps to the nearest spot touching another screen that keeps the helper's rule (nothing
+	 * overlaps, every screen stays joined to the main display: {@link DisplaySnap#layoutValid}). When there is none,
+	 * nothing moves. Returns whether its spot changed.
 	 */
 	public boolean drop(final String id) {
 		if (!id.equals(dragId)) {
@@ -221,17 +262,20 @@ public final class DisplayMapModel {
 				fixed.add(s.rect());
 			}
 		}
-		int[] at = DisplaySnap.snap(new Rect(dragX, dragY, original.w(), original.h()), fixed);
-		if (at == null || before == null || (at[0] == before.x() && at[1] == before.y())) {
+		if (before == null) {
 			return false;
 		}
-		List<Rect> monitors = new ArrayList<>();
-		List<Rect> offices = new ArrayList<>();
-		for (Screen s : placed()) {
-			Screen p = s.id().equals(id) ? s.at(at[0], at[1]) : s;
-			(p.isMonitor() ? monitors : offices).add(p.rect());
+		int[] at = null;
+		for (int[] spot : DisplaySnap.spots(new Rect(dragX, dragY, original.w(), original.h()), fixed)) {
+			if (spot[0] == before.x() && spot[1] == before.y()) {
+				return false; // the nearest good spot is where it already is
+			}
+			if (layoutValidWith(id, spot)) {
+				at = spot;
+				break;
+			}
 		}
-		if (!DisplaySnap.layoutValid(monitors, offices)) {
+		if (at == null) {
 			return false;
 		}
 		if (at[0] == original.x() && at[1] == original.y()) {
@@ -240,6 +284,28 @@ public final class DisplayMapModel {
 			pending.put(original.slot(), at);
 		}
 		return true;
+	}
+
+	/** Whether the layout with Office display {@code id} at {@code at} keeps the helper's rule (the main display first). */
+	private boolean layoutValidWith(final String id, final int[] at) {
+		List<Rect> monitors = new ArrayList<>();
+		List<Rect> offices = new ArrayList<>();
+		int mainOffice = -1;
+		Screen main = list.main();
+		for (Screen s : placed()) {
+			Screen p = s.id().equals(id) ? s.at(at[0], at[1]) : s;
+			if (p.id().equals(main.id()) && p.isMonitor()) {
+				monitors.add(0, p.rect());
+			} else if (p.isMonitor()) {
+				monitors.add(p.rect());
+			} else {
+				if (p.id().equals(main.id())) {
+					mainOffice = offices.size();
+				}
+				offices.add(p.rect());
+			}
+		}
+		return DisplaySnap.layoutValid(monitors, offices, mainOffice);
 	}
 
 	/** The moves to Apply, by slot. */
@@ -255,9 +321,63 @@ public final class DisplayMapModel {
 		return mode == Mode.EXTEND && list.abilities().canMove() && !pending.isEmpty() && !applied;
 	}
 
-	/** Apply was sent: the helper's next screen list is the truth (moved, or refused and unchanged). */
-	public void applied() {
+	/**
+	 * Apply was sent at {@code now} (ms): the helper's next screen list is the truth (moved, or refused and unchanged).
+	 * Until it comes the status line says "Applying…" and drags wait; after {@link #APPLY_TIMEOUT_MS} without one they
+	 * unlock again ({@link #tick}).
+	 */
+	public void applied(final long now) {
 		applied = true;
+		appliedAt = now;
+		failure = null;
+	}
+
+	/** Whether Apply was sent and the helper hasn't answered yet. */
+	public boolean applying() {
+		return applied;
+	}
+
+	/**
+	 * The helper refused or failed the Apply ({@code ERROR bad_request / display_failed}, its DISPLAYS follows): the
+	 * moves snap back and the status line says so for {@link #FAILURE_SHOWN_MS}. Ignored when no Apply is waiting (the
+	 * error was about something else). Returns whether it was taken.
+	 */
+	public boolean failed(final @Nullable String helperMessage, final long now) {
+		if (!applied) {
+			return false;
+		}
+		applied = false;
+		pending.clear();
+		failure = failureText(helperMessage);
+		failureUntil = now + FAILURE_SHOWN_MS;
+		return true;
+	}
+
+	/** The line for a refused Apply: the helper's reason when it is short, else "Couldn't move it there". */
+	static String failureText(final @Nullable String helperMessage) {
+		String m = helperMessage == null ? "" : helperMessage.strip();
+		if (m.isEmpty() || m.length() > MAX_HELPER_MESSAGE) {
+			return COULD_NOT_MOVE;
+		}
+		return m.startsWith("macOS") ? m : Character.toUpperCase(m.charAt(0)) + m.substring(1);
+	}
+
+	/**
+	 * The time is {@code now} (ms; the settings screen calls this every tick): an unanswered Apply times out (drags
+	 * unlock, "Couldn't move it there"), a failure line goes after its time. Returns whether {@link #canApply} or the
+	 * drag lock may have changed.
+	 */
+	public boolean tick(final long now) {
+		if (failure != null && now >= failureUntil) {
+			failure = null;
+		}
+		if (applied && now - appliedAt >= APPLY_TIMEOUT_MS) {
+			applied = false;
+			failure = COULD_NOT_MOVE;
+			failureUntil = now + FAILURE_SHOWN_MS;
+			return true;
+		}
+		return false;
 	}
 
 	/** A fresh screen list: after Apply it replaces the pending moves; otherwise moves of displays that are gone are dropped. */
@@ -275,10 +395,18 @@ public final class DisplayMapModel {
 	}
 
 	/**
-	 * The map's status line, or null: a Mirror whose chosen monitor is unplugged says so; greyed abilities say why
-	 * ("Restart Minecraft to update the helper").
+	 * The map's status line, or null: "Applying…" while the helper moves the displays, then a refused Apply's reason for
+	 * a few seconds; a Mirror whose chosen monitor is unplugged says so; greyed abilities say why ("Restart Minecraft to
+	 * update the helper").
 	 */
 	public @Nullable String status() {
+		if (applied) {
+			return APPLYING;
+		}
+		String f = failure;
+		if (f != null) {
+			return f;
+		}
 		ScreenList.Abilities a = list.abilities();
 		if (mode == Mode.MIRROR && mirrorDisplay != null && a.live() && list.byId(mirrorDisplay) == null) {
 			return UNPLUGGED;
