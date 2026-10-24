@@ -207,12 +207,16 @@ enum PointerTarget {
 
     enum Failure: Error, Equatable { case noDisplay, noPictureSize }
 
-    static func globalPoint(slot: Int, x: Int, y: Int, w: Int?, h: Int?, main: CGRect,
+    /// `monitorId` (slot 0, "screens"): the Mirror shows that monitor; `monitor` gives its bounds while it is connected.
+    /// An unknown or absent id is the main display.
+    static func globalPoint(slot: Int, x: Int, y: Int, w: Int?, h: Int?, monitorId: String? = nil, main: CGRect,
+                            monitor: (String) -> CGRect? = { _ in nil },
                             display: (Int) -> (bounds: CGRect, width: Int, height: Int)?) -> Result<CGPoint, Failure> {
         if slot == mainSlot {
             guard let w, let h, w > 0, h > 0 else { return .failure(.noPictureSize) }
-            guard !main.isEmpty else { return .failure(.noDisplay) }
-            return .success(PointerMapping.globalPoint(x: x, y: y, width: w, height: h, bounds: main))
+            let bounds = monitorId.flatMap(monitor).flatMap { $0.isEmpty ? nil : $0 } ?? main
+            guard !bounds.isEmpty else { return .failure(.noDisplay) }
+            return .success(PointerMapping.globalPoint(x: x, y: y, width: w, height: h, bounds: bounds))
         }
         guard let d = display(slot) else { return .failure(.noDisplay) }
         return .success(PointerMapping.globalPoint(x: x, y: y, width: d.width, height: d.height, bounds: d.bounds))
@@ -237,12 +241,18 @@ struct SecureInputWatch: Equatable {
 
 /// Work mode: where the real cursor is, for the hologram that shows that display (pure). Slot 0 = the main display (the
 /// Mirror), in its points; slots 1-4 = virtual displays, in their pixels (what the hologram's picture is made of), so the
-/// drawn cursor lands on the pixel the click goes to. Off all of them (another physical display): slot -1.
+/// drawn cursor lands on the pixel the click goes to. `monitors`: real monitors a Mirror shows ("screens" mod only): on
+/// one, slot 0 with `display` = its id, in its points. Off all of them (another physical display): slot -1.
 enum CursorLocator {
-    static func locate(_ p: CGPoint, main: CGRect, displays: [(slot: Int, bounds: CGRect, width: Int, height: Int)]) -> CursorPayload {
+    static func locate(_ p: CGPoint, main: CGRect, displays: [(slot: Int, bounds: CGRect, width: Int, height: Int)],
+                       monitors: [(id: String, bounds: CGRect)] = []) -> CursorPayload {
         if main.contains(p) {
             return CursorPayload(slot: PointerTarget.mainSlot, x: Int((p.x - main.minX).rounded(.down)), y: Int((p.y - main.minY).rounded(.down)),
                                  w: Int(main.width), h: Int(main.height))
+        }
+        for m in monitors where m.bounds.contains(p) {
+            return CursorPayload(slot: PointerTarget.mainSlot, x: Int((p.x - m.bounds.minX).rounded(.down)), y: Int((p.y - m.bounds.minY).rounded(.down)),
+                                 w: Int(m.bounds.width), h: Int(m.bounds.height), display: m.id)
         }
         for d in displays where d.bounds.contains(p) {
             let x = Int(((p.x - d.bounds.minX) * Double(d.width) / d.bounds.width).rounded(.down))
@@ -473,8 +483,31 @@ struct MonitorHomes {
 /// laptop and its monitors. If another display (a real monitor) already touches the main display's right edge, the row
 /// goes to its left instead: next to the main display's left edge, or, when a monitor sits there too, past the
 /// leftmost display in that band (so nothing overlaps).
+/// `saved`: where the user last put displays (SET_ORIGINS, remembered per main display). A saved spot is used while it
+/// is valid (ScreenRules: no overlap, touching the main display, a monitor or an Office display already placed) —
+/// placed in slot order, again and again until nothing more fits — and the rest go by the rule above, around them.
 enum DisplayArrangement {
-    static func origins(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)]) -> [Int: CGPoint] {
+    static func origins(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)], saved: [Int: CGPoint] = [:]) -> [Int: CGPoint] {
+        var placed: [Int: CGRect] = [:]
+        let candidates = ours.filter { saved[$0.slot] != nil }.sorted { $0.slot < $1.slot }
+        var grew = true
+        while grew {
+            grew = false
+            for d in candidates where placed[d.slot] == nil {
+                let r = CGRect(origin: saved[d.slot]!, size: d.size)
+                if ScreenRules.valid(r, among: [main] + others + Array(placed.values)) {
+                    placed[d.slot] = r
+                    grew = true
+                }
+            }
+        }
+        var out = automatic(main: main, others: others + placed.keys.sorted().map { placed[$0]! },
+                            ours: ours.filter { placed[$0.slot] == nil })
+        for (slot, r) in placed { out[slot] = r.origin }
+        return out
+    }
+
+    private static func automatic(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)]) -> [Int: CGPoint] {
         let sorted = ours.sorted { $0.slot < $1.slot }
         let totalWidth = sorted.reduce(0) { $0 + $1.size.width }
         let height = sorted.map(\.size.height).max() ?? 0

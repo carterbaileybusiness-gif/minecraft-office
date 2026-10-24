@@ -20,7 +20,7 @@ alias dev='python3 -I helper-mac/Tools/devclient.py'
      Settings** and turn **OfficeHelper** on in Privacy & Security › Screen & System Audio Recording.
 2. `helper; dev create 1 1920 1080 capture 1 display 1 1280 5 zoomin 1 0 0 1440 900 sleep 1 zoomout`
    - Expected: macOS asks for Accessibility for OfficeHelper. Turn it on in Privacy & Security › Accessibility.
-3. `helper; dev sleep 1` → first line `<- WELCOME {"accessibility": true, "screenRecording": true, "version": 1}`.
+3. `helper; dev sleep 1` → first line `<- WELCOME {"accessibility": true, "features": ["screens"], "screenRecording": true, "version": 1}`.
 4. Rebuild (`bash scripts/heavy.sh bash helper-mac/build.sh`) and repeat step 3.
    - Expected: still both `true` (the persistent signature keeps the grants).
 
@@ -118,6 +118,49 @@ move on join or leave any more. By hand with devclient:
 → the app list and icons arrive; TextEdit (open a document first) moves onto Office Display 1 filling it, gets clicked
 (caret where you clicked) and the keyboard; press Esc → `TYPING_EXIT esc` and the terminal comes back to the front.
 `open 1 https://www.youtube.com` opens YouTube in the default browser on that display.
+
+## 6d. Display map: list and move Office displays, remembered arrangement ("screens")
+
+devclient's HELLO lists `"screens"`, so the helper also pushes DISPLAYS after every display change (300 ms debounce).
+1. `helper; dev create 1 1920 1080 displays`
+   - Expected: WELCOME lists `"features": ["screens"]`; DISPLAYS lists the built-in display (`"main": true`,
+     `"name": "MacBook"`, slot 0, 0,0 1440×900), any monitor (slot 0, short name such as "LG"), and Office Display 1
+     (slot 1, no `name`) right of the main display (or left when a monitor is there). Ids are UUID strings.
+2. `helper; dev create 1 1920 1080 origins 1 0 -1080 sleep 10`
+   - Expected: DISPLAYS shows slot 1 at 0,-1080 and System Settings › Displays shows it above the built-in display;
+     moving the cursor off the top of the built-in display carries it onto Office Display 1.
+   - `~/Library/Application Support/Minecraft Office/display-arrangement.json` reads
+     `{"layouts":{"<main uuid>":{"1":{"x":0,"y":-1080}}},"schema":1}`.
+3. Quit (the client ends) and relaunch: `helper; dev create 1 1920 1080 displays` → slot 1 comes back at 0,-1080.
+4. Refusals (nothing moves, ERROR bad_request then DISPLAYS unchanged): `origins 1 1440 900` ("must touch a
+   screen", corner only) and `origins 1 1000 0` ("overlaps").
+5. Unplug-style check: edit the saved spot to sit next to where a monitor is not (e.g. `{"x":5000,"y":0}`), relaunch,
+   create 1 → automatic placement (right of the main display, or left when a monitor is on the right).
+6. Finally `helper; dev create 1 1920 1080 origins 1 1440 0` to put it back next to the main display's right edge.
+
+## 6e. Mirror a chosen monitor, used in world (needs an external monitor)
+
+1. `helper; dev displays` → note the external monitor's `id` (UUID), e.g. `9B2F…`.
+2. `helper; dev capturemon 3 <uuid> sleep 3` → FRAMEs of **that** monitor (its aspect), never the built-in display.
+   (devclient's own process has no windows, so nothing is left out here.) With the mod and Minecraft's window on that
+   monitor: the Mirror shows the monitor without the Minecraft window.
+3. `helper; dev capturemon 3 <uuid> workmon <uuid> 960 540 sleep 8`
+   - Expected: the real cursor jumps to the middle of that monitor and clicks there; while you move it on that
+     monitor the system cursor stays hidden and CURSOR lines read `{"display": "<uuid>", "h": …, "slot": 0, …}` in
+     that monitor's points; on the built-in display slot 0 without `display`; elsewhere slot -1 and the cursor shows.
+4. Unplug the monitor during `capturemon 3 <uuid> sleep 20`: within about 1 s a new FRAME generation of the main
+   display follows (no ENDED); plug it back → frames of the monitor again. An unknown UUID mirrors the main display
+   (`helper.log`: "is not connected; mirroring the main display").
+
+## 6f. Identify overlays
+
+`helper; dev create 1 1920 1080 identify sleep 4`, with TextEdit (or Minecraft) in front.
+- Expected: for 3 s a dark rounded square sits in the middle of every screen — **A** on the built-in display, **B**, C…
+  on monitors, **1** on Office Display 1 (see it in System Settings › Displays' arrangement or through a capture:
+  `capture 1 display 1 1280 5` shows the square) — its side 28 % of the screen's shorter side, a big white label.
+- Clicks on a square go through to the window under it; the app in front keeps the keyboard (type during the 3 s); the
+  helper never shows in the Dock or ⌘-Tab. A second `identify` within 3 s replaces the squares (no doubles).
+- On a full-screen app's Space the squares show too.
 
 ## 7. With the mod (after Task 9)
 

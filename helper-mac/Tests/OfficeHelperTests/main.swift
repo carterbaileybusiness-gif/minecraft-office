@@ -38,6 +38,7 @@ DisplaySpecTests.runAll()
 HotkeyLogicTests.runAll()
 PointerTests.runAll()
 AppsTests.runAll()
+ArrangementTests.runAll()
 
 print("\(checks) checks, \(failures) failures")
 exit(failures == 0 ? 0 : 1)
