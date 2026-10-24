@@ -54,6 +54,8 @@ public final class EarthStones {
 		public float roll;
 		/** The cell to take light from (with the one above it), or null for the rock's own cell. */
 		public @Nullable BlockPos light;
+		/** The least block light (0..15) the rock is drawn with: earth magic glowing faintly through the night. */
+		public int glow;
 
 		public Pose at(Vec3 v) {
 			x = v.x;
@@ -117,6 +119,11 @@ public final class EarthStones {
 		return LIVE.size();
 	}
 
+	/** How many more rocks {@code casterId} may add right now (a visual made of many rocks checks first, all or nothing). */
+	public static int room(int casterId) {
+		return LEDGER.room(casterId);
+	}
+
 	/** Rocks live for {@code casterId}. */
 	public static int live(int casterId) {
 		return LEDGER.of(casterId);
@@ -154,6 +161,7 @@ public final class EarthStones {
 			p.scale = 1F;
 			p.yaw = p.pitch = p.roll = 0F;
 			p.light = null;
+			p.glow = 0;
 			if (!s.motion.pose(Math.min(s.age + partial, s.life), p) || p.scale <= 0.01F) continue;
 			double dx = p.x - cam.x;
 			double dy = p.y - cam.y;
@@ -167,6 +175,7 @@ public final class EarthStones {
 			// Lit like the air around it: a rock still inside the ground would otherwise read the solid block's 0 and go black.
 			BlockPos cell = p.light != null ? p.light : BlockPos.containing(p.x, p.y, p.z);
 			int light = LightCoordsUtil.max(LightCoordsUtil.getLightCoords(level, cell), LightCoordsUtil.getLightCoords(level, cell.above()));
+			if (p.glow > 0) light = LightCoordsUtil.max(light, LightCoordsUtil.pack(Math.min(15, p.glow), 0));
 			stack.pushPose();
 			stack.translate(dx, dy, dz);
 			if (p.yaw != 0) stack.rotateDegrees(Axis.YP, p.yaw);

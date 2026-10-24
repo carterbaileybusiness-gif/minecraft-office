@@ -48,6 +48,9 @@ public final class StoneBulletFx implements SpellFx {
 	private static final float OWN_JOIN = 1F;
 	/** Longest life of an impact chip. */
 	private static final int CHIP_LIFE = 24;
+	/** Block crumbs for the whole throw, and the share of them kept for the smash (paid at the cast, so the trail can't spend them). */
+	private static final int CRUMB_CAP = 110;
+	private static final int IMPACT_CRUMBS = 10;
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
@@ -70,11 +73,13 @@ public final class StoneBulletFx implements SpellFx {
 		// In the caster's own first-person view the rock rides low and to the right, well clear of the crosshair, until it is away.
 		Vec3 hand = own ? right.scale(0.9).add(0, -0.7, 0) : right.scale(0.38).add(0, -0.32, 0).add(dir.scale(0.55));
 		Vec3 muzzle = origin.add(dir.scale(1.6)).add(0, -0.15, 0);
-		EarthFx.Crumbs crumbs = new EarthFx.Crumbs(kit, 90);
+		EarthFx.Crumbs crumbs = new EarthFx.Crumbs(kit, CRUMB_CAP);
 		kit.circle(muzzle, dir.reverse(), EarthFx.ARGB, 0.42F + 0.3F * c, 2 + Math.round(2 * c), 9 + Math.round(4 * c));
 		// The rock tears loose where it is drawn: at the hand (low and right in the caster's own view, off the crosshair).
 		Vec3 tear = own ? StoneBullet.path(spec, 1).add(hand) : muzzle;
 		crumbs.burst(tear, EarthFx.COBBLE, 8 + Math.round(6 * c), 0.12);
+		// The smash's crumbs, paid now: a long trail can never leave the impact without them.
+		int kept = crumbs.reserve(struckCrumbs(c) + IMPACT_CRUMBS);
 		kit.burst(tear, EarthFx.DUST, 5, 0.06);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.TRIDENT_THROW.value(), SoundSource.PLAYERS, 0.55F, 0.55F + 0.1F * (1 - c), false);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.STONE_BREAK, SoundSource.PLAYERS, 0.6F, 0.75F, false);
@@ -118,8 +123,8 @@ public final class StoneBulletFx implements SpellFx {
 			if (entity || wall || t + 1 >= flight) {
 				done[0] = true;
 				Vec3 heading = StoneBullet.heading(spec, end[0]);
-				if (!entity && !wall && spent) crumble(kit, leash, crumbs, level, head, heading);
-				else impact(kit, leash, crumbs, level, head, heading, c, entity);
+				if (!entity && !wall && spent) crumble(kit, leash, kept, level, head, heading);
+				else impact(kit, leash, kept, level, head, heading, c, entity);
 			}
 		});
 
@@ -167,14 +172,20 @@ public final class StoneBulletFx implements SpellFx {
 	}
 
 	/** The smash: the struck block's crumbs, dust (pillars of it on the ground), a ring of light, bouncing chips, a heavy crack. */
-	private static void impact(FxKit kit, RockLedger.Leash leash, EarthFx.Crumbs crumbs, ClientLevel level, Vec3 at, Vec3 heading, float c,
+	/** Crumbs of the struck block at the smash. */
+	private static int struckCrumbs(float c) {
+		return 22 + Math.round(14 * c);
+	}
+
+	private static void impact(FxKit kit, RockLedger.Leash leash, int kept, ClientLevel level, Vec3 at, Vec3 heading, float c,
 			boolean entity) {
 		Vec3 back = at.subtract(heading.scale(0.2));
 		BlockPos struck = BlockPos.containing(at.add(heading.scale(0.15)));
 		BlockState s = level.getBlockState(struck);
 		BlockState debris = entity || s.isAir() ? EarthFx.COBBLE : s;
-		crumbs.burst(back, debris, 22 + Math.round(14 * c), 0.24 + 0.08 * c);
-		crumbs.burst(back, EarthFx.COBBLE, 10, 0.18);
+		int ofBlock = Math.min(kept, struckCrumbs(c));
+		EarthFx.spray(level, EarthFx.crumbs(debris), back, ofBlock, 0.06, 0.24 + 0.08 * c, false);
+		EarthFx.spray(level, EarthFx.crumbs(EarthFx.COBBLE), back, Math.min(kept - ofBlock, IMPACT_CRUMBS), 0.06, 0.18, false);
 		kit.burst(back, EarthFx.DUST, 10 + Math.round(6 * c), 0.09);
 		kit.burst(back, ParticleTypes.POOF, 3 + Math.round(3 * c), 0.05);
 		boolean ground = !entity && heading.y < -0.25;
@@ -195,8 +206,8 @@ public final class StoneBulletFx implements SpellFx {
 	}
 
 	/** Out of range: the rock breaks apart and its pieces rain down. */
-	private static void crumble(FxKit kit, RockLedger.Leash leash, EarthFx.Crumbs crumbs, ClientLevel level, Vec3 at, Vec3 heading) {
-		crumbs.burst(at, EarthFx.COBBLE, 14, 0.12);
+	private static void crumble(FxKit kit, RockLedger.Leash leash, int kept, ClientLevel level, Vec3 at, Vec3 heading) {
+		EarthFx.spray(level, EarthFx.crumbs(EarthFx.COBBLE), at, Math.min(kept, 14), 0.06, 0.12, false);
 		kit.burst(at, EarthFx.DUST, 6, 0.05);
 		RandomSource r = kit.random();
 		for (int i = 0; i < 4; i++) {
