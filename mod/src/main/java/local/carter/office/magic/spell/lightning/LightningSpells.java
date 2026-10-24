@@ -9,5 +9,8 @@ public final class LightningSpells {
 	public static void register() {
 		SpellRegistry.register(new Spark());
 		SpellRegistry.register(new ChainLightning());
+		SpellRegistry.register(new Blink());
+		SpellRegistry.register(new ThunderSpear());
+		SpellRegistry.register(new ChidoriStrike());
 	}
 }

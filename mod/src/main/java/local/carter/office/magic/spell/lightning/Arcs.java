@@ -9,6 +9,7 @@ import local.carter.office.magic.spell.Targets;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -56,6 +57,15 @@ final class Arcs {
 	static boolean clear(CastContext ctx, Vec3 a, Vec3 b) {
 		return ctx.level().clip(new ClipContext(a, b, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, ctx.caster())).getType()
 				== HitResult.Type.MISS;
+	}
+
+	/**
+	 * Whether a blast at {@code from} reaches the body {@code box}: nothing solid between {@code from} and the box's centre, its feet
+	 * or its top (any one is enough).
+	 */
+	static boolean reaches(CastContext ctx, Vec3 from, AABB box) {
+		Vec3 c = box.getCenter();
+		return clear(ctx, from, c) || clear(ctx, from, new Vec3(c.x, box.minY + 0.1, c.z)) || clear(ctx, from, new Vec3(c.x, box.maxY - 0.1, c.z));
 	}
 
 	static int[] ids(List<LivingEntity> struck) {
