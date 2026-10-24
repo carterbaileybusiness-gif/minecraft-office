@@ -24,6 +24,7 @@ import net.minecraft.world.entity.ai.goal.WrappedGoal;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enderman;
 import net.minecraft.world.entity.monster.Silverfish;
+import net.minecraft.world.entity.projectile.hurtingprojectile.windcharge.WindCharge;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.Enchantment;
@@ -34,6 +35,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.piston.PistonBaseBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.Fluids;
+import net.minecraft.world.phys.Vec3;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 
@@ -192,6 +194,32 @@ public class TempBlockBreakGameTests {
 		for (BlockPos pos : blastCells(h)) h.assertValueEqual(h.getLevel().getBlockState(pos), AIR, "blown at " + pos);
 		h.assertTrue(count(h, Items.COBBLESTONE) > 0, "real cobblestone drops (TNT: no drop decay)");
 		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 40)
+	public void windBurstLeavesTempBlocksIntact(GameTestHelper h) {
+		TempBlockData t = temp(h);
+		ServerLevel level = h.getLevel();
+		BlockPos glass = abs(h, 18, 6, 16);
+		BlockPos ice = abs(h, 16, 6, 20);
+		placeTemp(h, t, glass, GLASS);
+		placeTemp(h, t, ice, Blocks.PACKED_ICE.defaultBlockState());
+		// A real wind charge flying into the glass, and a wind burst (TRIGGER_BLOCK) right next to the ice.
+		WindCharge charge = new WindCharge(level, glass.getX() - 2.5, glass.getY() + 0.5, glass.getZ() + 0.5, new Vec3(0.6, 0, 0));
+		charge.shoot(1, 0, 0, 1f, 0f);
+		level.addFreshEntity(charge);
+		level.explode(null, ice.getX() + 0.5, ice.getY() + 0.5, ice.getZ() - 0.5, 1.2f, Level.ExplosionInteraction.TRIGGER);
+		h.assertValueEqual(level.getBlockState(ice), Blocks.PACKED_ICE.defaultBlockState(), "temporary packed ice survives the burst");
+		h.assertTrue(t.isTemp(level, ice), "packed ice still a live entry");
+		h.runAfterDelay(20, () -> {
+			h.assertTrue(charge.isRemoved(), "the wind charge burst");
+			h.assertValueEqual(level.getBlockState(glass), GLASS, "temporary glass survives the wind charge");
+			h.assertTrue(t.isTemp(level, glass), "glass still a live entry");
+			assertNoDrops(h, "wind burst");
+			t.breakTemp(level, glass, null, false);
+			t.breakTemp(level, ice, null, false);
+			h.succeed();
+		});
 	}
 
 	// ---- Level.destroyBlock (wither, mods, spells) ----

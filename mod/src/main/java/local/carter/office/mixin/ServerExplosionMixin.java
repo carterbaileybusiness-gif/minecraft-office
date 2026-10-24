@@ -15,7 +15,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ServerExplosion;
 
-/** Explosions never drop a temporary block: it leaves the blast list and its original comes back ({@link TempBlockGuard}). */
+/**
+ * Explosions never drop a temporary block: it leaves the blast list and its original comes back ({@link TempBlockGuard}).
+ * Wind bursts (wind charges, the breeze, the mace: {@code TRIGGER_BLOCK}) only trigger blocks, so they leave temporary blocks alone.
+ */
 @Mixin(ServerExplosion.class)
 public abstract class ServerExplosionMixin {
 	@Shadow
@@ -24,6 +27,6 @@ public abstract class ServerExplosionMixin {
 
 	@Inject(method = "interactWithBlocks", at = @At("HEAD"))
 	private void office$spareTempBlocks(final List<BlockPos> targetBlocks, final CallbackInfo ci) {
-		TempBlockGuard.spareFromExplosion(this.level, targetBlocks);
+		TempBlockGuard.spareFromExplosion(this.level, ((ServerExplosion) (Object) this).getBlockInteraction(), targetBlocks);
 	}
 }

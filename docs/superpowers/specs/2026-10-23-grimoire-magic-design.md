@@ -62,7 +62,7 @@ Anti-goals
   **permanent** terrain change (craters, walls, flood water, displaced blocks with physics) **(Carter)** — but **never inside
   another player's land claim** (Open Parties and Claims) and never in spawn-protected areas **(my call)**.
 - **Temporary blocks are never a source of items (Carter):** a temporary block (Earth Wall, ice, glass…) broken by any means —
-  mining in survival (any tool, silk touch included), explosions, `Level.destroyBlock` (the wither, mods) — drops no items and
+  mining in survival (any tool, silk touch included), explosions (wind bursts break nothing, as in vanilla), `Level.destroyBlock` (the wither, mods) — drops no items and
   no XP, and the **original block comes back at once** (the entry is done, so the timed restore never fights the player).
   Pistons can't move one (immovable, like obsidian), endermen can't pick one up, silverfish can't infest one, and fluids can't
   wash one out (only solid, unwashable blocks may be temporary). Code: `magic/terrain/TempBlockGuard` and the server mixins.

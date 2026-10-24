@@ -13,6 +13,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.Explosion;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 
@@ -26,7 +27,8 @@ import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
  * default one so claim and protection mods decide first. The break is cancelled and the original block comes back at once:
  * no items, no XP, no tool wear.</li>
  * <li><b>Explosions</b> (creepers, TNT, beds, spells): {@code ServerExplosionMixin} takes temporary blocks out of the blast before
- * any block is hit and restores their originals: no drops, and no fire on those cells.</li>
+ * any block is hit and restores their originals: no drops, and no fire on those cells. Wind bursts ({@code TRIGGER_BLOCK}:
+ * wind charges, the breeze, the mace) break nothing in vanilla and leave temporary blocks intact.</li>
  * <li><b>{@code Level.destroyBlock}</b> (the wither, mods, spells that shatter a block): {@code LevelMixin}, same result.</li>
  * <li><b>Pistons</b>: {@code PistonBaseBlockMixin} makes a temporary block immovable, like obsidian, so it never becomes a moved
  * real block. Clients don't know which blocks are temporary and may animate one moving, so its cell and the one it would move
@@ -66,8 +68,12 @@ public final class TempBlockGuard {
 		return t != null && t.breakTemp((ServerLevel) level, pos, breaker, effects);
 	}
 
-	/** An explosion is about to hit {@code targets}: temporary blocks leave the list and get their original back. */
-	public static void spareFromExplosion(ServerLevel level, List<BlockPos> targets) {
+	/**
+	 * An explosion is about to hit {@code targets}: temporary blocks leave the list and get their original back. A
+	 * {@code TRIGGER_BLOCK} burst (wind charge, breeze, mace) breaks nothing in vanilla, so it leaves them as they are.
+	 */
+	public static void spareFromExplosion(ServerLevel level, Explosion.BlockInteraction interaction, List<BlockPos> targets) {
+		if (interaction == Explosion.BlockInteraction.TRIGGER_BLOCK) return;
 		TempBlockData t = data(level);
 		if (t == null) return;
 		for (Iterator<BlockPos> it = targets.iterator(); it.hasNext();) {
