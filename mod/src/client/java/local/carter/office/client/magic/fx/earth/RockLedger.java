@@ -15,7 +15,7 @@ import java.util.Map;
  */
 public final class RockLedger {
 	public static final int MAX_LIVE = 256;
-	public static final int MAX_PER_CASTER = 96;
+	public static final int MAX_PER_CASTER = 160;
 
 	private final Map<Integer, Integer> perCaster = new HashMap<>();
 	private int live;
