@@ -1,5 +1,7 @@
 package local.carter.office.magic.spell.fire;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
@@ -25,10 +27,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -38,7 +42,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * Meteor (fire, slot 4, ultimate, hand signs, lingering): a burning rock called down from the sky.
  *
  * <p>The target is where the look ray first meets a block within {@link MeteorGeometry#RANGE}, moved down to the ground under it;
- * pointing at nothing, the ground {@link MeteorGeometry#MISS_AHEAD} ahead. The rock falls from {@link MeteorGeometry#HEIGHT}
+ * pointing at nothing, the top of the ground (the {@code MOTION_BLOCKING} heightmap) {@link MeteorGeometry#MISS_AHEAD} ahead. The rock falls from {@link MeteorGeometry#HEIGHT}
  * above it (and {@link MeteorGeometry#SLANT} beyond it; less under a roof, so it never starts inside one) in a
  * straight line over {@link MeteorGeometry#FALL_TICKS} ticks ({@link MeteorGeometry}). On impact:
  * <ul>
@@ -100,7 +104,9 @@ public final class Meteor implements Spell {
 		Vec3 aim;
 		if (hit.getType() == HitResult.Type.MISS) {
 			Vec3 dir = FlameDash.direction(look, ctx.caster().getYRot());
-			aim = ctx.caster().position().add(dir.scale(MeteorGeometry.MISS_AHEAD)).add(0, 4, 0);
+			// The top of the ground there (a hill ahead is stood on, never dug into).
+			Vec3 ahead = ctx.caster().position().add(dir.scale(MeteorGeometry.MISS_AHEAD));
+			return new Vec3(ahead.x, level.getHeight(Heightmap.Types.MOTION_BLOCKING, Mth.floor(ahead.x), Mth.floor(ahead.z)), ahead.z);
 		} else {
 			// Just off the face it struck (a wall's face → the ground in front of the wall), then down to the ground.
 			aim = hit.getLocation().subtract(look.scale(0.3)).add(0, 0.5, 0);
@@ -162,16 +168,22 @@ public final class Meteor implements Spell {
 					if (thrown.size() >= MeteorGeometry.DEBRIS) break;
 					if (b.launch(origin.offset(c.x(), c.y(), c.z()), MeteorGeometry.debrisVelocity(c, r))) thrown.add(c);
 				}
+				int used = thrown.size();
 				for (Cell c : bowl) {
-					if (!thrown.contains(c)) b.remove(origin.offset(c.x(), c.y(), c.z()));
+					if (!thrown.contains(c) && b.remove(origin.offset(c.x(), c.y(), c.z()))) used++;
 				}
-				// The scorched floor.
-				for (Cell f : MeteorGeometry.floor(bowl, g.radius())) {
+				// The scorched floor, in what is left of the cast's budget. Shuffled (seeded) so that, if the budget runs out, the
+				// floor thins out evenly instead of losing its whole far side.
+				List<Cell> floor = new ArrayList<>(MeteorGeometry.floor(bowl, g.radius()));
+				Collections.shuffle(floor, r);
+				int room = EditTier.ULTIMATE.budget() - used;
+				for (Cell f : floor) {
+					if (room <= 0) break;
 					int kind = MeteorGeometry.floorKind(r);
 					BlockPos pos = origin.offset(f.x(), f.y(), f.z());
 					BlockState s = level.getBlockState(pos);
 					if (kind == 0 || s.isAir() || !s.getFluidState().isEmpty()) continue;
-					b.set(pos, (kind == 1 ? Blocks.MAGMA_BLOCK : Blocks.BLACKSTONE).defaultBlockState());
+					if (b.set(pos, (kind == 1 ? Blocks.MAGMA_BLOCK : Blocks.BLACKSTONE).defaultBlockState())) room--;
 				}
 			}
 		}

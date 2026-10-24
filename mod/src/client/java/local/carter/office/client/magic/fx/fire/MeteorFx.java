@@ -27,8 +27,8 @@ import net.minecraft.world.phys.Vec3;
  * Meteor's visuals, built from {@link MeteorGeometry} exactly as the server drops it. At the cast two fire circles open in the
  * sky where the rock will come from, facing down its fall line, and a warning seal opens on the ground the size of the crater.
  * A rough burning rock of block models ({@link MeteorRock}) then comes out of the sky circle and falls on the spot, wrapped in a
- * glow and shedding flame sheets, flames, smoke and lava, the ground rumbling more as it nears. On impact: a white flash, a
- * fireball of flame and lava, a mushroom of smoke, a shockwave of dust rolling out over the crater's rim, chunks of the ground,
+ * glow and shedding flame sheets, flames, smoke and lava, the ground rumbling more as it nears. On impact: a white flash, a pillar of
+ * fire shooting straight up, a fireball dome of flame and lava, a mushroom of smoke, a shockwave of dust rolling out over the crater's rim, chunks of the ground,
  * a deep boom, shake 1.0 for everyone near (still 0.8 at 32 blocks) and a 3-tick hit-stop; then the crater smoulders. The
  * flying debris and the crater itself are the server's real blocks.
  *
@@ -48,8 +48,8 @@ public final class MeteorFx implements SpellFx {
 	/** Particles each phase may spend, together the ultimate's whole budget. */
 	static final int CAST = 60;
 	static final int FALL = 640;
-	static final int IMPACT = 620;
-	static final int SMOULDER = 180;
+	static final int IMPACT = 640;
+	static final int SMOULDER = 160;
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
@@ -147,6 +147,20 @@ public final class MeteorFx implements SpellFx {
 			FireBoltFx.glow(kit, level, core.add(radius * 0.4, 1.5, 0), Vec3.ZERO, FireBoltFx.HALO, Math.min(7F, radius * 0.7F), 16, GlowMote.Drift.COAST);
 			FireBoltFx.glow(kit, level, core.add(-radius * 0.4, 1.5, 0), Vec3.ZERO, FireBoltFx.HALO, Math.min(7F, radius * 0.7F), 16, GlowMote.Drift.COAST);
 			FireBoltFx.glow(kit, level, core.add(0, 3, 0), new Vec3(0, 0.12, 0), FireBoltFx.FIRE, Math.min(6F, radius * 0.6F), 18, GlowMote.Drift.RISE);
+		}
+		// The pillar: a column of fire and light shooting straight up out of the hit, so the impact reads at any distance.
+		int pillar = a.take(8);
+		for (int i = 0; i < pillar; i++) {
+			double h = 1 + i * radius * 0.28;
+			FireBoltFx.glow(kit, level, at.add(0, h, 0), new Vec3(0, 0.25, 0), i < 2 ? FireBoltFx.CORE : i < 5 ? FireBoltFx.HOT : FireBoltFx.FIRE,
+					Math.max(1.6F, 4.2F - 0.35F * i), 6 + i, GlowMote.Drift.RISE);
+		}
+		int jet = a.spend(kit, 14);
+		for (int i = 0; i < jet; i++) {
+			float size = 1.4F + 1.0F * r.nextFloat();
+			Vec3 p = at.add(FireBoltFx.jitter(r, 1.2), size + i * radius * 0.16, FireBoltFx.jitter(r, 1.2));
+			Minecraft.getInstance().particleEngine.add(new FireWallFx.Flame(level, p, fire, size, 8 + r.nextInt(8), r.nextBoolean(),
+					r.nextFloat() * Mth.TWO_PI, 0.6F + 0.15F * r.nextFloat(), 0F));
 		}
 		// The fireball: a dome of flame sheets bursting out of the ground over the whole crater, flames and lava thrown up and out.
 		int sheets = a.spend(kit, 60);

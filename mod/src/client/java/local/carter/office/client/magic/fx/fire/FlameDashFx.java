@@ -4,6 +4,7 @@ import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.fire.FireWallGeometry;
 import local.carter.office.magic.spell.fire.FlameDash;
 
 import net.minecraft.client.Minecraft;
@@ -69,7 +70,8 @@ public final class FlameDashFx implements SpellFx {
 			Vec3 step = now.subtract(last[0]);
 			double len = Math.sqrt(step.x * step.x + step.z * step.z);
 			// The burning ground: sheets every SPACING along the path, two staggered rows, while the dash burns.
-			if (t <= FlameDash.BURN_TICKS && len > 1.0E-3) {
+			// A teleport is no dash: nothing is laid across the jump (the server burns nothing there either).
+			if (t <= FlameDash.BURN_TICKS && len > 1.0E-3 && step.lengthSqr() <= FireWallGeometry.MAX_SWEEP * FireWallGeometry.MAX_SWEEP) {
 				Vec3 flat = new Vec3(step.x / len, 0, step.z / len);
 				// carry[0]: path walked since the last sheet; sheets[0]: sheets laid (their parity picks the row).
 				double s = SPACING - carry[0];

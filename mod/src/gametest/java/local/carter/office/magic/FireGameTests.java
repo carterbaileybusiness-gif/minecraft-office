@@ -5,6 +5,7 @@ import java.util.List;
 
 import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.cast.CastService.Result;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.FxEvent;
@@ -32,15 +33,19 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.projectile.FireworkRocketEntity;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.Fireworks;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SnowLayerBlock;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 
@@ -437,60 +442,82 @@ public class FireGameTests {
 		AutoCloseable listening = FireballBarrage.listenForTesting(i -> {
 			if (i.caster().equals(p.getUUID())) impacts.add(i);
 		});
-		h.assertValueEqual(cast(p, BARRAGE, 0f), Result.CAST, "result");
-		List<FxEvent> fx = rec.fx(p);
-		h.assertValueEqual(fx.size(), 1, "one fx");
-		FxEvent e = fx.get(0);
-		h.assertValueEqual(e.data()[0], 3f, "three fireballs at charge 0");
-		h.assertTrue(e.target().distanceTo(h.absoluteVec(FLOOR_12_AHEAD.add(0, 0.05, 0))) < 1, "fx target is the aim point, was "
-				+ h.relativeVec(e.target()));
-		List<Vec3> aims = BarrageGeometry.aims(e.target(), e.seed(), 3);
-		h.runAfterDelay(2 * BarrageGeometry.INTERVAL + 30, () -> {
-			try {
-				listening.close();
-			} catch (Exception ex) {
-				throw new RuntimeException(ex);
-			}
-			h.assertValueEqual(impacts.size(), 3, "impacts");
-			for (int i = 0; i < 3; i++) {
-				FireballBarrage.Impact im = impacts.get(i);
-				// At its aim, or a block down its path where an earlier crater already opened the floor.
-				h.assertTrue(im.at().distanceTo(aims.get(i)) < 2, "fireball " + i + " landed at its aim: " + h.relativeVec(im.at()) + " vs "
-						+ h.relativeVec(aims.get(i)));
-				h.assertTrue(im.crater() != null, "fireball " + i + " left a crater");
-				h.assertTrue(Vec3.atCenterOf(im.crater()).distanceTo(im.at()) <= 6, "crater " + i + " within 6 of its impact");
-				h.assertTrue(im.removed() > 0, "crater " + i + " removed blocks");
-				h.assertTrue(h.getLevel().getBlockState(im.crater()).isAir(), "crater " + i + " is open");
-			}
-			int open = 0;
-			for (int x = 0; x < MagicTestKit.SIZE_X; x++) {
-				for (int z = 0; z < MagicTestKit.SIZE_Z; z++) {
-					for (int y = 0; y <= MagicTestKit.FLOOR_TOP; y++) {
-						BlockPos c = new BlockPos(x, y, z);
-						if (!h.getBlockState(c).isAir()) continue;
-						open++;
-						h.assertTrue(h.absoluteVec(Vec3.atCenterOf(c)).distanceTo(e.target()) <= BarrageGeometry.SPREAD + 3.5,
-								"floor blasted only round the aim, not at " + c);
+		// The listener is removed however this test ends (a failed assertion here, or in the delayed check).
+		try {
+			h.assertValueEqual(cast(p, BARRAGE, 0f), Result.CAST, "result");
+			List<FxEvent> fx = rec.fx(p);
+			h.assertValueEqual(fx.size(), 1, "one fx");
+			FxEvent e = fx.get(0);
+			h.assertValueEqual(e.data()[0], 3f, "three fireballs at charge 0");
+			h.assertTrue(e.target().distanceTo(h.absoluteVec(FLOOR_12_AHEAD.add(0, 0.05, 0))) < 1, "fx target is the aim point, was "
+					+ h.relativeVec(e.target()));
+			List<Vec3> aims = BarrageGeometry.aims(e.target(), e.seed(), 3);
+			h.runAfterDelay(2 * BarrageGeometry.INTERVAL + 30, () -> {
+				try {
+					h.assertValueEqual(impacts.size(), 3, "impacts");
+					for (int i = 0; i < 3; i++) {
+						FireballBarrage.Impact im = impacts.get(i);
+						// At its aim, or a block down its path where an earlier crater already opened the floor.
+						// (Down an earlier crater a ball flies on along its steep path: a little further across, a block or two deeper.)
+						Vec3 off = im.at().subtract(aims.get(i));
+						h.assertTrue(Math.sqrt(off.x * off.x + off.z * off.z) < 2 && off.y <= 0.01 && off.y >= -3, "fireball " + i
+								+ " landed at its aim: " + h.relativeVec(im.at()) + " vs " + h.relativeVec(aims.get(i)));
+						h.assertTrue(im.crater() != null, "fireball " + i + " left a crater");
+						h.assertTrue(Vec3.atCenterOf(im.crater()).distanceTo(im.at()) <= 6, "crater " + i + " within 6 of its impact");
+						h.assertTrue(im.removed() > 0, "crater " + i + " removed blocks");
+						h.assertTrue(h.getLevel().getBlockState(im.crater()).isAir(), "crater " + i + " is open");
 					}
+					int open = 0;
+					for (int x = 0; x < MagicTestKit.SIZE_X; x++) {
+						for (int z = 0; z < MagicTestKit.SIZE_Z; z++) {
+							for (int y = 0; y <= MagicTestKit.FLOOR_TOP; y++) {
+								BlockPos c = new BlockPos(x, y, z);
+								if (!h.getBlockState(c).isAir()) continue;
+								open++;
+								h.assertTrue(h.absoluteVec(Vec3.atCenterOf(c)).distanceTo(e.target()) <= BarrageGeometry.SPREAD + 3.5,
+										"floor blasted only round the aim, not at " + c);
+							}
+						}
+					}
+					h.assertTrue(open >= 9, "three craters' worth of floor blasted: " + open);
+					h.assertTrue(MagicTestKit.count(h, Blocks.NETHERRACK) >= 1, "scorched netherrack");
+					h.assertValueEqual(MagicTestKit.count(h, Blocks.FIRE), 0, "fire blocks");
+					h.succeed();
+				} finally {
+					close(listening);
 				}
-			}
-			h.assertTrue(open >= 9, "three craters' worth of floor blasted: " + open);
-			h.assertTrue(MagicTestKit.count(h, Blocks.NETHERRACK) >= 1, "scorched netherrack");
-			h.assertValueEqual(MagicTestKit.count(h, Blocks.FIRE), 0, "fire blocks");
-			h.succeed();
-		});
+			});
+		} catch (RuntimeException ex) {
+			close(listening);
+			throw ex;
+		}
+	}
+
+	private static void close(AutoCloseable c) {
+		try {
+			c.close();
+		} catch (Exception ex) {
+			throw new RuntimeException(ex);
+		}
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 80)
 	public void barrageBlastHurtsInRangeOnly(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 5);
 		aimAt(h, p, FLOOR_12_AHEAD);
-		Zombie inside = MagicTestKit.movableDummy(h, BlockPos.containing(FLOOR_12_AHEAD).above());
+		// A tough zombie right at the aim (100 hp), so the per-volley cap shows: five blasts of up to 5 × P would take far more.
+		Zombie inside = MagicTestKit.dummy(h, BlockPos.containing(FLOOR_12_AHEAD).above());
+		inside.getAttribute(Attributes.MAX_HEALTH).setBaseValue(100);
+		inside.setHealth(100);
 		// Control of the radius: 7 away it is untouched.
 		Zombie far = MagicTestKit.dummy(h, BlockPos.containing(FLOOR_12_AHEAD).offset(7, 1, 0));
+		float power = ChargeMath.power(1f, 5);
 		h.assertValueEqual(cast(p, BARRAGE, 1f), Result.CAST, "result");
 		h.runAfterDelay(4 * BarrageGeometry.INTERVAL + 25, () -> {
-			h.assertTrue(!inside.isAlive() || inside.getHealth() < 20, "health " + inside.getHealth());
+			float lost = 100 - inside.getHealth();
+			// Blasts at most 12 × P in all; burning adds a little on top (a point a second).
+			h.assertTrue(lost > 5 * power, "the volley hurts it, lost " + lost);
+			h.assertTrue(lost <= FireballBarrage.MAX_DAMAGE * power + 3, "capped at 12 × P (" + FireballBarrage.MAX_DAMAGE * power + "), lost " + lost);
 			h.assertValueEqual(far.getHealth(), 20f, "far zombie");
 			h.assertFalse(far.isOnFire(), "far zombie not burning");
 			h.succeed();
@@ -499,7 +526,10 @@ public class FireGameTests {
 
 	/** Glass round the arena's edge, 4..20 high, so a meteor's debris lands in this test's arena and nowhere else. */
 	private static void fence(GameTestHelper h) {
-		int top = 20;
+		fence(h, 20);
+	}
+
+	private static void fence(GameTestHelper h, int top) {
 		int mx = MagicTestKit.SIZE_X - 1;
 		int mz = MagicTestKit.SIZE_Z - 1;
 		MagicTestKit.fill(h, new BlockPos(0, 4, 0), new BlockPos(mx, top, 0), Blocks.GLASS);
@@ -565,6 +595,127 @@ public class FireGameTests {
 			h.assertValueEqual(MagicTestKit.blockHash(h), before, "no block changed");
 			h.assertTrue(z.getHealth() < 20, "the zombie is still hurt, health " + z.getHealth());
 			h.assertTrue(rec.messageKeys(p).contains("magic.office.protected"), "told the land is protected: " + rec.messageKeys(p));
+			h.succeed();
+		});
+	}
+
+	// ---- Fix round 1 ----
+
+	/** Removes this test's barrier walls and roof (GameTest encases every arena), so a look ray can leave it into open sky. */
+	private static void openSky(GameTestHelper h) {
+		try {
+			java.lang.reflect.Field f = GameTestHelper.class.getDeclaredField("testInfo");
+			f.setAccessible(true);
+			((net.minecraft.gametest.framework.GameTestInfo) f.get(h)).getTestInstanceBlockEntity().removeBarriers();
+		} catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("GameTestHelper.testInfo not found", ex);
+		}
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
+	public void flameDashSkipsATeleport(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 3);
+		// Between the start and where a teleport drops them: never on their way.
+		Zombie skipped = MagicTestKit.dummy(h, MagicTestKit.STAND.offset(0, 0, 6));
+		// Positive control: on the path they dash on after landing, inside the burn window.
+		Zombie onPath = MagicTestKit.dummy(h, MagicTestKit.STAND.offset(0, 0, 14));
+		h.assertValueEqual(cast(p, DASH, 0f), Result.CAST, "result");
+		boolean[] moving = {false};
+		h.runAfterDelay(1, () -> {
+			MagicTestKit.teleportTo(p, MagicTestKit.STAND.offset(0, 0, 11)); // 11 blocks in one tick
+			p.setDeltaMovement(0, FlameDash.UP, FlameDash.BASE_SPEED);
+			moving[0] = true;
+		});
+		h.onEachTick(() -> {
+			if (moving[0]) clientStep(p);
+		});
+		h.runAfterDelay(10, () -> {
+			h.assertValueEqual(skipped.getHealth(), 20f, "the zombie the teleport jumped over");
+			h.assertFalse(skipped.isOnFire(), "the zombie the teleport jumped over is not burning");
+			h.assertTrue(onPath.isOnFire(), "the zombie on the dash after landing burns");
+			h.assertTrue(onPath.getHealth() <= 20 - 3, "health " + onPath.getHealth());
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 140)
+	public void meteorMissLandsOnTopOfAHill(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 7);
+		// Debris stays home: walls to the arena's top, and a roof over the far band (where the look ray is already above the arena).
+		fence(h, MagicTestKit.SIZE_Y - 1);
+		MagicTestKit.fill(h, new BlockPos(27, MagicTestKit.SIZE_Y - 1, 0), new BlockPos(31, MagicTestKit.SIZE_Y - 1, 31), Blocks.GLASS);
+		MagicTestKit.fill(h, new BlockPos(0, MagicTestKit.SIZE_Y - 1, 27), new BlockPos(31, MagicTestKit.SIZE_Y - 1, 31), Blocks.GLASS);
+		// A hill taller than the caster's head, 32 ahead along the diagonal.
+		MagicTestKit.fill(h, new BlockPos(17, 4, 17), new BlockPos(29, 14, 29), Blocks.STONE);
+		MagicTestKit.teleportTo(p, new BlockPos(1, 4, 1));
+		// GameTest arenas are encased in barriers (walls and a roof): take them away so the sky is open, as in the world.
+		openSky(h);
+		// Facing +X +Z and looking up: the ray leaves the arena through open sky and meets nothing.
+		p.setYRot(-45F);
+		p.setXRot(-30F);
+		p.yRotO = -45F;
+		p.xRotO = -30F;
+		p.setYHeadRot(-45F);
+		BlockPos top = new BlockPos(24, 15, 24);
+		Zombie z = MagicTestKit.dummy(h, top);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		long t0 = h.getTick();
+		h.assertValueEqual(MagicTestKit.castUltimate(p, METEOR), Result.CAST, "result");
+		FxEvent e = rec.fx(p).get(0);
+		Vec3 target = h.relativeVec(e.target());
+		h.assertTrue(Math.abs(target.y - 15) < 1e-6, "lands on the hill's top (y 15), not inside it: " + target);
+		Vec3 feet = h.relativeVec(p.position());
+		h.assertTrue(Math.abs(target.x - (feet.x + 32 * Math.sqrt(0.5))) < 0.05 && Math.abs(target.z - (feet.z + 32 * Math.sqrt(0.5))) < 0.05,
+				"32 ahead of " + feet + ": " + target);
+		// The rock starts in the open and its whole fall is clear.
+		MeteorGeometry g = MeteorGeometry.of(e.target(), e.dir(), e.data()[1], Math.round(e.data()[0]));
+		h.assertTrue(h.getLevel().getBlockState(BlockPos.containing(g.start())).isAir(), "the rock starts in the air at " + h.relativeVec(g.start()));
+		h.assertTrue(h.getLevel().clip(new ClipContext(g.start(), g.impact().add(0, 1, 0), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
+				CollisionContext.empty())).getType() == HitResult.Type.MISS, "nothing solid on the rock's way down");
+		h.runAtTickTime(t0 + 45, () -> h.assertFalse(z.isAlive(), "the zombie on the hilltop is dead by tick 45, health " + z.getHealth()));
+		h.runAtTickTime(t0 + 52, () -> {
+			h.assertTrue(h.getBlockState(top.below()).isAir(), "the crater opens the hill's top");
+			int removed = 0;
+			for (int x = 17; x <= 29; x++) {
+				for (int zz = 17; zz <= 29; zz++) {
+					for (int y = 4; y <= 14; y++) if (h.getBlockState(new BlockPos(x, y, zz)).isAir()) removed++;
+				}
+			}
+			h.assertTrue(removed >= 100, "hill blocks removed " + removed);
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 140)
+	public void meteorAtLevelTenCratersRadiusTen(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 10);
+		fence(h);
+		aimAt(h, p, FLOOR_12_AHEAD);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		long t0 = h.getTick();
+		h.assertValueEqual(MagicTestKit.castUltimate(p, METEOR), Result.CAST, "result");
+		FxEvent e = rec.fx(p).get(0);
+		h.assertValueEqual(e.data()[0], 10f, "radius at level 10");
+		BlockPos origin = BlockPos.containing(h.relativeVec(new Vec3(e.target().x, e.target().y - 0.5, e.target().z)));
+		h.runAtTickTime(t0 + 52, () -> {
+			int removed = 0;
+			double farthest = 0;
+			for (int x = 0; x < MagicTestKit.SIZE_X; x++) {
+				for (int zz = 0; zz < MagicTestKit.SIZE_Z; zz++) {
+					for (int y = 0; y <= MagicTestKit.FLOOR_TOP; y++) {
+						BlockPos c = new BlockPos(x, y, zz);
+						if (!h.getBlockState(c).isAir()) continue;
+						removed++;
+						double d = Math.sqrt(c.distSqr(origin));
+						farthest = Math.max(farthest, d);
+						h.assertTrue(d <= 10, "removed beyond 10 at level 10: " + c + " from " + origin);
+					}
+				}
+			}
+			h.assertTrue(farthest > 9, "the crater reaches out to 10, farthest " + farthest);
+			h.assertTrue(removed >= 400, "blocks removed " + removed);
+			h.assertTrue(MagicTestKit.count(h, Blocks.MAGMA_BLOCK) + MagicTestKit.count(h, Blocks.BLACKSTONE) > 0,
+					"a scorched floor, within what the budget leaves");
 			h.succeed();
 		});
 	}

@@ -106,7 +106,9 @@ public final class FlameDash implements Spell {
 			ServerPlayer p = ctx.caster();
 			if (p.isRemoved() || p.level() != level) return false;
 			Vec3 now = centre(p);
-			burn(level, last, now);
+			// A jump longer than FireWallGeometry.MAX_SWEEP in one tick is a teleport (pearl, chorus, Recall, a command), not the dash:
+			// nothing between is burnt. Standing still (dashed into a wall) still burns what is in reach of where they stand.
+			if (now.distanceToSqr(last) <= FireWallGeometry.MAX_SWEEP * FireWallGeometry.MAX_SWEEP) burn(level, last, now);
 			last = now;
 			return age < BURN_TICKS;
 		}
