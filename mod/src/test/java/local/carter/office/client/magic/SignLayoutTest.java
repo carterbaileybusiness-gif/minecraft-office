@@ -34,6 +34,16 @@ class SignLayoutTest {
 		assertTrue(l.nameY() >= l.panel().y() && l.titleY() > l.nameY(), at + ": name/title order");
 		assertTrue(l.titleY() + SignLayout.LINE * l.titleScale() <= arrows.get(0).y(), at + ": title above the arrows");
 		assertTrue(l.hintY() >= l.timer().bottom() && l.hintY() + SignLayout.LINE <= l.panel().bottom(), at + ": hint below the timer");
+		assertTrue(l.innerWidth() <= l.panel().w(), at + ": inner width inside the panel");
+	}
+
+	/** Every text line, as drawn, fits the panel's inner width. */
+	private static void assertTextFits(String at, Layout l, int titleWidth, int lineWidth) {
+		assertTrue(lineWidth * l.fit(lineWidth) <= l.innerWidth() + 1e-3, at + ": line " + lineWidth + " × " + l.fit(lineWidth)
+				+ " in " + l.innerWidth());
+		assertTrue(titleWidth * l.titleScale() <= l.innerWidth() + 1e-3, at + ": title " + titleWidth + " × " + l.titleScale()
+				+ " in " + l.innerWidth());
+		assertTrue(l.fit(lineWidth) > 0f && l.titleScale() > 0f, at + ": text still drawn");
 	}
 
 	private static boolean contains(Rect outer, Rect inner) {
@@ -54,7 +64,9 @@ class SignLayoutTest {
 		int[][] sizes = {{320, 240}, {427, 240}, {480, 270}, {640, 360}, {960, 540}, {1280, 720}, {1920, 1080}, {3840, 2160}, {300, 200}};
 		for (int[] wh : sizes) {
 			for (int length = 1; length <= 6; length++) {
-				assertFits(wh[0], wh[1], length, SignLayout.layout(wh[0], wh[1], length, 80, 190));
+				Layout l = SignLayout.layout(wh[0], wh[1], length, 80, 190);
+				assertFits(wh[0], wh[1], length, l);
+				assertTextFits(wh[0] + "x" + wh[1], l, 80, 190);
 			}
 		}
 	}
@@ -74,7 +86,25 @@ class SignLayoutTest {
 
 	@Test
 	void bigTitleOnlyWhenItFits() {
-		assertEquals(2, SignLayout.layout(1920, 1080, 6, 80, 190).titleScale());
-		assertEquals(1, SignLayout.layout(320, 240, 6, 80, 190).titleScale());
+		assertEquals(2f, SignLayout.layout(1920, 1080, 6, 80, 190).titleScale());
+		assertEquals(1f, SignLayout.layout(320, 240, 6, 80, 190).titleScale());
+		assertEquals(1f, SignLayout.layout(320, 240, 6, 80, 190).fit(190));
+	}
+
+	@Test
+	void longTranslationsShrinkInsideThePanel() {
+		// GUI scale 4 on a narrow window: a 1280 × 960 window is 320 × 240 GUI units, 1200 × 1000 is 300 × 250, and a tiny
+		// 852 × 960 window is 213 × 240; the hint and title are long translations (wider than the whole screen).
+		int[][] sizes = {{320, 240}, {300, 250}, {213, 240}};
+		for (int[] wh : sizes) {
+			for (int length : new int[] {4, 6}) {
+				Layout l = SignLayout.layout(wh[0], wh[1], length, 260, 420);
+				String at = wh[0] + "x" + wh[1] + " length " + length;
+				assertFits(wh[0], wh[1], length, l);
+				assertTextFits(at, l, 260, 420);
+				assertTrue(l.fit(420) < 1f, at + ": the long hint shrinks");
+				assertTrue(l.innerWidth() <= wh[0] - 2 * MARGIN, at + ": inner width inside the screen");
+			}
+		}
 	}
 }

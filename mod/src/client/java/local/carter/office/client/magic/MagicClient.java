@@ -39,6 +39,8 @@ public final class MagicClient {
 			if (ClientPlayNetworking.canSend(SignAnswer.TYPE)) ClientPlayNetworking.send(new SignAnswer(c.id(), new byte[0]));
 			return;
 		}
+		// A container the player opened meanwhile is closed properly (the server is told) before the prompt replaces it.
+		if (mc.player.containerMenu != mc.player.inventoryMenu) mc.player.closeContainer();
 		mc.gui.setScreen(new HandSignScreen(c));
 	}
 

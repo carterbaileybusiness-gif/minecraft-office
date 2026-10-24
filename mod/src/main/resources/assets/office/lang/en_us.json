@@ -97,6 +97,7 @@
   "magic.office.locked": "%s unlocks at grimoire level %d",
   "magic.office.no_levels": "%s needs %d XP levels",
   "magic.office.fizzle": "The signs broke — the spell fizzled",
+  "magic.office.fizzle_reason": "The spell fizzled — %s",
   "magic.office.level_up": "Grimoire level %d",
   "magic.office.unlocked": "%s unlocked",
   "magic.office.stronger": "Your magic grows stronger",

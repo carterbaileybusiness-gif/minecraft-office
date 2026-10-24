@@ -41,9 +41,17 @@ public final class SignLayout {
 	 * @param panel     the backdrop around everything
 	 * @param nameY     top of the spell-name line (centred on {@code panel.cx()})
 	 * @param titleY    top of the title line, drawn at {@code titleScale}
+	 * @param titleScale 2 when the arrows are big and it fits, else 1, or less than 1 when even that is wider than the panel
 	 * @param hintY     top of the key-hint line
+	 * @param innerWidth the panel's width minus its padding: no text line is drawn wider than this
 	 */
-	public record Layout(List<Rect> arrows, Rect timer, Rect panel, int nameY, int titleY, int titleScale, int hintY, int arrowSize) {}
+	public record Layout(List<Rect> arrows, Rect timer, Rect panel, int nameY, int titleY, float titleScale, int hintY, int arrowSize,
+			int innerWidth) {
+		/** Scale for a scale-1 text line {@code textWidth} wide: 1, or less so it stays inside the panel (long translations). */
+		public float fit(int textWidth) {
+			return textWidth <= innerWidth ? 1f : innerWidth / (float) textWidth;
+		}
+	}
 
 	private SignLayout() {}
 
@@ -53,8 +61,9 @@ public final class SignLayout {
 	}
 
 	/**
-	 * @param titleWidth the title's width at scale 1 (drawn at scale 2 when the arrows are big and it fits, else 1)
-	 * @param lineWidth  the widest other text line (name, hint), drawn at scale 1
+	 * @param titleWidth the title's width at scale 1 (drawn at scale 2 when the arrows are big and it fits, else 1, scaled
+	 *                   down further only if it is wider than the panel can be)
+	 * @param lineWidth  the widest other text line (name, hint), drawn at scale 1 or scaled down to fit ({@link Layout#fit})
 	 */
 	public static Layout layout(int w, int h, int length, int titleWidth, int lineWidth) {
 		int n = Math.max(1, length);
@@ -69,7 +78,7 @@ public final class SignLayout {
 			boolean fits = rowW + 2 * pad <= w - 2 * margin && contentH + 2 * pad <= h - 2 * margin;
 			if (fits || size <= MIN_ARROW) {
 				int textW = Math.max(titleWidth * titleScale, lineWidth);
-				return build(w, h, n, size, gap, pad, titleScale, rowW, contentH, textW, margin);
+				return build(w, h, n, size, gap, pad, titleScale, rowW, contentH, textW, titleWidth, margin);
 			}
 			size--;
 		}
@@ -98,9 +107,10 @@ public final class SignLayout {
 	}
 
 	private static Layout build(int w, int h, int n, int size, int gap, int pad, int titleScale, int rowW, int contentH,
-			int textWidth, int margin) {
+			int textWidth, int titleWidth, int margin) {
 		int innerW = Math.min(Math.max(rowW, textWidth), w - 2 * margin - 2 * pad);
 		innerW = Math.max(innerW, rowW);
+		float titleFit = titleScale == 2 || titleWidth <= innerW ? titleScale : innerW / (float) titleWidth;
 		int panelW = innerW + 2 * pad;
 		int panelH = contentH + 2 * pad;
 		int panelX = (w - panelW) / 2;
@@ -120,6 +130,6 @@ public final class SignLayout {
 		Rect timer = new Rect(rowX, y, rowW, timerH(size));
 		y += timer.h() + gap;
 		int hintY = y;
-		return new Layout(List.copyOf(arrows), timer, panel, nameY, titleY, titleScale, hintY, size);
+		return new Layout(List.copyOf(arrows), timer, panel, nameY, titleY, titleFit, hintY, size, innerW);
 	}
 }

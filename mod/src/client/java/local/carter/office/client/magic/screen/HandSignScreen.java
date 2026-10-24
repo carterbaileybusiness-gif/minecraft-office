@@ -2,6 +2,7 @@ package local.carter.office.client.magic.screen;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.jspecify.annotations.Nullable;
@@ -18,7 +19,9 @@ import local.carter.office.magic.net.MagicPayloads.SignChallenge;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellRegistry;
 
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
@@ -37,7 +40,9 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
  * The hand-sign prompt for an ultimate. Not a pause screen: the world keeps running, but a screen is open, so movement and
  * looking stop (vanilla releases every key mapping when a screen opens) and WASD only type arrows. The arrows pop in one by
  * one in a row; each right arrow lights up in the element colour with a chime; the timer bar shrinks and turns red near the
- * end. A complete sequence sends {@link SignAnswer}, flashes and closes. The first wrong arrow, Esc or the time limit sends
+ * end. The arrow keys type arrows, and so do the keys bound to walking (WASD unless rebound). The timer runs on the client
+ * level's game time, so it follows the server's tick rate (and stops while singleplayer is paused); the server's own limit
+ * plus grace stays the only authority. A complete sequence sends {@link SignAnswer}, flashes and closes. The first wrong arrow, Esc or the time limit sends
  * what was typed (the server fizzles it): a wrong arrow shakes the row red first. The prompt also closes when the player
  * dies or changes level; anything that closes it early still sends the partial answer, which the server fizzles or ignores.
  */
@@ -64,17 +69,34 @@ public final class HandSignScreen extends Screen {
 		super(Component.translatable("magic.office.signs"));
 		this.challenge = c;
 		this.openedAt = Util.getMillis();
+		Options o = Minecraft.getInstance().options;
+		Map<Integer, Dir> keys = HandSignInput.bindings(keyboardKey(o.keyUp), keyboardKey(o.keyDown), keyboardKey(o.keyLeft),
+				keyboardKey(o.keyRight));
 		List<Integer> held = new ArrayList<>();
-		for (int key : HandSignInput.KEYS) if (InputConstants.isKeyDown(key)) held.add(key);
-		this.input = new HandSignInput(HandSigns.sequence(c.seed(), c.length()), openedAt, c.limitTicks() * 50L, held);
+		for (int key : keys.keySet()) if (InputConstants.isKeyDown(key)) held.add(key);
+		this.input = new HandSignInput(HandSigns.sequence(c.seed(), c.length()), keys, gameTick(), c.limitTicks(), held);
 		Optional<Spell> spell = SpellRegistry.get(c.spell());
 		this.colour = colourOf(spell.orElse(null));
 		this.spellName = Component.translatable("spell." + c.spell().getNamespace() + "." + c.spell().getPath());
 	}
 
-	/** ↑/W, ↓/S, ←/A, →/D → {@link Dir}; anything else null. */
+	/** ↑/W, ↓/S, ←/A, →/D → {@link Dir} (default movement keys); anything else null. */
 	public static @Nullable Dir dirFor(int keyCode) {
 		return HandSignInput.dirFor(keyCode);
+	}
+
+	/** The keyboard key bound to {@code m}, or {@link HandSignInput#NO_KEY} (unbound or a mouse button). */
+	private static int keyboardKey(KeyMapping m) {
+		if (m.isUnbound()) return HandSignInput.NO_KEY;
+		InputConstants.Key k = InputConstants.getKey(m.saveString());
+		return k.getType() == InputConstants.Type.KEYBOARD ? k.getValue() : HandSignInput.NO_KEY;
+	}
+
+	/** Client level game time with the partial tick (follows the server's tick rate; frozen while the game is paused). */
+	private static double gameTick() {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.level == null) return 0;
+		return mc.level.getGameTime() + mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
 	}
 
 	private static int colourOf(@Nullable Spell spell) {
@@ -99,6 +121,15 @@ public final class HandSignScreen extends Screen {
 	@Override
 	public boolean isPauseScreen() {
 		return false;
+	}
+
+	/**
+	 * Stays open in a nether portal: 26.3 closes other screens there, and the close would send a partial answer (a charged
+	 * fizzle) before the server's free dimension-change discard. The level-change check in {@link #tick} closes it after.
+	 */
+	@Override
+	public boolean isAllowedInPortal() {
+		return true;
 	}
 
 	@Override
@@ -151,7 +182,7 @@ public final class HandSignScreen extends Screen {
 			return;
 		}
 		long now = Util.getMillis();
-		if (input.tick(now) == HandSignInput.State.TIMED_OUT && !sent) {
+		if (input.advance(gameTick(), now) == HandSignInput.State.TIMED_OUT && !sent) {
 			play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_BASS, 0.5f));
 			send();
 		}
@@ -198,6 +229,7 @@ public final class HandSignScreen extends Screen {
 	@Override
 	public void extractRenderState(final GuiGraphicsExtractor g, final int mouseX, final int mouseY, final float a) {
 		long now = Util.getMillis();
+		input.advance(gameTick(), now); // smooth bar between ticks; tick() sends a timeout
 		float k = visibility(now);
 		if (k <= 0.01f) return;
 		int titleW = font.width(title);
@@ -213,13 +245,9 @@ public final class HandSignScreen extends Screen {
 		SignLayout.Rect p = l.panel();
 		panel(g, p, k);
 
-		// Spell name (element colour) and the title.
-		g.centeredText(font, spellName, p.cx(), l.nameY(), alpha(colour, k));
-		g.pose().pushMatrix();
-		g.pose().translate(p.cx(), l.titleY());
-		g.pose().scale(l.titleScale(), l.titleScale());
-		g.centeredText(font, title, 0, 0, alpha(WHITE, k));
-		g.pose().popMatrix();
+		// Spell name (element colour) and the title; long translations shrink to stay inside the panel.
+		line(g, spellName, p.cx(), l.nameY(), l.fit(font.width(spellName)), alpha(colour, k));
+		line(g, title, p.cx(), l.titleY(), l.titleScale(), alpha(WHITE, k));
 
 		// The row shakes after a miss or a timeout.
 		float shake = 0;
@@ -231,7 +259,17 @@ public final class HandSignScreen extends Screen {
 		for (int i = 0; i < dirs.length; i++) arrow(g, l.arrows().get(i), i, dirs[i], now, shake, k);
 
 		timer(g, l.timer(), now, k);
-		g.centeredText(font, hint, p.cx(), l.hintY(), alpha(0xFFB8B8C8, k));
+		line(g, hint, p.cx(), l.hintY(), l.fit(font.width(hint)), alpha(0xFFB8B8C8, k));
+		g.pose().popMatrix();
+	}
+
+	/** A text line centred on {@code cx} at {@code scale}, vertically centred in its {@link SignLayout#LINE}-high slot when shrunk. */
+	private void line(GuiGraphicsExtractor g, Component text, int cx, int y, float scale, int argb) {
+		g.pose().pushMatrix();
+		float dy = scale < 1f ? SignLayout.LINE * (1f - scale) / 2f : 0f;
+		g.pose().translate(cx, y + dy);
+		g.pose().scale(scale, scale);
+		g.centeredText(font, text, 0, 0, argb);
 		g.pose().popMatrix();
 	}
 
@@ -372,7 +410,7 @@ public final class HandSignScreen extends Screen {
 	}
 
 	private void timer(GuiGraphicsExtractor g, SignLayout.Rect r, long now, float k) {
-		float left = input.remaining(now);
+		float left = input.remaining();
 		g.fill(r.x(), r.y(), r.right(), r.bottom(), alpha(0xA0000000, k));
 		int fillW = Math.round(r.w() * left);
 		if (fillW <= 0) return;

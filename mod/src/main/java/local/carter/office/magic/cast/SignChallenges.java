@@ -41,7 +41,9 @@ public final class SignChallenges {
 	/**
 	 * Opens a challenge for {@code spell} and sends it: a fresh id, a seed from the level's {@code RandomSource},
 	 * {@link HandSigns#length} of the player's grimoire level and {@link HandSigns#limitTicks} of that. {@code power} is kept for
-	 * the record only: an ultimate always casts at charge 1 after the answer-time re-check. Replaces (drops) any open one.
+	 * the record only: an ultimate always casts at charge 1 after the answer-time re-check. Called only from
+	 * {@link CastService#cast} after its checks, which refuse every cast (BUSY) while {@link #pending}, so a player never has
+	 * more than one open challenge.
 	 */
 	public static SignChallenge issue(ServerPlayer p, Spell spell, float power) {
 		int length = HandSigns.length(MagicAttachments.get(p).level());

@@ -15,6 +15,8 @@ import local.carter.office.magic.item.MagicItems;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
 
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -60,6 +62,15 @@ public class HandSignGameTests {
 		Dir[] d = right(c);
 		d[0] = d[0] == Dir.UP ? Dir.DOWN : Dir.UP;
 		return d;
+	}
+
+	/** Exactly one action-bar message: the fizzle with {@code reasonKey} folded in (the re-check sends nothing itself). */
+	private static void assertOneFizzleBecause(GameTestHelper h, MagicTestKit.Recorder rec, String reasonKey) {
+		h.assertValueEqual(rec.messageKeys(), List.of(CastService.SIGN_FIZZLE_REASON_KEY), "messages");
+		TranslatableContents t = (TranslatableContents) rec.messages().get(0).getContents();
+		Object reason = t.getArgs().length == 1 ? t.getArgs()[0] : null;
+		h.assertTrue(reason instanceof Component r && r.getContents() instanceof TranslatableContents rt && rt.getKey().equals(reasonKey),
+				"fizzle reason " + reasonKey + ", was " + reason);
 	}
 
 	private static long cooldown(GameTestHelper h, ServerPlayer p) {
@@ -222,7 +233,7 @@ public class HandSignGameTests {
 		h.assertValueEqual(p.experienceLevel, MagicTestKit.XP_LEVELS, "XP levels");
 		h.assertValueEqual(cooldown(h, p), 100L, "cooldown");
 		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
-		h.assertValueEqual(rec.messageKeys().getLast(), "magic.office.fizzle", "last message");
+		assertOneFizzleBecause(h, rec, "magic.office.no_mana");
 		h.succeed();
 	}
 
@@ -233,6 +244,7 @@ public class HandSignGameTests {
 		SignChallenge c = challenge(h, p, rec);
 		p.setExperienceLevels(1);
 		h.assertValueEqual(CastService.answer(p, c.id(), right(c)), Result.FIZZLED, "answer");
+		assertOneFizzleBecause(h, rec, "magic.office.no_levels");
 		h.assertValueEqual(p.experienceLevel, 1, "XP levels");
 		h.assertValueEqual(MagicAttachments.mana(p), MAX_MANA - 30, "mana");
 		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
