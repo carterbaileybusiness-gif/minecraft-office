@@ -104,6 +104,15 @@ class JavaDesktopSourceTest {
 	}
 
 	@Test
+	void pickScreenPrefersChosenMonitor() {
+		assertEquals(Long.valueOf(2), JavaDesktopSource.pickScreen(List.of(0L, 1L, 2L), 1, 2), "the chosen monitor");
+		assertEquals(Long.valueOf(1), JavaDesktopSource.pickScreen(List.of(0L, 1L), 1, 2), "chosen one unplugged: the primary");
+		assertEquals(Long.valueOf(1), JavaDesktopSource.pickScreen(List.of(0L, 1L), 1, -1), "none chosen: the primary");
+		assertEquals(Long.valueOf(0), JavaDesktopSource.pickScreen(List.of(0L), 5, 3), "neither: the first");
+		assertEquals(null, JavaDesktopSource.pickScreen(List.of(), 0, 0), "no screens");
+	}
+
+	@Test
 	void mirrorCapturesAtTenFpsEvenWhileWorking() {
 		Target t = new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9);
 		assertEquals(10, JavaDesktopSource.fpsFor(t, 30, null));

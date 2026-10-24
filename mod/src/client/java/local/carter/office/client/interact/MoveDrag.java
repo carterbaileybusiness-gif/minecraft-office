@@ -101,9 +101,14 @@ public final class MoveDrag {
 		Vec3d center = grab.sub(right.scale(gx)).sub(up.scale(gy)).sub(normal.scale(gz));
 		Vec3d off = center.sub(emitterCenter);
 		double max = HologramActions.MAX_OFFSET;
-		current = new HologramSpec(start.owner(), start.shape(), start.mode(), start.privacy(), start.displaySlot(), start.windowKey(),
-				start.width(), HologramPlacement.clamp(off.x(), -max, max), HologramPlacement.clamp(off.y(), -max, max),
+		current = moved(start, HologramPlacement.clamp(off.x(), -max, max), HologramPlacement.clamp(off.y(), -max, max),
 				HologramPlacement.clamp(off.z(), -max, max), yaw);
+	}
+
+	/** {@code start} at a new place and turn; everything else (size, mode, the Mirror's monitor) stays. */
+	public static HologramSpec moved(final HologramSpec start, final double offX, final double offY, final double offZ, final float yaw) {
+		return new HologramSpec(start.owner(), start.shape(), start.mode(), start.privacy(), start.displaySlot(), start.windowKey(),
+				start.width(), offX, offY, offZ, yaw, start.mirrorDisplay());
 	}
 
 	public HologramSpec preview() {

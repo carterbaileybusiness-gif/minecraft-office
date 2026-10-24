@@ -16,6 +16,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Pure codec for the Mac helper protocol (version 1). Mirrors {@code helper-mac/Sources/OfficeHelper/Protocol.swift}
@@ -64,6 +65,12 @@ public final class HelperProtocol {
     public static final int WORK_BEGIN = 22;
     /** A live capture's new frame rate (no stream rebuild). */
     public static final int RATE = 23;
+    /** The display map ("screens" feature only): every screen, please (DISPLAYS answers). */
+    public static final int LIST_DISPLAYS = 24;
+    /** Move Office displays to these origins, all in one display configuration (DISPLAYS answers). */
+    public static final int SET_ORIGINS = 25;
+    /** Show a big label on these screens for 3 s. */
+    public static final int IDENTIFY = 26;
     // Helper -> mod
     public static final int WELCOME = 64;
     public static final int WINDOWS = 65;
@@ -85,8 +92,21 @@ public final class HelperProtocol {
     public static final int CURSOR = 79;
     /** Work mode, walk while dragging: the movement keys held for Minecraft (forward, back, left, right, jump, sneak). */
     public static final int WALK = 80;
+    /** The player's screens: real monitors (slot 0) and Office displays (1-4), in global points. */
+    public static final int DISPLAYS = 81;
     /** Pointer slot 0: the main display (a Mirror hologram); x, y are then a pixel of a w x h picture of it. */
     public static final int MAIN_SLOT = 0;
+
+    /**
+     * HELLO / WELCOME feature: the side understands LIST_DISPLAYS, SET_ORIGINS, IDENTIFY, DISPLAYS and the optional
+     * {@code display} key. Each side sends those only when the other announced it, so a mod and helper one release apart
+     * never close the connection on an unknown type.
+     */
+    public static final String FEATURE_SCREENS = "screens";
+    /** Monitor ids (CGDisplay UUID string, Windows device name) are 1..64 characters. */
+    public static final int MAX_DISPLAY_ID = 64;
+    public static final int MAX_DISPLAYS = 16;
+    public static final int MAX_IDENTIFY_LABELS = 16;
 
     private static final int IMAGE_HEADER = 20; // u32 surface, u64 generation, u32 width, u32 height
     private static final int PATCH_HEADER = IMAGE_HEADER + 4; // + u32 count
@@ -104,7 +124,8 @@ public final class HelperProtocol {
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
             ZoomIn, ZoomOut, RequestPermissions, PointerDown, PointerMove, PointerUp, Scroll, Click, ExitTyping,
             ListApps, AppIcons, OpenApp, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
-            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput, WorkBegin, Cursor, Rate, Walk {
+            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput, WorkBegin, Cursor, Rate, Walk, ListDisplays,
+            SetOrigins, Identify, Displays {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -146,6 +167,10 @@ public final class HelperProtocol {
                 case Cursor m -> CURSOR;
                 case Walk m -> WALK;
                 case Rate m -> RATE;
+                case ListDisplays m -> LIST_DISPLAYS;
+                case SetOrigins m -> SET_ORIGINS;
+                case Identify m -> IDENTIFY;
+                case Displays m -> DISPLAYS;
             };
         }
     }
@@ -213,7 +238,16 @@ public final class HelperProtocol {
     public record WindowInfo(String windowKey, String app, String title, int w, int h) {}
 
     // Mod -> helper
-    public record Hello(String token, int version, int mcPid) implements Message {}
+    /** {@code features}: what this mod understands beyond version 1 ({@link #FEATURE_SCREENS}); null from older mods. */
+    public record Hello(String token, int version, int mcPid, @Nullable List<String> features) implements Message {
+        public Hello {
+            features = features == null ? null : List.copyOf(features);
+        }
+
+        public Hello(String token, int version, int mcPid) {
+            this(token, version, mcPid, null);
+        }
+    }
 
     public record ListWindows() implements Message {}
 
@@ -221,9 +255,16 @@ public final class HelperProtocol {
 
     public record RemoveDisplay(int slot) implements Message {}
 
-    /** {@code slot} is required for DISPLAY captures, {@code windowKey} for WINDOW captures; the other is null (both for MAIN). */
-    public record Capture(int surface, CaptureKind kind, Integer slot, String windowKey, int maxW, int fps)
-            implements Message {}
+    /**
+     * {@code slot} is required for DISPLAY captures, {@code windowKey} for WINDOW captures; the other is null (both for MAIN).
+     * {@code display}: MAIN only, the monitor a Mirror copies (null = the main display; "screens" helpers only).
+     */
+    public record Capture(int surface, CaptureKind kind, Integer slot, String windowKey, int maxW, int fps,
+            @Nullable String display) implements Message {
+        public Capture(int surface, CaptureKind kind, Integer slot, String windowKey, int maxW, int fps) {
+            this(surface, kind, slot, windowKey, maxW, fps, null);
+        }
+    }
 
     public record Stop(int surface) implements Message {}
 
@@ -237,38 +278,63 @@ public final class HelperProtocol {
 
     // In-world use: (x, y) is a pixel of slot's virtual display (0..w-1, 0..h-1). Slot 0 (MAIN_SLOT) is the main display
     // (a Mirror hologram): (x, y) is then a pixel of a w x h picture of it, and w, h are required; else they are null.
+    // `display` (slot 0 only, "screens" helpers only): the monitor that Mirror copies, instead of the main display.
     /** Start a drag the helper drives at the press point; it ends when the physical button is released (DRAG_ENDED). */
-    public record PointerDown(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {
+    public record PointerDown(int slot, int x, int y, PointerButton button, Integer w, Integer h, @Nullable String display)
+            implements Message {
+        public PointerDown(int slot, int x, int y, PointerButton button, Integer w, Integer h) {
+            this(slot, x, y, button, w, h, null);
+        }
+
         public PointerDown(int slot, int x, int y, PointerButton button) {
-            this(slot, x, y, button, null, null);
+            this(slot, x, y, button, null, null, null);
         }
     }
 
     /** The crosshair is over this pixel now (during a drag; any slot). */
-    public record PointerMove(int slot, int x, int y, Integer w, Integer h) implements Message {
+    public record PointerMove(int slot, int x, int y, Integer w, Integer h, @Nullable String display) implements Message {
+        public PointerMove(int slot, int x, int y, Integer w, Integer h) {
+            this(slot, x, y, w, h, null);
+        }
+
         public PointerMove(int slot, int x, int y) {
-            this(slot, x, y, null, null);
+            this(slot, x, y, null, null, null);
         }
     }
 
     /** Cancel the drag from the mod's side. */
-    public record PointerUp(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {
+    public record PointerUp(int slot, int x, int y, PointerButton button, Integer w, Integer h, @Nullable String display)
+            implements Message {
+        public PointerUp(int slot, int x, int y, PointerButton button, Integer w, Integer h) {
+            this(slot, x, y, button, w, h, null);
+        }
+
         public PointerUp(int slot, int x, int y, PointerButton button) {
-            this(slot, x, y, button, null, null);
+            this(slot, x, y, button, null, null, null);
         }
     }
 
     /** Scroll there, in pixels of content motion (dy &gt; 0 = up / away). */
-    public record Scroll(int slot, int x, int y, int dx, int dy, Integer w, Integer h) implements Message {
+    public record Scroll(int slot, int x, int y, int dx, int dy, Integer w, Integer h, @Nullable String display)
+            implements Message {
+        public Scroll(int slot, int x, int y, int dx, int dy, Integer w, Integer h) {
+            this(slot, x, y, dx, dy, w, h, null);
+        }
+
         public Scroll(int slot, int x, int y, int dx, int dy) {
-            this(slot, x, y, dx, dy, null, null);
+            this(slot, x, y, dx, dy, null, null, null);
         }
     }
 
     /** A real click there: the app comes forward with the keyboard (typing mode). */
-    public record Click(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {
+    public record Click(int slot, int x, int y, PointerButton button, Integer w, Integer h, @Nullable String display)
+            implements Message {
+        public Click(int slot, int x, int y, PointerButton button, Integer w, Integer h) {
+            this(slot, x, y, button, w, h, null);
+        }
+
         public Click(int slot, int x, int y, PointerButton button) {
-            this(slot, x, y, button, null, null);
+            this(slot, x, y, button, null, null, null);
         }
     }
 
@@ -291,9 +357,46 @@ public final class HelperProtocol {
         }
     }
 
+    /** Every screen, please ("screens" helpers only); DISPLAYS answers. */
+    public record ListDisplays() implements Message {}
+
+    /** Where an Office display goes: its top-left corner in global points. */
+    public record SlotOrigin(int slot, int x, int y) {}
+
+    /** Move these Office displays (1..4 entries, slots 1..4, each once) in one configuration; DISPLAYS answers. */
+    public record SetOrigins(List<SlotOrigin> origins) implements Message {
+        public SetOrigins {
+            origins = List.copyOf(origins);
+        }
+    }
+
+    /** Show {@code label} (1..2 characters) big on the screen whose id is {@code display}. */
+    public record IdentifyLabel(String display, String label) {}
+
+    /** Identify: a label on each of these screens (1..16) for 3 s. */
+    public record Identify(List<IdentifyLabel> labels) implements Message {
+        public Identify {
+            labels = List.copyOf(labels);
+        }
+    }
+
     // Helper -> mod
-    /** The handshake reply; sent again whenever a permission changes while connected. */
-    public record Welcome(int version, boolean screenRecording, boolean accessibility) implements Message {}
+    /** The handshake reply; sent again whenever a permission changes while connected. {@code features}: as HELLO's. */
+    public record Welcome(int version, boolean screenRecording, boolean accessibility, @Nullable List<String> features)
+            implements Message {
+        public Welcome {
+            features = features == null ? null : List.copyOf(features);
+        }
+
+        public Welcome(int version, boolean screenRecording, boolean accessibility) {
+            this(version, screenRecording, accessibility, null);
+        }
+
+        /** This helper announced {@code feature} (e.g. {@link #FEATURE_SCREENS}). */
+        public boolean has(String feature) {
+            return features != null && features.contains(feature);
+        }
+    }
 
     public record Windows(List<WindowInfo> windows) implements Message {}
 
@@ -342,14 +445,40 @@ public final class HelperProtocol {
     /** Secure input on / off while typing. */
     public record SecureInput(boolean on) implements Message {}
 
-    /** Enter work mode at this point (slot 0 = the main display, with the picture size w, h). */
-    public record WorkBegin(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {}
+    /**
+     * Enter work mode at this point (slot 0 = the main display, with the picture size w, h; with {@code display}, that
+     * monitor instead).
+     */
+    public record WorkBegin(int slot, int x, int y, PointerButton button, Integer w, Integer h, @Nullable String display)
+            implements Message {
+        public WorkBegin(int slot, int x, int y, PointerButton button, Integer w, Integer h) {
+            this(slot, x, y, button, w, h, null);
+        }
+    }
 
     /**
      * The real cursor while working: on display {@code slot} (0 = main, its points; 1-4 = a virtual display, its pixels;
-     * -1 = none of them) at (x, y) of a w x h grid.
+     * -1 = none of them) at (x, y) of a w x h grid. {@code display} (slot 0, "screens" helpers): the monitor it is on
+     * when that is not the main display.
      */
-    public record Cursor(int slot, int x, int y, int w, int h) implements Message {}
+    public record Cursor(int slot, int x, int y, int w, int h, @Nullable String display) implements Message {
+        public Cursor(int slot, int x, int y, int w, int h) {
+            this(slot, x, y, w, h, null);
+        }
+    }
+
+    /**
+     * One of the player's screens in global points (top-left origin): a real monitor ({@code slot} 0; {@code main} for the
+     * main display) or an Office display (1..4). {@code name} (monitors only, short) never leaves the player's computer.
+     */
+    public record ScreenInfo(String id, int slot, boolean main, @Nullable String name, int x, int y, int w, int h) {}
+
+    /** Every screen (at most 16): the answer to LIST_DISPLAYS / SET_ORIGINS, sent again when the displays change. */
+    public record Displays(List<ScreenInfo> displays) implements Message {
+        public Displays {
+            displays = List.copyOf(displays);
+        }
+    }
 
     /** Movement keys held for Minecraft while dragging in work mode (sorted names); empty = stop. */
     public record Walk(List<String> keys) implements Message {
@@ -402,6 +531,8 @@ public final class HelperProtocol {
                 return out.array();
             }
             default -> {
+                String problem = screensProblem(message);
+                if (problem != null) throw bad(problem);
                 byte[] json = Json.write(payloadOf(message)).getBytes(StandardCharsets.UTF_8);
                 ByteBuffer out = begin(message.type(), json.length);
                 out.put(json);
@@ -457,12 +588,12 @@ public final class HelperProtocol {
     /** JSON value (Map / List / String / Integer / Long / Boolean) of a control message. */
     private static Object payloadOf(Message message) {
         return switch (message) {
-            case Hello m -> map("mcPid", m.mcPid(), "token", m.token(), "version", m.version());
+            case Hello m -> map("features", m.features(), "mcPid", m.mcPid(), "token", m.token(), "version", m.version());
             case ListWindows m -> map();
             case CreateDisplay m -> map("h", m.h(), "slot", m.slot(), "w", m.w());
             case RemoveDisplay m -> map("slot", m.slot());
-            case Capture m -> map("fps", m.fps(), "kind", m.kind().wire, "maxW", m.maxW(), "slot", m.slot(),
-                    "surface", m.surface(), "windowKey", m.windowKey());
+            case Capture m -> map("display", m.display(), "fps", m.fps(), "kind", m.kind().wire, "maxW", m.maxW(),
+                    "slot", m.slot(), "surface", m.surface(), "windowKey", m.windowKey());
             case Stop m -> map("surface", m.surface());
             case Ready m -> map("surface", m.surface());
             case ZoomIn m -> map("mcWindowFrame",
@@ -471,18 +602,42 @@ public final class HelperProtocol {
                     "surface", m.surface());
             case ZoomOut m -> map();
             case RequestPermissions m -> map();
-            case PointerDown m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
-            case PointerMove m -> map("h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
-            case PointerUp m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
-            case Scroll m -> map("dx", m.dx(), "dy", m.dy(), "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
-            case Click m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case PointerDown m -> map("button", m.button().wire, "display", m.display(), "h", m.h(), "slot", m.slot(),
+                    "w", m.w(), "x", m.x(), "y", m.y());
+            case PointerMove m -> map("display", m.display(), "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case PointerUp m -> map("button", m.button().wire, "display", m.display(), "h", m.h(), "slot", m.slot(),
+                    "w", m.w(), "x", m.x(), "y", m.y());
+            case Scroll m -> map("display", m.display(), "dx", m.dx(), "dy", m.dy(), "h", m.h(), "slot", m.slot(),
+                    "w", m.w(), "x", m.x(), "y", m.y());
+            case Click m -> map("button", m.button().wire, "display", m.display(), "h", m.h(), "slot", m.slot(),
+                    "w", m.w(), "x", m.x(), "y", m.y());
             case ExitTyping m -> map();
             case ListApps m -> map();
             case AppIcons m -> map("bundles", List.copyOf(m.bundles()), "size", m.size());
             case OpenApp m -> map("bottom", m.bottom(), "bundle", m.bundle(), "slot", m.slot(), "url", m.url());
             case SecureInput m -> map("on", m.on());
-            case WorkBegin m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
-            case Cursor m -> map("h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case WorkBegin m -> map("button", m.button().wire, "display", m.display(), "h", m.h(), "slot", m.slot(),
+                    "w", m.w(), "x", m.x(), "y", m.y());
+            case Cursor m -> map("display", m.display(), "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case ListDisplays m -> map();
+            case SetOrigins m -> {
+                List<Object> list = new ArrayList<>();
+                for (SlotOrigin o : m.origins()) list.add(map("slot", o.slot(), "x", o.x(), "y", o.y()));
+                yield map("origins", list);
+            }
+            case Identify m -> {
+                List<Object> list = new ArrayList<>();
+                for (IdentifyLabel l : m.labels()) list.add(map("display", l.display(), "label", l.label()));
+                yield map("labels", list);
+            }
+            case Displays m -> {
+                List<Object> list = new ArrayList<>();
+                for (ScreenInfo d : m.displays()) {
+                    list.add(map("h", d.h(), "id", d.id(), "main", d.main(), "name", d.name(), "slot", d.slot(), "w", d.w(),
+                            "x", d.x(), "y", d.y()));
+                }
+                yield map("displays", list);
+            }
             case Walk m -> map("keys", List.copyOf(m.keys()));
             case Rate m -> map("fps", m.fps(), "surface", m.surface());
             case Apps m -> {
@@ -499,8 +654,8 @@ public final class HelperProtocol {
             case TypingExit m -> map("reason", m.reason());
             case DragDelta m -> map("dx", m.dx(), "dy", m.dy());
             case DragEnded m -> map("reason", m.reason());
-            case Welcome m -> map("accessibility", m.accessibility(), "screenRecording", m.screenRecording(),
-                    "version", m.version());
+            case Welcome m -> map("accessibility", m.accessibility(), "features", m.features(),
+                    "screenRecording", m.screenRecording(), "version", m.version());
             case Windows m -> {
                 List<Object> list = new ArrayList<>();
                 for (WindowInfo w : m.windows()) {
@@ -535,11 +690,17 @@ public final class HelperProtocol {
             default:
                 break;
         }
-        JsonElement root = parseJson(payload, offset, length);
+        Message m = decodeControl(type, parseJson(payload, offset, length));
+        String problem = screensProblem(m);
+        if (problem != null) throw bad(problem);
+        return m;
+    }
+
+    private static Message decodeControl(int type, JsonElement root) throws ProtocolException {
         switch (type) {
             case HELLO: {
                 JsonObject o = object(root);
-                return new Hello(str(o, "token"), integer(o, "version"), integer(o, "mcPid"));
+                return new Hello(str(o, "token"), integer(o, "version"), integer(o, "mcPid"), optStrings(o, "features"));
             }
             case LIST_WINDOWS:
                 return new ListWindows();
@@ -569,31 +730,35 @@ public final class HelperProtocol {
                 JsonObject o = object(root);
                 int slot = integer(o, "slot");
                 Integer[] wh = picture(o, slot);
-                return new PointerDown(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
+                return new PointerDown(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1],
+                        optStr(o, "display"));
             }
             case POINTER_MOVE: {
                 JsonObject o = object(root);
                 int slot = integer(o, "slot");
                 Integer[] wh = picture(o, slot);
-                return new PointerMove(slot, integer(o, "x"), integer(o, "y"), wh[0], wh[1]);
+                return new PointerMove(slot, integer(o, "x"), integer(o, "y"), wh[0], wh[1], optStr(o, "display"));
             }
             case POINTER_UP: {
                 JsonObject o = object(root);
                 int slot = integer(o, "slot");
                 Integer[] wh = picture(o, slot);
-                return new PointerUp(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
+                return new PointerUp(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1],
+                        optStr(o, "display"));
             }
             case SCROLL: {
                 JsonObject o = object(root);
                 int slot = integer(o, "slot");
                 Integer[] wh = picture(o, slot);
-                return new Scroll(slot, integer(o, "x"), integer(o, "y"), integer(o, "dx"), integer(o, "dy"), wh[0], wh[1]);
+                return new Scroll(slot, integer(o, "x"), integer(o, "y"), integer(o, "dx"), integer(o, "dy"), wh[0], wh[1],
+                        optStr(o, "display"));
             }
             case CLICK: {
                 JsonObject o = object(root);
                 int slot = integer(o, "slot");
                 Integer[] wh = picture(o, slot);
-                return new Click(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
+                return new Click(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1],
+                        optStr(o, "display"));
             }
             case EXIT_TYPING:
                 return new ExitTyping();
@@ -647,13 +812,42 @@ public final class HelperProtocol {
                 JsonObject o = object(root);
                 int slot = integer(o, "slot");
                 Integer[] wh = picture(o, slot);
-                return new WorkBegin(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
+                return new WorkBegin(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1],
+                        optStr(o, "display"));
             }
             case WALK:
                 return new Walk(strings(object(root), "keys"));
             case CURSOR: {
                 JsonObject o = object(root);
-                return new Cursor(integer(o, "slot"), integer(o, "x"), integer(o, "y"), integer(o, "w"), integer(o, "h"));
+                return new Cursor(integer(o, "slot"), integer(o, "x"), integer(o, "y"), integer(o, "w"), integer(o, "h"),
+                        optStr(o, "display"));
+            }
+            case LIST_DISPLAYS:
+                return new ListDisplays();
+            case SET_ORIGINS: {
+                List<SlotOrigin> list = new ArrayList<>();
+                for (JsonElement e : array(object(root), "origins")) {
+                    JsonObject s = object(e);
+                    list.add(new SlotOrigin(integer(s, "slot"), integer(s, "x"), integer(s, "y")));
+                }
+                return new SetOrigins(list);
+            }
+            case IDENTIFY: {
+                List<IdentifyLabel> list = new ArrayList<>();
+                for (JsonElement e : array(object(root), "labels")) {
+                    JsonObject l = object(e);
+                    list.add(new IdentifyLabel(str(l, "display"), str(l, "label")));
+                }
+                return new Identify(list);
+            }
+            case DISPLAYS: {
+                List<ScreenInfo> list = new ArrayList<>();
+                for (JsonElement e : array(object(root), "displays")) {
+                    JsonObject d = object(e);
+                    list.add(new ScreenInfo(str(d, "id"), integer(d, "slot"), bool(d, "main"), optStr(d, "name"),
+                            integer(d, "x"), integer(d, "y"), integer(d, "w"), integer(d, "h")));
+                }
+                return new Displays(list);
             }
             case RATE: {
                 JsonObject o = object(root);
@@ -671,7 +865,8 @@ public final class HelperProtocol {
                 return new DragEnded(str(object(root), "reason"));
             case WELCOME: {
                 JsonObject o = object(root);
-                return new Welcome(integer(o, "version"), bool(o, "screenRecording"), bool(o, "accessibility"));
+                return new Welcome(integer(o, "version"), bool(o, "screenRecording"), bool(o, "accessibility"),
+                        optStrings(o, "features"));
             }
             case WINDOWS: {
                 if (!root.isJsonArray()) throw bad("expected JSON array");
@@ -716,6 +911,77 @@ public final class HelperProtocol {
         return new Integer[] {w, h};
     }
 
+    /**
+     * Why this message breaks a "screens" rule (null = fine), as the helper checks it: SET_ORIGINS 1..4 entries, slots
+     * 1..4, each once; IDENTIFY 1..16 labels of 1..2 characters; DISPLAYS at most 16, slot 0..4, w and h positive; every
+     * display id 1..64 characters; {@code display} on CAPTURE only with kind main, on pointer / scroll / cursor only on slot 0.
+     */
+    public static @Nullable String screensProblem(Message m) {
+        return switch (m) {
+            case SetOrigins s -> {
+                if (s.origins().isEmpty() || s.origins().size() > 4) yield "SET_ORIGINS needs 1...4 origins";
+                boolean[] seen = new boolean[5];
+                for (SlotOrigin o : s.origins()) {
+                    if (o.slot() < 1 || o.slot() > 4) yield "SET_ORIGINS slot must be 1...4";
+                    if (seen[o.slot()]) yield "SET_ORIGINS slots must be unique";
+                    seen[o.slot()] = true;
+                }
+                yield null;
+            }
+            case Identify i -> {
+                if (i.labels().isEmpty() || i.labels().size() > MAX_IDENTIFY_LABELS) yield "IDENTIFY needs 1...16 labels";
+                for (IdentifyLabel l : i.labels()) {
+                    if (l.label().isEmpty() || l.label().length() > 2) yield "IDENTIFY label must be 1...2 characters";
+                    if (!isDisplayId(l.display())) yield "IDENTIFY display must be 1...64 characters";
+                }
+                yield null;
+            }
+            case Displays d -> {
+                if (d.displays().size() > MAX_DISPLAYS) yield "DISPLAYS holds at most 16 screens";
+                for (ScreenInfo s : d.displays()) {
+                    if (s.slot() < 0 || s.slot() > 4) yield "DISPLAYS slot must be 0...4";
+                    if (s.w() <= 0 || s.h() <= 0) yield "DISPLAYS w and h must be positive";
+                    if (!isDisplayId(s.id())) yield "DISPLAYS id must be 1...64 characters";
+                }
+                yield null;
+            }
+            case Capture c -> c.display() == null ? null
+                    : c.kind() != CaptureKind.MAIN ? "CAPTURE display needs kind main" : displayProblem(c.display());
+            case PointerDown p -> slotZeroDisplay(p.slot(), p.display());
+            case PointerMove p -> slotZeroDisplay(p.slot(), p.display());
+            case PointerUp p -> slotZeroDisplay(p.slot(), p.display());
+            case Scroll p -> slotZeroDisplay(p.slot(), p.display());
+            case Click p -> slotZeroDisplay(p.slot(), p.display());
+            case WorkBegin p -> slotZeroDisplay(p.slot(), p.display());
+            case Cursor p -> slotZeroDisplay(p.slot(), p.display());
+            default -> null;
+        };
+    }
+
+    private static @Nullable String slotZeroDisplay(int slot, @Nullable String display) {
+        if (display == null) return null;
+        return slot != MAIN_SLOT ? "display needs slot 0" : displayProblem(display);
+    }
+
+    private static @Nullable String displayProblem(String display) {
+        return isDisplayId(display) ? null : "display must be 1...64 characters";
+    }
+
+    private static boolean isDisplayId(@Nullable String id) {
+        return id != null && !id.isEmpty() && id.length() <= MAX_DISPLAY_ID;
+    }
+
+    private static JsonArray array(JsonObject o, String key) throws ProtocolException {
+        JsonElement arr = required(o, key);
+        if (!arr.isJsonArray()) throw bad(key + " must be an array");
+        return arr.getAsJsonArray();
+    }
+
+    private static @Nullable List<String> optStrings(JsonObject o, String key) throws ProtocolException {
+        JsonElement e = o.get(key);
+        return e == null || e.isJsonNull() ? null : strings(o, key);
+    }
+
     private static List<String> strings(JsonObject o, String key) throws ProtocolException {
         JsonElement arr = required(o, key);
         if (!arr.isJsonArray()) throw bad(key + " must be an array");
@@ -753,6 +1019,7 @@ public final class HelperProtocol {
         CaptureKind kind = CaptureKind.of(str(o, "kind"));
         Integer slot = optInteger(o, "slot");
         String windowKey = optStr(o, "windowKey");
+        String display = optStr(o, "display");
         switch (kind) {
             case DISPLAY -> {
                 if (slot == null) throw bad("display capture needs slot");
@@ -764,7 +1031,7 @@ public final class HelperProtocol {
                 // needs neither slot nor windowKey
             }
         }
-        return new Capture(integer(o, "surface"), kind, slot, windowKey, integer(o, "maxW"), integer(o, "fps"));
+        return new Capture(integer(o, "surface"), kind, slot, windowKey, integer(o, "maxW"), integer(o, "fps"), display);
     }
 
     private static Frame decodeFrame(byte[] b, int off, int len) throws ProtocolException {
@@ -1097,6 +1364,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= RATE) || (t >= WELCOME && t <= WALK);
+        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= IDENTIFY) || (t >= WELCOME && t <= DISPLAYS);
     }
 }

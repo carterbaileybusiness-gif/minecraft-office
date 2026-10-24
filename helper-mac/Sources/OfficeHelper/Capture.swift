@@ -70,8 +70,9 @@ enum CaptureError: Error, CustomStringConvertible {
 
 /// One captured surface: a virtual display (cursor shown), one app window, or the main display minus Minecraft (Mirror).
 @MainActor final class SurfaceCapture {
-    /// `main(excluding:)`: the main display with every window of that app (Minecraft, HELLO's mcPid) left out.
-    enum Source: Equatable { case display(CGDirectDisplayID), window(WindowKey), main(excluding: pid_t?) }
+    /// `main(excluding:display:)`: a real monitor (nil = the main display, `CGMainDisplayID()`) with every window of that
+    /// app (Minecraft, HELLO's mcPid) left out — the Mirror.
+    enum Source: Equatable { case display(CGDirectDisplayID), window(WindowKey), main(excluding: pid_t?, display: CGDirectDisplayID?) }
 
     let surface: Int
     let source: Source
@@ -102,7 +103,7 @@ enum CaptureError: Error, CustomStringConvertible {
         self.generation = generation
         var content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard generations.accepts(ticket) else { return }
-        if case .main(let excludedPid) = source {
+        if case .main(let excludedPid, _) = source {
             // Never mirror without Minecraft excluded: wait (backoff, ~5 s) for its app to be listed, else fail.
             var attempt = 0
             while true {
@@ -142,9 +143,10 @@ enum CaptureError: Error, CustomStringConvertible {
             configuration.showsCursor = false // the hologram draws the cursor from CURSOR reports (work mode)
             filter = SCContentFilter(display: display, excludingWindows: [])
             capturedWindowSize = nil
-        case .main(let excludedPid):
-            // Mirror: "it should just be my screen", minus Minecraft so there is no Minecraft-inside-Minecraft.
-            let id = CGMainDisplayID()
+        case .main(let excludedPid, let monitor):
+            // Mirror: "it should just be my screen", minus Minecraft so there is no Minecraft-inside-Minecraft — on
+            // any monitor too (Minecraft's window may sit on it).
+            let id = monitor ?? CGMainDisplayID()
             guard let display = content.displays.first(where: { $0.displayID == id }) else { throw CaptureError.noDisplay(id) }
             let pixelsWide = max(1, CGDisplayPixelsWide(id)), pixelsHigh = max(1, CGDisplayPixelsHigh(id))
             let width = min(pixelsWide, maxWidth)

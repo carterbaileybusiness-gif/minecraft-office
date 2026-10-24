@@ -114,6 +114,8 @@ public final class PointerClient {
 	private boolean secureInput;
 	/** The real cursor while working (helper's CURSOR) as of this frame's start, or null. */
 	private int @Nullable [] cursor;
+	/** The monitor of a slot-0 {@link #cursor} when it isn't the main display, or null. */
+	private @Nullable String cursorDisplay;
 	/** Measurements: draw the cursor as of the frame's start (round 2) instead of the newest at draw time. */
 	private static volatile boolean cursorAtFrameStart;
 	/** Walk while dragging: the movement keys the helper holds for Minecraft now (names), and those set down by us. */
@@ -122,6 +124,7 @@ public final class PointerClient {
 	private long frameNo;
 	private long cursorSnapFrame = -1;
 	private int @Nullable [] cursorSnap;
+	private @Nullable String cursorSnapDisplay;
 	private final java.util.Set<String> walkApplied = new java.util.HashSet<>();
 	/** When the view last followed the cursor (System.nanoTime), for the smoothing; 0 = not following. */
 	private long followNanos;
@@ -315,15 +318,23 @@ public final class PointerClient {
 		// taken by its first draw, so every hologram of the frame shows the same position
 		if (c.cursorSnapFrame != c.frameNo) {
 			PointerPort port = cursorAtFrameStart ? null : port();
-			c.cursorSnap = port != null ? port.workCursor() : c.cursor;
+			PointerPort.CursorReport r = port != null ? port.workCursorReport() : null; // one report: no tearing
+			c.cursorSnap = r != null ? r.at() : c.cursor;
+			c.cursorSnapDisplay = r != null ? r.display() : c.cursorDisplay;
 			c.cursorSnapFrame = c.frameNo;
 		}
 		int[] now = c.cursorSnap;
-		double[] at = WorkCursor.on(spec, now);
+		double[] at = WorkCursor.on(spec, now, c.cursorSnapDisplay, mirrorShown(spec));
 		if (at != null && now != null) {
 			local.carter.office.client.render.FrameStats.cursorDrawn(now[1], now[2]);
 		}
 		return at;
+	}
+
+	/** The monitor a Mirror spec shows right now (null = the main display, or not a Mirror). */
+	private static @Nullable String mirrorShown(final HologramSpec spec) {
+		PointerPort port = port();
+		return spec.mode() == local.carter.office.core.Mode.MIRROR && port != null ? port.mirrorShown(spec.mirrorDisplay()) : null;
 	}
 
 	/** Measurements: true = draw the cursor as of the frame's start (the round-2 way), false = the newest at draw time. */
@@ -378,7 +389,9 @@ public final class PointerClient {
 		}
 		if (typing.active()) {
 			mc.getFramerateLimitTracker().onInputReceived(); // input goes to the computer: no AFK frame-rate drop
-			cursor = port.workCursor();
+			PointerPort.CursorReport r = port.workCursorReport(); // position and monitor from the same report
+			cursor = r.at();
+			cursorDisplay = r.display();
 			followCursor(mc);
 		} else {
 			followNanos = 0;
@@ -416,7 +429,7 @@ public final class PointerClient {
 			if (spec == null || !be.isOwner(player.getUUID())) {
 				continue;
 			}
-			double[] uv = WorkCursor.on(spec, c);
+			double[] uv = WorkCursor.on(spec, c, cursorDisplay, mirrorShown(spec));
 			if (uv == null) {
 				continue;
 			}

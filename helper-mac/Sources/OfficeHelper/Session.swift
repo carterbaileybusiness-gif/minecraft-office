@@ -12,7 +12,12 @@ import ScreenCaptureKit
     let input = InWorldInput()
     /// The mini Dock: installed apps, icons, opening an app onto a hologram's display (spec 5.10).
     let launcher = AppLauncher()
+    /// The display map's Identify: a big label on every screen for 3 s.
+    let identifyOverlay = IdentifyOverlay()
     private var captures: [Int: SurfaceCapture] = [:]
+    /// Mirrors of a chosen monitor (CAPTURE main + display), by surface: while that monitor is unplugged the Mirror shows
+    /// the main display, and it switches back when the monitor returns (checked once a second).
+    private var mirrorRequests: [Int: CapturePayload] = [:]
     private var minecraftPid: pid_t?
     private var zoomedSurface: Int?
     private var nextGeneration: UInt64 = 0
@@ -22,6 +27,13 @@ import ScreenCaptureKit
     static let permissionPollSeconds: TimeInterval = 2
     private var askedScreenRecording = false
     private var askedAccessibility = false
+    /// The mod's HELLO listed "screens": it understands DISPLAYS pushes and CURSOR `display`.
+    private var screensMod = false
+    /// Where the user put the Office displays (SET_ORIGINS), beside the socket and token.
+    private lazy var arrangement = ArrangementStore(url: server.directory.appendingPathComponent("display-arrangement.json"))
+    /// Debounces DISPLAYS pushes after display reconfigurations (each change comes as several callbacks).
+    private var reconfigureTicket = 0
+    static let reconfigureDebounceSeconds = 0.3
     /// Called when the mod disconnects: the helper quits and its displays vanish with it.
     var onFinished: (() -> Void)?
 
@@ -39,6 +51,14 @@ import ScreenCaptureKit
             return bounds.isEmpty ? nil : (bounds, live.spec.width, live.spec.height)
         }
         input.mainBounds = { CGDisplayBounds(CGMainDisplayID()) }
+        input.monitorBounds = { uuid in ScreenCatalog.displayID(uuid: uuid).map { CGDisplayBounds($0) } }
+        input.cursorMonitors = { [weak self] in
+            guard let self, self.screensMod else { return [] } // an older mod knows only slot -1 off its screens
+            return self.captures.compactMap { surface, capture in
+                guard case .main(_, let monitor?) = capture.source, let id = self.mirrorRequests[surface]?.display else { return nil }
+                return (id: id, bounds: CGDisplayBounds(monitor))
+            }
+        }
         CursorVeil.log = Log.write
         input.cursorDisplays = { [weak self] in
             guard let self else { return [] }
@@ -53,6 +73,11 @@ import ScreenCaptureKit
         launcher.minecraftPid = { [weak self] in self?.minecraftPid }
         launcher.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
         displays.onTerminated = { [weak self] slot in self?.displayGone(slot: slot) }
+        displays.saved = { [weak self] in
+            guard let self, let main = ScreenCatalog.uuid(CGMainDisplayID()) else { return [:] }
+            return self.arrangement.load().origins(forMain: main)
+        }
+        ScreenCatalog.onReconfigure { [weak self] in self?.screensReconfigured() }
         hotkey.onExit = { [weak self] in
             Log.write("exit hotkey")
             self?.endZoom(notifyMod: true)
@@ -63,7 +88,8 @@ import ScreenCaptureKit
 
     func connected(_ hello: HelloPayload, peerPid: pid_t) {
         minecraftPid = hello.mcPid > 0 ? hello.mcPid : peerPid
-        Log.write("mod connected: mcPid \(hello.mcPid), peer pid \(peerPid)")
+        screensMod = hello.features?.contains(OfficeProtocol.screensFeature) ?? false
+        Log.write("mod connected: mcPid \(hello.mcPid), peer pid \(peerPid), features \(hello.features ?? [])")
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
@@ -89,6 +115,8 @@ import ScreenCaptureKit
     func shutdown() {
         pollTimer?.invalidate(); pollTimer = nil
         permissionTimer?.invalidate(); permissionTimer = nil
+        screensMod = false
+        identifyOverlay.hide()
         endZoom(notifyMod: false, activateMinecraft: false)
         input.shutdown()
         for capture in captures.values { capture.stop() }
@@ -97,7 +125,8 @@ import ScreenCaptureKit
     }
 
     nonisolated static var welcome: WelcomePayload {
-        WelcomePayload(version: OfficeProtocol.version, screenRecording: CGPreflightScreenCaptureAccess(), accessibility: AXIsProcessTrusted())
+        WelcomePayload(version: OfficeProtocol.version, screenRecording: CGPreflightScreenCaptureAccess(), accessibility: AXIsProcessTrusted(),
+                       features: [OfficeProtocol.screensFeature])
     }
 
     // MARK: Messages
@@ -129,10 +158,13 @@ import ScreenCaptureKit
         case .openApp(let p):
             if !AXIsProcessTrusted() { askAccessibilityOnce() }
             launcher.open(p)
+        case .listDisplays: sendDisplays()
+        case .setOrigins(let p): setOrigins(p)
+        case .identify(let p): identify(p)
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
-             .apps, .icons, .appResult, .secureInput, .cursor, .walk:
+             .apps, .icons, .appResult, .secureInput, .cursor, .walk, .displays:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
     }
@@ -186,6 +218,68 @@ import ScreenCaptureKit
 
     private func displayGone(slot: Int) { endCaptures(onSlot: slot, reason: "display removed") }
 
+    // MARK: Display map ("screens")
+
+    private func sendDisplays() {
+        server.send(.displays(DisplaysPayload(displays: ScreenCatalog.list(ours: displays.displays.mapValues(\.displayID)))))
+    }
+
+    /// SET_ORIGINS: checked as one new layout (OriginRequest), applied in one configuration, then every live Office
+    /// display's origin is remembered for this main display and the mod gets the screens as they are now.
+    private func setOrigins(_ p: SetOriginsPayload) {
+        let live = displays.displays.mapValues { CGDisplayBounds($0.displayID) }
+        let ours = Set(displays.displays.values.map(\.displayID))
+        let mainID = CGMainDisplayID()
+        let mainSlot = displays.displays.first { $0.value.displayID == mainID }?.key // the user made an Office display main
+        let others = ScreenCatalog.activeIDs().filter { !ours.contains($0) && $0 != mainID }
+        let fixed = (mainSlot == nil ? [mainID] + others : others).map { CGDisplayBounds($0) } // the main display first
+        let moves: [Int: CGPoint]
+        switch OriginRequest.check(p, live: live, fixed: fixed, mainSlot: mainSlot) {
+        case .failure(let problem):
+            sendError("bad_request", problem.message)
+            sendDisplays()
+            return
+        case .success(let m): moves = m
+        }
+        guard displays.apply(origins: moves) else {
+            sendError("display_failed", "macOS refused the new arrangement")
+            sendDisplays()
+            return
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 150_000_000) // the window server settles the new bounds
+            self.rememberArrangement()
+            self.sendDisplays()
+        }
+    }
+
+    /// IDENTIFY: each label on its screen for 3 s; ids that aren't connected are skipped. No reply.
+    private func identify(_ p: IdentifyPayload) {
+        let items = p.labels.compactMap { l in ScreenCatalog.displayID(uuid: l.display).map { (bounds: CGDisplayBounds($0), label: l.label) } }
+        identifyOverlay.show(items)
+    }
+
+    private func rememberArrangement() {
+        guard let main = ScreenCatalog.uuid(CGMainDisplayID()) else { return }
+        var saved = arrangement.load()
+        saved.record(forMain: main, displays.displays.mapValues { CGDisplayBounds($0.displayID).origin })
+        do { try arrangement.save(saved) } catch { Log.write("arrangement not saved: \(error)") }
+    }
+
+    /// A display reconfiguration (plug, unplug, a move in System Settings, ours created / moved / removed): a "screens"
+    /// mod gets DISPLAYS once things settle (300 ms after the last change).
+    private func screensReconfigured() {
+        guard screensMod else { return }
+        reconfigureTicket += 1
+        let ticket = reconfigureTicket
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconfigureDebounceSeconds) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.screensMod, self.reconfigureTicket == ticket else { return }
+                self.sendDisplays()
+            }
+        }
+    }
+
     private func endCaptures(onSlot slot: Int, reason: String) {
         guard let id = displays.displayID(slot: slot) else { return }
         for (surface, capture) in captures where capture.source == .display(id) { end(surface: surface, reason: reason) }
@@ -215,7 +309,12 @@ import ScreenCaptureKit
             }
             source = .window(key)
         case .main:
-            source = .main(excluding: minecraftPid)
+            let monitor = Self.mirroredMonitor(p)
+            if let wanted = p.display, monitor == nil, ScreenCatalog.displayID(uuid: wanted) == nil {
+                Log.write("mirror surface \(p.surface): monitor \(wanted) is not connected; mirroring the main display")
+            }
+            source = .main(excluding: minecraftPid, display: monitor)
+            if p.display != nil { mirrorRequests[p.surface] = p }
         }
         let capture = SurfaceCapture(surface: p.surface, source: source, maxWidth: p.maxW, fps: p.fps)
         captures[p.surface] = capture
@@ -237,6 +336,7 @@ import ScreenCaptureKit
                 Log.write("capture surface \(surface) \(capture.source) generation \(generation)")
             } catch {
                 guard self.captures[surface] === capture else { return }
+                if self.monitorWentAway(capture) { return } // restarted on the main display
                 Log.write("capture surface \(surface) failed: \(error)")
                 if case .window(let key) = capture.source, WindowCatalog.window(key.windowID) == nil {
                     self.end(surface: surface, reason: "window closed")
@@ -247,8 +347,25 @@ import ScreenCaptureKit
         }
     }
 
+    /// The monitor a CAPTURE main + display mirrors: nil = the main display (no display, it is the main one, or it is
+    /// not connected now).
+    private static func mirroredMonitor(_ p: CapturePayload) -> CGDirectDisplayID? {
+        guard let id = p.display.flatMap(ScreenCatalog.displayID(uuid:)), id != CGMainDisplayID() else { return nil }
+        return id
+    }
+
+    /// A Mirror's chosen monitor is gone (its stream stopped or never started): it carries on with the main display.
+    private func monitorWentAway(_ capture: SurfaceCapture) -> Bool {
+        guard case .main(_, let monitor?) = capture.source, let request = mirrorRequests[capture.surface],
+              Self.mirroredMonitor(request) != monitor else { return false }
+        Log.write("mirror surface \(capture.surface): monitor \(monitor) went away; mirroring the main display")
+        self.capture(request)
+        return true
+    }
+
     private func captureFailed(surface: Int, message: String) {
         guard let capture = captures[surface] else { return }
+        if monitorWentAway(capture) { return }
         if case .window(let key) = capture.source, WindowCatalog.window(key.windowID) == nil {
             end(surface: surface, reason: "window closed")
         } else if case .display(let id) = capture.source, !VirtualDisplays.isOnline(id) {
@@ -269,13 +386,15 @@ import ScreenCaptureKit
     }
 
     private func stopCapture(surface: Int) {
+        mirrorRequests[surface] = nil
         guard let capture = captures.removeValue(forKey: surface) else { return }
         capture.stop()
         server.forget(surface: surface)
         if zoomedSurface == surface { endZoom(notifyMod: false) }
     }
 
-    /// Once a second: closed windows end their surface; resized windows restart capture at the new size.
+    /// Once a second: closed windows end their surface; resized windows restart capture at the new size; a Mirror of a
+    /// chosen monitor follows it (main display while it is unplugged, back to it when it returns).
     private func poll() {
         for (surface, capture) in captures {
             switch capture.source {
@@ -287,8 +406,13 @@ import ScreenCaptureKit
                 }
             case .display(let id):
                 if !VirtualDisplays.isOnline(id) { end(surface: surface, reason: "display removed") }
-            case .main:
-                break
+            case .main(_, let monitor):
+                guard let request = mirrorRequests[surface] else { continue }
+                let now = Self.mirroredMonitor(request)
+                if now != monitor {
+                    Log.write("mirror surface \(surface): monitor \(now.map { "\($0) is back" } ?? "\(monitor ?? 0) went away")")
+                    self.capture(request)
+                }
             }
         }
     }

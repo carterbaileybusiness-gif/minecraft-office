@@ -60,7 +60,27 @@ enum ProtocolTests {
         ("walk", .walk(WalkPayload(keys: ["forward", "jump"]))),
         ("rate", .rate(RatePayload(surface: 7, fps: 60))),
         ("display_side", .display(DisplayPayload(slot: 1, displayId: 5, w: 1920, h: 1080, x: -1920, y: 0, side: "left"))),
+        // The display map ("screens" feature)
+        ("hello_features", .hello(HelloPayload(token: token, version: 1, mcPid: 4242, features: [OfficeProtocol.screensFeature]))),
+        ("welcome_features", .welcome(WelcomePayload(version: 1, screenRecording: true, accessibility: true, features: [OfficeProtocol.screensFeature]))),
+        ("list_displays", .listDisplays),
+        ("displays", .displays(DisplaysPayload(displays: [
+            ScreenInfo(id: mainId, slot: 0, main: true, name: "MacBook", x: 0, y: 0, w: 1440, h: 900),
+            ScreenInfo(id: lgId, slot: 0, main: false, name: "LG", x: -1920, y: -180, w: 1920, h: 1080),
+            ScreenInfo(id: officeId, slot: 1, main: false, name: nil, x: 1440, y: 0, w: 1920, h: 1080),
+        ]))),
+        ("set_origins", .setOrigins(SetOriginsPayload(origins: [SlotOrigin(slot: 1, x: 1440, y: -180)]))),
+        ("identify", .identify(IdentifyPayload(labels: [
+            IdentifyLabel(display: mainId, label: "A"), IdentifyLabel(display: lgId, label: "B"), IdentifyLabel(display: officeId, label: "1"),
+        ]))),
+        ("capture_monitor", .capture(CapturePayload(surface: 9, kind: .main, slot: nil, windowKey: nil, maxW: 1920, fps: 5, display: lgId))),
+        ("work_begin_monitor", .workBegin(PointerPayload(slot: 0, x: 960, y: 540, button: .left, w: 1920, h: 1080, display: lgId))),
+        ("cursor_monitor", .cursor(CursorPayload(slot: 0, x: 100, y: 200, w: 1920, h: 1080, display: lgId))),
     ]
+
+    static let mainId = "37D8832A-2D66-02CA-B9F7-8F30A301B230"
+    static let lgId = "9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D"
+    static let officeId = "5A1E0F00-0000-4000-8000-0000000000A1"
 
     static func decodeAll(_ bytes: Data) throws -> [Message] {
         var reader = FrameReader(maxLength: OfficeProtocol.maxFrameLength)
@@ -164,6 +184,78 @@ enum ProtocolTests {
             // Unknown JSON keys are ignored (forward compatible).
             let ok = try Message.decode(type: .stop, payload: Data(#"{"surface":3,"extra":true}"#.utf8))
             expectEqual(ok, .stop(SurfacePayload(surface: 3)))
+        }
+
+        run("screens fixtures carry exactly the documented JSON") {
+            let expected: [String: String] = [
+                "hello_features": #"{"features":["screens"],"mcPid":4242,"token":"\#(token)","version":1}"#,
+                "welcome_features": #"{"accessibility":true,"features":["screens"],"screenRecording":true,"version":1}"#,
+                "list_displays": "{}",
+                "displays": #"{"displays":[{"h":900,"id":"\#(mainId)","main":true,"name":"MacBook","slot":0,"w":1440,"x":0,"y":0},"#
+                    + #"{"h":1080,"id":"\#(lgId)","main":false,"name":"LG","slot":0,"w":1920,"x":-1920,"y":-180},"#
+                    + #"{"h":1080,"id":"\#(officeId)","main":false,"slot":1,"w":1920,"x":1440,"y":0}]}"#,
+                "set_origins": #"{"origins":[{"slot":1,"x":1440,"y":-180}]}"#,
+                "identify": #"{"labels":[{"display":"\#(mainId)","label":"A"},{"display":"\#(lgId)","label":"B"},{"display":"\#(officeId)","label":"1"}]}"#,
+                "capture_monitor": #"{"display":"\#(lgId)","fps":5,"kind":"main","maxW":1920,"surface":9}"#,
+                "work_begin_monitor": #"{"button":"left","display":"\#(lgId)","h":1080,"slot":0,"w":1920,"x":960,"y":540}"#,
+                "cursor_monitor": #"{"display":"\#(lgId)","h":1080,"slot":0,"w":1920,"x":100,"y":200}"#,
+            ]
+            for (name, json) in expected {
+                guard let message = examples.first(where: { $0.file == name })?.message else { expect(false, "example \(name)"); continue }
+                expectEqual(String(decoding: try message.encode().dropFirst(5), as: UTF8.self), json, name)
+            }
+        }
+
+        run("screens rules") {
+            func rejects(_ name: String, _ type: MessageType, _ json: String, _ message: Message) {
+                expectThrows("decode \(name)") { _ = try Message.decode(type: type, payload: Data(json.utf8)) }
+                expectThrows("encode \(name)") { _ = try message.encode() }
+            }
+            let origin = { (slot: Int) in SlotOrigin(slot: slot, x: 0, y: 0) }
+            rejects("empty SET_ORIGINS", .setOrigins, #"{"origins":[]}"#, .setOrigins(SetOriginsPayload(origins: [])))
+            let five = (1...5).map { #"{"slot":\#($0 > 4 ? 4 : $0),"x":0,"y":0}"# }.joined(separator: ",")
+            rejects("5-entry SET_ORIGINS", .setOrigins, #"{"origins":[\#(five)]}"#,
+                    .setOrigins(SetOriginsPayload(origins: [origin(1), origin(2), origin(3), origin(4), origin(4)])))
+            rejects("duplicate SET_ORIGINS", .setOrigins, #"{"origins":[{"slot":2,"x":0,"y":0},{"slot":2,"x":5,"y":0}]}"#,
+                    .setOrigins(SetOriginsPayload(origins: [origin(2), SlotOrigin(slot: 2, x: 5, y: 0)])))
+            rejects("slot-5 SET_ORIGINS", .setOrigins, #"{"origins":[{"slot":5,"x":0,"y":0}]}"#,
+                    .setOrigins(SetOriginsPayload(origins: [origin(5)])))
+            rejects("slot-0 SET_ORIGINS", .setOrigins, #"{"origins":[{"slot":0,"x":0,"y":0}]}"#,
+                    .setOrigins(SetOriginsPayload(origins: [origin(0)])))
+            rejects("label ABC", .identify, #"{"labels":[{"display":"x","label":"ABC"}]}"#,
+                    .identify(IdentifyPayload(labels: [IdentifyLabel(display: "x", label: "ABC")])))
+            rejects("empty label", .identify, #"{"labels":[{"display":"x","label":""}]}"#,
+                    .identify(IdentifyPayload(labels: [IdentifyLabel(display: "x", label: "")])))
+            let seventeen = Array(repeating: IdentifyLabel(display: "x", label: "1"), count: 17)
+            rejects("17 labels", .identify, #"{"labels":[\#(Array(repeating: #"{"display":"x","label":"1"}"#, count: 17).joined(separator: ","))]}"#,
+                    .identify(IdentifyPayload(labels: seventeen)))
+            rejects("no labels", .identify, #"{"labels":[]}"#, .identify(IdentifyPayload(labels: [])))
+            let longId = String(repeating: "a", count: 65)
+            rejects("65-char display id", .identify, #"{"labels":[{"display":"\#(longId)","label":"A"}]}"#,
+                    .identify(IdentifyPayload(labels: [IdentifyLabel(display: longId, label: "A")])))
+            rejects("DISPLAYS slot 5", .displays, #"{"displays":[{"h":1,"id":"x","main":false,"slot":5,"w":1,"x":0,"y":0}]}"#,
+                    .displays(DisplaysPayload(displays: [ScreenInfo(id: "x", slot: 5, main: false, x: 0, y: 0, w: 1, h: 1)])))
+            rejects("DISPLAYS w 0", .displays, #"{"displays":[{"h":1,"id":"x","main":false,"slot":0,"w":0,"x":0,"y":0}]}"#,
+                    .displays(DisplaysPayload(displays: [ScreenInfo(id: "x", slot: 0, main: false, x: 0, y: 0, w: 0, h: 1)])))
+            rejects("DISPLAYS empty id", .displays, #"{"displays":[{"h":1,"id":"","main":false,"slot":0,"w":1,"x":0,"y":0}]}"#,
+                    .displays(DisplaysPayload(displays: [ScreenInfo(id: "", slot: 0, main: false, x: 0, y: 0, w: 1, h: 1)])))
+            let many = Array(repeating: ScreenInfo(id: "x", slot: 0, main: false, x: 0, y: 0, w: 1, h: 1), count: 17)
+            expectThrows("encode 17 DISPLAYS") { _ = try Message.displays(DisplaysPayload(displays: many)).encode() }
+            rejects("CAPTURE kind display with display", .capture, #"{"display":"x","fps":5,"kind":"display","maxW":1280,"slot":1,"surface":7}"#,
+                    .capture(CapturePayload(surface: 7, kind: .display, slot: 1, windowKey: nil, maxW: 1280, fps: 5, display: "x")))
+            rejects("POINTER_MOVE slot 1 with display", .pointerMove, #"{"display":"x","slot":1,"x":10,"y":20}"#,
+                    .pointerMove(PointerPayload(slot: 1, x: 10, y: 20, button: nil, display: "x")))
+            rejects("SCROLL slot 2 with display", .scroll, #"{"display":"x","dx":0,"dy":1,"slot":2,"x":1,"y":1}"#,
+                    .scroll(ScrollPayload(slot: 2, x: 1, y: 1, dx: 0, dy: 1, display: "x")))
+            rejects("CURSOR slot -1 with display", .cursor, #"{"display":"x","h":0,"slot":-1,"w":0,"x":0,"y":0}"#,
+                    .cursor(CursorPayload(slot: -1, x: 0, y: 0, w: 0, h: 0, display: "x")))
+            // Old messages are unchanged: no features, no display.
+            let oldHello = try Message.decode(type: .hello, payload: Data(#"{"mcPid":1,"token":"t","version":1}"#.utf8))
+            expectEqual(oldHello, .hello(HelloPayload(token: "t", version: 1, mcPid: 1)), "HELLO without features")
+            if case .hello(let h) = oldHello { expect(h.features == nil, "features absent = nil") }
+            let fixture = examples.first { $0.file == "displays" }!.message
+            let json = String(decoding: try fixture.encode().dropFirst(5), as: UTF8.self)
+            expect(!json.contains(#""name":null"#), "an Office display carries no name key")
         }
 
         run("windowKey parses bundle id and CGWindowID") {

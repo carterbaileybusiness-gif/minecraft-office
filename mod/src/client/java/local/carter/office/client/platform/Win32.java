@@ -1,5 +1,8 @@
 package local.carter.office.client.platform;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -8,6 +11,8 @@ import com.sun.jna.Native;
 import com.sun.jna.Pointer;
 import com.sun.jna.Structure;
 import com.sun.jna.platform.win32.Kernel32;
+import com.sun.jna.platform.win32.WinDef.HDC;
+import com.sun.jna.platform.win32.WinUser;
 import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinDef.LPARAM;
 import com.sun.jna.platform.win32.WinDef.LRESULT;
@@ -26,6 +31,8 @@ import com.sun.jna.win32.StdCallLibrary;
 import com.sun.jna.win32.W32APIOptions;
 
 import local.carter.office.client.platform.Platform.Rect;
+import local.carter.office.client.screens.Screen;
+import local.carter.office.client.screens.SdlScreens;
 
 /**
  * The few Win32 calls the Windows platform needs, through JNA (bundled with Minecraft). Window handles are plain
@@ -137,6 +144,10 @@ public final class Win32 {
 
 		/** Windows 10 1607+; returns the previous context. */
 		Pointer SetThreadDpiAwarenessContext(Pointer context);
+
+		boolean EnumDisplayMonitors(HDC hdc, RECT clip, WinUser.MONITORENUMPROC proc, LPARAM data);
+
+		boolean GetMonitorInfo(WinUser.HMONITOR monitor, WinUser.MONITORINFOEX info);
 	}
 
 	public interface Dwm extends StdCallLibrary {
@@ -290,6 +301,50 @@ public final class Win32 {
 			}
 		}
 		return -1;
+	}
+
+	/**
+	 * Index of the display adapter output {@code deviceName} (e.g. {@code \\.\DISPLAY2}) in EnumDisplayDevices order:
+	 * webrtc's screen-source id for that monitor; -1 when it isn't there.
+	 */
+	public int displayIndex(final String deviceName) {
+		for (int i = 0; i < 64; i++) {
+			DisplayDevice d = new DisplayDevice();
+			if (!user32.EnumDisplayDevices(null, i, d, 0)) {
+				break;
+			}
+			if (deviceName.equals(Native.toString(d.DeviceName))) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	static final int MONITORINFOF_PRIMARY = 0x1;
+
+	/**
+	 * The real monitors (physical pixels, top-left origin): id = the device name ({@code \\.\DISPLAY1}), main = the
+	 * primary one, name = the monitor's short name ("Screen" when Windows has none).
+	 */
+	public List<Screen> monitors() {
+		return physical(() -> {
+			List<Screen> out = new ArrayList<>();
+			user32.EnumDisplayMonitors(null, null, (monitor, hdc, rect, data) -> {
+				WinUser.MONITORINFOEX info = new WinUser.MONITORINFOEX();
+				if (user32.GetMonitorInfo(monitor, info)) {
+					String device = Native.toString(info.szDevice);
+					RECT r = info.rcMonitor;
+					if (!device.isEmpty() && r.right > r.left && r.bottom > r.top) {
+						DisplayDevice d = new DisplayDevice();
+						String name = user32.EnumDisplayDevices(device, 0, d, 0) ? Native.toString(d.DeviceString) : "";
+						out.add(new Screen(device, 0, (info.dwFlags & MONITORINFOF_PRIMARY) != 0, SdlScreens.shortName(name),
+								r.left, r.top, r.right - r.left, r.bottom - r.top));
+					}
+				}
+				return 1; // keep going
+			}, new LPARAM(0));
+			return out;
+		});
 	}
 
 	/** True if this process can see the interactive input desktop (false on headless service sessions). */

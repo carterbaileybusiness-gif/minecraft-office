@@ -23,6 +23,11 @@ import CoreGraphics
     var display: (Int) -> (bounds: CGRect, width: Int, height: Int)? = { _ in nil }
     /// The main display's bounds (global points): slot 0, a Mirror hologram.
     var mainBounds: () -> CGRect = { .zero }
+    /// A connected monitor's bounds by id (slot 0 + `display`: a Mirror of that monitor), nil when it is not connected.
+    var monitorBounds: (String) -> CGRect? = { _ in nil }
+    /// The monitors live Mirrors show (only for a "screens" mod): the cursor on one is reported with its id, and the
+    /// system cursor stays hidden there (the hologram draws it).
+    var cursorMonitors: () -> [(id: String, bounds: CGRect)] = { [] }
     var activateMinecraft: () -> Void = {}
 
     private var drag = DragMachine()
@@ -73,7 +78,7 @@ import CoreGraphics
             if drag.isActive { perform(drag.cancel()) }
             whenReachable(point, slot: p.slot) { self.click(at: point, button: button) }
         case .scroll(let p):
-            guard let point = point(PointerPayload(slot: p.slot, x: p.x, y: p.y, button: nil, w: p.w, h: p.h)) else { return }
+            guard let point = point(PointerPayload(slot: p.slot, x: p.x, y: p.y, button: nil, w: p.w, h: p.h, display: p.display)) else { return }
             whenReachable(point, slot: p.slot) {
                 if p.slot == PointerTarget.mainSlot {
                     // Mirror: Minecraft is click-through for a moment; a wheel event of the player's in that moment
@@ -110,7 +115,8 @@ import CoreGraphics
             if !quiet { send(.error(ErrorPayload(code: "no_accessibility", message: "in-world use needs Accessibility"))) }
             return nil
         }
-        switch PointerTarget.globalPoint(slot: p.slot, x: p.x, y: p.y, w: p.w, h: p.h, main: mainBounds(), display: display) {
+        switch PointerTarget.globalPoint(slot: p.slot, x: p.x, y: p.y, w: p.w, h: p.h, monitorId: p.display, main: mainBounds(),
+                                         monitor: monitorBounds, display: display) {
         case .success(let point):
             return point
         case .failure(let failure):
@@ -266,7 +272,7 @@ import CoreGraphics
     private func reportCursor(at point: CGPoint? = nil) {
         guard typing.active, typing.work else { stopWorkExtras(); return }
         guard let location = point ?? CGEvent(source: nil)?.location else { return }
-        let here = CursorLocator.locate(location, main: mainBounds(), displays: cursorDisplays())
+        let here = CursorLocator.locate(location, main: mainBounds(), displays: cursorDisplays(), monitors: cursorMonitors())
         if here != lastCursor {
             // on a real monitor (none of the player's screens) the system cursor is the only one they can see
             if here.slot < 0 { CursorVeil.show() } else if lastCursor.map({ $0.slot < 0 }) ?? true { CursorVeil.hide() }

@@ -1,12 +1,12 @@
 name = "Minecraft Office"
 author = "Carter Bailey"
-version = "0.3.2"
+version = "0.3.3"
 pack-format = "packwiz:1.1.0"
 
 [index]
 file = "index.toml"
 hash-format = "sha256"
-hash = "38e947ee6cb83bec85d15e281ba2692a55f451cf8b4d407055b516ec675be786"
+hash = "0f6779142ac776798d67c374a0f2cb4c7457161783de5fe0b2ed5b184ff84e6a"
 
 [versions]
 fabric = "0.20.1"

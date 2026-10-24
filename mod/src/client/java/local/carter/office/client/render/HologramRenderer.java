@@ -42,6 +42,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Util;
+
+import local.carter.office.client.screens.IdentifyClient;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -56,6 +58,9 @@ import net.minecraft.world.phys.Vec3;
  */
 public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity, HologramRenderState> {
 	public static final Identifier PANEL = OfficeMod.id("textures/misc/panel.png");
+	/** Identify's square: this share of the hologram's shorter side, dark and nearly opaque. */
+	private static final float IDENTIFY_SHARE = 0.28f;
+	private static final int IDENTIFY_TINT = 0xE6101418;
 	public static final Identifier FROSTED = OfficeMod.id("textures/misc/frosted.png");
 	public static final Identifier OFFLINE = OfficeMod.id("textures/misc/offline.png");
 	public static final Identifier SCANLINES = OfficeMod.id("textures/misc/scanlines.png");
@@ -124,9 +129,11 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		st.dockHover = -1;
 		st.dockLabel = "";
 		st.cursor = false;
+		st.identify = null;
 		if (spec == null) {
 			return;
 		}
+		st.identify = IdentifyClient.get().labelAt(be.getBlockPos(), Util.getMillis());
 		Minecraft mc = Minecraft.getInstance();
 		UUID viewer = mc.player == null ? null : mc.player.getUUID();
 		boolean isOwner = viewer != null && viewer.equals(spec.owner());
@@ -263,6 +270,18 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			collector.order(5).submitCustomGeometry(poseStack, RenderTypes.text(CURSOR), (pose, buf) -> {
 				textured(buf, pose, cx, cy - ch, cx + cw, cy, 0.009f, 0f, 0f, 1f, 1f, 0xFFFFFFFF);
 			});
+		}
+		// Identify: the screen's letter or number, big in the middle on a dark square (the helper's overlay on the real
+		// screen is the same 28 % of the shorter side, so a captured one sits right under it)
+		String identify = st.identify;
+		if (identify != null) {
+			float half = IDENTIFY_SHARE * Math.min(hw, hh);
+			collector.order(5).submitCustomGeometry(poseStack, RenderTypes.text(PANEL), (pose, buf) -> {
+				textured(buf, pose, -half, -half, half, half, 0.003f, 0f, 0f, 1f, 1f, IDENTIFY_TINT);
+			});
+			FormattedCharSequence line = Component.literal(identify).getVisualOrderText();
+			float s = Math.min(0.70f * 2 * half / 7f, 0.8f * 2 * half / Math.max(1, font.width(line)));
+			text(poseStack, collector.order(5), line, s, 3.5f * s, 0xFFFFFFFF);
 		}
 		poseStack.popPose();
 

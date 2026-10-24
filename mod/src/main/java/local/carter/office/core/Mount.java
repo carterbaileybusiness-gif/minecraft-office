@@ -63,7 +63,7 @@ public enum Mount {
         double along = off.dot(n);
         Vec3d onPlane = off.sub(n.scale(along - WALL_PLANE));
         return new HologramSpec(s.owner(), s.shape(), s.mode(), s.privacy(), s.displaySlot(), s.windowKey(), s.width(),
-                onPlane.x(), onPlane.y(), onPlane.z(), facingYaw);
+                onPlane.x(), onPlane.y(), onPlane.z(), facingYaw, s.mirrorDisplay());
     }
 
     /**
@@ -79,6 +79,6 @@ public enum Mount {
             case CEILING -> s.offY() + s.height() / 2 - h / 2;
         };
         return new HologramSpec(s.owner(), s.shape(), s.mode(), s.privacy(), s.displaySlot(), s.windowKey(), w, s.offX(), offY,
-                s.offZ(), s.yaw());
+                s.offZ(), s.yaw(), s.mirrorDisplay());
     }
 }

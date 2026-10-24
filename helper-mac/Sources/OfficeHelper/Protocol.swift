@@ -16,6 +16,9 @@ enum OfficeProtocol {
     static let maxControlLength = 64 * 1024
     /// PATCH messages carry at most this many rectangles (more are merged into one).
     static let maxPatchRects = 32
+    /// HELLO / WELCOME `features`: the display map's messages (LIST_DISPLAYS, SET_ORIGINS, IDENTIFY, DISPLAYS and the
+    /// optional `display` keys). Neither side sends any of them unless the other side listed this feature.
+    static let screensFeature = "screens"
 
     static func appendBE(_ data: inout Data, _ value: UInt64, bytes: Int) {
         for shift in stride(from: (bytes - 1) * 8, through: 0, by: -8) { data.append(UInt8((value >> UInt64(shift)) & 0xff)) }
@@ -63,6 +66,9 @@ enum MessageType: UInt8, CaseIterable {
     case workBegin = 22
     /// A live capture's frame rate changes (no stream rebuild): own screens at 60 fps only where the cursor is.
     case rate = 23
+    /// The display map ("screens" feature): list the real monitors and Office displays, move Office displays, show
+    /// a big label on every screen for 3 s.
+    case listDisplays = 24, setOrigins = 25, identify = 26
     // Helper → mod
     case welcome = 64, windows = 65, display = 66, frame = 67, patch = 68, ended = 69, exitZoom = 70, error = 71
     case typingExit = 72, dragDelta = 73, dragEnded = 74
@@ -74,6 +80,9 @@ enum MessageType: UInt8, CaseIterable {
     /// Work mode, walk while dragging (round 3): the movement keys held for Minecraft (WASD, Space, Shift taken from the
     /// app while the mouse button is held), sent whenever that set changes; empty = stop.
     case walk = 80
+    /// The display map ("screens"): every real monitor and Office display, on LIST_DISPLAYS, after SET_ORIGINS, and
+    /// (when HELLO had "screens") on display reconfiguration.
+    case displays = 81
 }
 
 enum ProtocolError: Error, Equatable {
@@ -115,7 +124,11 @@ struct FrameReader {
 
 // MARK: Payloads
 
-struct HelloPayload: Codable, Equatable { var token: String; var version: Int; var mcPid: Int32 }
+struct HelloPayload: Codable, Equatable {
+    var token: String; var version: Int; var mcPid: Int32
+    /// Optional features the mod speaks (`OfficeProtocol.screensFeature`); absent = none (an older mod).
+    var features: [String]? = nil
+}
 struct CreateDisplayPayload: Codable, Equatable { var slot: Int; var w: Int; var h: Int }
 struct SlotPayload: Codable, Equatable { var slot: Int }
 struct SurfacePayload: Codable, Equatable { var surface: Int }
@@ -133,6 +146,8 @@ struct CapturePayload: Codable, Equatable {
     /// Largest captured width in pixels (height follows the aspect ratio).
     var maxW: Int
     var fps: Int
+    /// kind == main only ("screens"): the monitor to mirror (its CGDisplay UUID); absent = the main display.
+    var display: String? = nil
 }
 
 /// Global display coordinates in points, top-left origin (Quartz / CGWindow space).
@@ -141,14 +156,17 @@ struct ZoomInPayload: Codable, Equatable { var surface: Int; var mcWindowFrame: 
 
 /// A point on a virtual display in its pixels (0...w-1, 0...h-1). `button` for POINTER_DOWN / POINTER_UP / CLICK.
 /// Slot 0 is the main display (a Mirror hologram): (x, y) is then a pixel of a `w` × `h` picture of it (both required).
+/// `display` (slot 0 only, "screens"): the monitor the Mirror shows (its CGDisplay UUID); absent = the main display.
 struct PointerPayload: Codable, Equatable {
     var slot: Int; var x: Int; var y: Int; var button: PointerButton?
     var w: Int? = nil; var h: Int? = nil
+    var display: String? = nil
 }
 /// Scroll at a display pixel; dx/dy in pixels of content motion (positive dy = wheel away from you / up). Slot 0: as above.
 struct ScrollPayload: Codable, Equatable {
     var slot: Int; var x: Int; var y: Int; var dx: Int; var dy: Int
     var w: Int? = nil; var h: Int? = nil
+    var display: String? = nil
 }
 /// An installed app: bundle id and display name.
 struct AppInfo: Codable, Equatable { var bundle: String; var name: String }
@@ -167,7 +185,11 @@ struct OpenAppPayload: Codable, Equatable {
 struct SecureInputPayload: Codable, Equatable { var on: Bool }
 /// The real cursor while working: on display `slot` (0 = the main display, 1-4 = virtual displays; -1 = none of them)
 /// at (x, y) of a `w` × `h` grid: the display's pixels for slots 1-4, the main display's points for slot 0.
-struct CursorPayload: Codable, Equatable { var slot: Int; var x: Int; var y: Int; var w: Int; var h: Int }
+/// `display` (slot 0 only, "screens"): the cursor is on that mirrored monitor (its UUID), in that monitor's points.
+struct CursorPayload: Codable, Equatable {
+    var slot: Int; var x: Int; var y: Int; var w: Int; var h: Int
+    var display: String? = nil
+}
 /// Movement keys held for Minecraft: any of forward, back, left, right, jump, sneak (sorted); empty = none.
 struct WalkPayload: Codable, Equatable { var keys: [String] }
 /// How an OPEN_APP went. `target` = its bundle id or url.
@@ -176,7 +198,11 @@ struct ReasonPayload: Codable, Equatable { var reason: String }
 /// Physical mouse motion (points) during a helper-driven drag, for the mod to turn the player's head with.
 struct DeltaPayload: Codable, Equatable { var dx: Int; var dy: Int }
 
-struct WelcomePayload: Codable, Equatable { var version: Int; var screenRecording: Bool; var accessibility: Bool }
+struct WelcomePayload: Codable, Equatable {
+    var version: Int; var screenRecording: Bool; var accessibility: Bool
+    /// Optional features the helper speaks (`OfficeProtocol.screensFeature`); absent = none (an older helper).
+    var features: [String]? = nil
+}
 struct WindowInfo: Codable, Equatable { var windowKey: String; var app: String; var title: String; var w: Int; var h: Int }
 /// `x`, `y`: the display's origin in the arrangement (global points); `side`: "left" or "right" of the main display —
 /// which edge of the laptop screen the cursor crosses to get there (the mod places Extend holograms to match).
@@ -184,6 +210,67 @@ struct DisplayPayload: Codable, Equatable {
     var slot: Int; var displayId: UInt32; var w: Int; var h: Int
     var x: Int? = nil; var y: Int? = nil; var side: String? = nil
 }
+/// One screen in the display arrangement: a real monitor (slot 0) or an Office display (slot 1...4). `id`: its
+/// CGDisplay UUID; `main`: the main display; `name`: a short monitor name (never on Office displays; it never leaves the
+/// owner's computer); x, y, w, h: its bounds in global points (top-left origin).
+struct ScreenInfo: Codable, Equatable {
+    var id: String; var slot: Int; var main: Bool; var name: String? = nil
+    var x: Int; var y: Int; var w: Int; var h: Int
+}
+struct DisplaysPayload: Codable, Equatable { var displays: [ScreenInfo] }
+/// Where an Office display (slot 1...4) goes: its new origin in global points.
+struct SlotOrigin: Codable, Equatable { var slot: Int; var x: Int; var y: Int }
+struct SetOriginsPayload: Codable, Equatable { var origins: [SlotOrigin] }
+/// A big label ("A", "1") to show on the screen whose id is `display`.
+struct IdentifyLabel: Codable, Equatable { var display: String; var label: String }
+struct IdentifyPayload: Codable, Equatable { var labels: [IdentifyLabel] }
+
+/// The "screens" messages' limits, checked by the encoder and the decoder alike (the mod checks the same).
+enum ScreensLimits {
+    static let maxOrigins = 4
+    static let maxLabels = 16
+    static let maxDisplays = 16
+    static let maxIdLength = 64
+
+    /// Lengths count UTF-16 code units, as the Java side does.
+    static func validId(_ id: String) -> Bool { (1...maxIdLength).contains(id.utf16.count) }
+
+    static func check(_ message: Message) throws {
+        switch message {
+        case .setOrigins(let p):
+            guard (1...maxOrigins).contains(p.origins.count) else { throw ProtocolError.badPayload("SET_ORIGINS needs 1...\(maxOrigins) origins") }
+            guard p.origins.allSatisfy({ (1...maxOrigins).contains($0.slot) }) else { throw ProtocolError.badPayload("SET_ORIGINS slots are 1...4") }
+            guard Set(p.origins.map(\.slot)).count == p.origins.count else { throw ProtocolError.badPayload("SET_ORIGINS slots must be unique") }
+        case .identify(let p):
+            guard (1...maxLabels).contains(p.labels.count) else { throw ProtocolError.badPayload("IDENTIFY needs 1...\(maxLabels) labels") }
+            guard p.labels.allSatisfy({ (1...2).contains($0.label.utf16.count) && validId($0.display) }) else {
+                throw ProtocolError.badPayload("IDENTIFY labels are 1...2 characters, display ids 1...\(maxIdLength)")
+            }
+        case .displays(let p):
+            guard p.displays.count <= maxDisplays else { throw ProtocolError.badPayload("DISPLAYS lists at most \(maxDisplays) screens") }
+            guard p.displays.allSatisfy({ (0...4).contains($0.slot) && $0.w > 0 && $0.h > 0 && validId($0.id) }) else {
+                throw ProtocolError.badPayload("DISPLAYS entries need slot 0...4, w and h > 0 and an id of 1...\(maxIdLength)")
+            }
+        case .capture(let p):
+            guard let display = p.display else { return }
+            guard p.kind == .main else { throw ProtocolError.badPayload("display only goes with capture kind main") }
+            guard validId(display) else { throw ProtocolError.badPayload("display ids are 1...\(maxIdLength) characters") }
+        case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p), .workBegin(let p):
+            try slotZero(p.display, slot: p.slot)
+        case .scroll(let p): try slotZero(p.display, slot: p.slot)
+        case .cursor(let p): try slotZero(p.display, slot: p.slot)
+        default: break
+        }
+    }
+
+    /// `display` on pointer, scroll and cursor messages: slot 0 (the Mirror) only.
+    private static func slotZero(_ display: String?, slot: Int) throws {
+        guard let display else { return }
+        guard slot == 0 else { throw ProtocolError.badPayload("display only goes with slot 0") }
+        guard validId(display) else { throw ProtocolError.badPayload("display ids are 1...\(maxIdLength) characters") }
+    }
+}
+
 /// A live capture's new frame rate (1...60).
 struct RatePayload: Codable, Equatable { var surface: Int; var fps: Int }
 struct EndedPayload: Codable, Equatable { var surface: Int; var reason: String }
@@ -260,6 +347,10 @@ enum Message: Equatable {
     case cursor(CursorPayload)
     case walk(WalkPayload)
     case rate(RatePayload)
+    case listDisplays
+    case setOrigins(SetOriginsPayload)
+    case identify(IdentifyPayload)
+    case displays(DisplaysPayload)
 
     var type: MessageType {
         switch self {
@@ -301,6 +392,10 @@ enum Message: Equatable {
         case .cursor: return .cursor
         case .walk: return .walk
         case .rate: return .rate
+        case .listDisplays: return .listDisplays
+        case .setOrigins: return .setOrigins
+        case .identify: return .identify
+        case .displays: return .displays
         }
     }
 
@@ -316,9 +411,13 @@ enum Message: Equatable {
 
     /// The payload bytes (no envelope).
     func payload() throws -> Data {
+        try ScreensLimits.check(self)
         switch self {
         case .hello(let p): return try Self.json(p)
-        case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .listApps: return try Self.json(Empty())
+        case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .listApps, .listDisplays: return try Self.json(Empty())
+        case .setOrigins(let p): return try Self.json(p)
+        case .identify(let p): return try Self.json(p)
+        case .displays(let p): return try Self.json(p)
         case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p), .workBegin(let p): return try Self.json(p)
         case .cursor(let p): return try Self.json(p)
         case .walk(let p): return try Self.json(p)
@@ -399,6 +498,12 @@ enum Message: Equatable {
     }
 
     static func decode(type: MessageType, payload: Data) throws -> Message {
+        let message = try decodeFields(type: type, payload: payload)
+        try ScreensLimits.check(message)
+        return message
+    }
+
+    private static func decodeFields(type: MessageType, payload: Data) throws -> Message {
         switch type {
         case .hello: return .hello(try decodeJSON(HelloPayload.self, payload))
         case .listWindows: return .listWindows
@@ -443,6 +548,10 @@ enum Message: Equatable {
             return .scroll(p)
         case .exitTyping: return .exitTyping
         case .listApps: return .listApps
+        case .listDisplays: return .listDisplays
+        case .setOrigins: return .setOrigins(try decodeJSON(SetOriginsPayload.self, payload))
+        case .identify: return .identify(try decodeJSON(IdentifyPayload.self, payload))
+        case .displays: return .displays(try decodeJSON(DisplaysPayload.self, payload))
         case .appIcons:
             let p = try decodeJSON(AppIconsPayload.self, payload)
             guard (16...256).contains(p.size), p.bundles.count <= 64, p.bundles.allSatisfy(AppRules.isBundleId) else {

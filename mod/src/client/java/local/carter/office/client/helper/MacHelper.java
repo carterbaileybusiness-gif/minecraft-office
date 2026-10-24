@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -60,7 +61,17 @@ import local.carter.office.client.helper.HelperProtocol.Apps;
 import local.carter.office.client.helper.HelperProtocol.Icons;
 import local.carter.office.client.helper.HelperProtocol.ListApps;
 import local.carter.office.client.helper.HelperProtocol.OpenApp;
+import local.carter.office.client.helper.HelperProtocol.Displays;
+import local.carter.office.client.helper.HelperProtocol.Identify;
+import local.carter.office.client.helper.HelperProtocol.IdentifyLabel;
+import local.carter.office.client.helper.HelperProtocol.ListDisplays;
+import local.carter.office.client.helper.HelperProtocol.ScreenInfo;
+import local.carter.office.client.helper.HelperProtocol.SetOrigins;
+import local.carter.office.client.helper.HelperProtocol.SlotOrigin;
 import local.carter.office.client.pointer.PointerPoint;
+import local.carter.office.client.screens.Origin;
+import local.carter.office.client.screens.Screen;
+import local.carter.office.client.screens.ScreenList;
 
 /**
  * The mod's model of the Mac helper session: connection state and permissions (from WELCOME), the virtual displays the
@@ -126,6 +137,12 @@ public final class MacHelper implements HelperConnection.Listener {
 	public @Nullable String displaySide() {
 		return displaySide;
 	}
+
+	/** The display map: the newest DISPLAYS of a "screens" helper, null until one arrived on this connection. */
+	private volatile @Nullable List<Screen> helperScreens;
+	/** What the map shows without a "screens" helper (the Mac platform: SDL's display list). */
+	private volatile Supplier<List<Screen>> fallbackScreens = () -> ScreenList.mainOnly().screens();
+	private final List<Runnable> screensListeners = new CopyOnWriteArrayList<>();
 
 	/** The real cursor while working (CURSOR), the newest one; null when none arrived since work mode began. */
 	private volatile HelperProtocol.@Nullable Cursor cursor;
@@ -261,6 +278,7 @@ public final class MacHelper implements HelperConnection.Listener {
 		boolean was = connected;
 		connected = false;
 		welcome = null;
+		helperScreens = null;
 		bySurface.clear();
 		if (was) {
 			for (MacHelperSource s : attached) {
@@ -268,6 +286,7 @@ public final class MacHelper implements HelperConnection.Listener {
 			}
 		}
 		fireStatus();
+		fireScreens();
 	}
 
 	/** Reconnect from scratch (the helper quits and is relaunched): picks up newly granted permissions. */
@@ -396,24 +415,136 @@ public final class MacHelper implements HelperConnection.Listener {
 		return p.onMain() ? p.h() : null;
 	}
 
+	/** A Mirror point's monitor as the helper should map it: the chosen one while listed, else null (the main display). */
+	private @Nullable String display(final PointerPoint p) {
+		return p.onMain() ? resolveMirror(p.display()) : null;
+	}
+
 	public boolean pointerDown(final PointerPoint p) {
-		return send(new PointerDown(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p)));
+		return send(new PointerDown(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p), display(p)));
 	}
 
 	public boolean pointerMove(final PointerPoint p) {
-		return send(new PointerMove(p.slot(), p.x(), p.y(), w(p), h(p)));
+		return send(new PointerMove(p.slot(), p.x(), p.y(), w(p), h(p), display(p)));
 	}
 
 	public boolean pointerUp(final PointerPoint p) {
-		return send(new PointerUp(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p)));
+		return send(new PointerUp(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p), display(p)));
 	}
 
 	public boolean click(final PointerPoint p, final PointerButton button) {
-		return send(new Click(p.slot(), p.x(), p.y(), button, w(p), h(p)));
+		return send(new Click(p.slot(), p.x(), p.y(), button, w(p), h(p), display(p)));
 	}
 
 	public boolean scroll(final PointerPoint p, final int dx, final int dy) {
-		return send(new Scroll(p.slot(), p.x(), p.y(), dx, dy, w(p), h(p)));
+		return send(new Scroll(p.slot(), p.x(), p.y(), dx, dy, w(p), h(p), display(p)));
+	}
+
+	// ---------------------------------------------------------------- the display map
+
+	/**
+	 * Whether the connected helper knows the display map (WELCOME announced "screens"). Without it the mod never sends
+	 * LIST_DISPLAYS / SET_ORIGINS / IDENTIFY or a {@code display} key: an older helper would close the connection.
+	 */
+	public boolean supportsScreens() {
+		Welcome w = welcome;
+		return connected && w != null && w.has(HelperProtocol.FEATURE_SCREENS);
+	}
+
+	/**
+	 * Whether a Mirror of {@code wanted} must wait before it captures: a "screens" helper whose first DISPLAYS since
+	 * connecting hasn't come yet can't tell whether that monitor is plugged in, and capturing the main display meanwhile
+	 * would flash it on a Public Mirror meant to show another monitor. Never for the main display or an older helper.
+	 */
+	public boolean mirrorWaitsForScreens(final @Nullable String wanted) {
+		return wanted != null && supportsScreens() && helperScreens == null;
+	}
+
+	/** What {@link #screens} shows without a "screens" helper (called on the thread that asks for the screens). */
+	public void setFallbackScreens(final Supplier<List<Screen>> fallback) {
+		fallbackScreens = fallback;
+	}
+
+	/**
+	 * The player's screens: the helper's DISPLAYS (everything possible) when it has the display map, else the fallback
+	 * list with every ability greyed and the reason as hint.
+	 */
+	public ScreenList screens() {
+		List<Screen> live = helperScreens;
+		if (supportsScreens() && live != null) {
+			return new ScreenList(live, ScreenList.Abilities.ALL);
+		}
+		String hint = supportsScreens() ? null : connected ? ScreenList.UPDATE_HELPER_HINT : ScreenList.NO_HELPER_HINT;
+		return new ScreenList(fallbackScreens.get(), new ScreenList.Abilities(false, false, false, false, hint));
+	}
+
+	/** Asks a "screens" helper for a fresh DISPLAYS (nothing for an older one). */
+	public void listDisplays() {
+		if (supportsScreens()) {
+			send(new ListDisplays());
+		}
+	}
+
+	/** Moves Office displays (one configuration); false when this helper can't or the list breaks the rules. */
+	public boolean setOrigins(final List<Origin> origins) {
+		if (!supportsScreens()) {
+			return false;
+		}
+		List<SlotOrigin> list = new ArrayList<>();
+		for (Origin o : origins) {
+			list.add(new SlotOrigin(o.slot(), o.x(), o.y()));
+		}
+		SetOrigins m = new SetOrigins(list);
+		if (HelperProtocol.screensProblem(m) != null) {
+			LOGGER.warn("Office: not moving displays {}: {}", origins, HelperProtocol.screensProblem(m));
+			return false;
+		}
+		return send(m);
+	}
+
+	/** Shows each label (monitor id or Office display id → "A", "1") on its screen for 3 s; false when not possible. */
+	public boolean identify(final Map<String, String> labelsById) {
+		if (!supportsScreens()) {
+			return false;
+		}
+		List<IdentifyLabel> labels = new ArrayList<>();
+		for (Map.Entry<String, String> e : labelsById.entrySet()) {
+			if (labels.size() < HelperProtocol.MAX_IDENTIFY_LABELS) {
+				labels.add(new IdentifyLabel(e.getKey(), e.getValue()));
+			}
+		}
+		Identify m = new Identify(labels);
+		return HelperProtocol.screensProblem(m) == null && send(m);
+	}
+
+	/**
+	 * The monitor a Mirror that wants {@code wanted} copies right now: that id while a "screens" helper lists it as a
+	 * monitor other than the main one, else null (the main display; always null for an older helper).
+	 */
+	public @Nullable String resolveMirror(final @Nullable String wanted) {
+		if (wanted == null || helperScreens == null || !supportsScreens()) {
+			return null;
+		}
+		return screens().resolveMirror(wanted);
+	}
+
+	/** Called on the client thread whenever {@link #screens} may have changed (DISPLAYS, connect, disconnect). */
+	public void onScreensChanged(final Runnable r) {
+		screensListeners.add(r);
+	}
+
+	private void fireScreens() {
+		for (Runnable r : screensListeners) {
+			clientThread.execute(r);
+		}
+	}
+
+	private static List<Screen> screensOf(final Displays d) {
+		List<Screen> out = new ArrayList<>();
+		for (ScreenInfo i : d.displays()) {
+			out.add(new Screen(i.id(), i.slot(), i.main(), i.name(), i.x(), i.y(), i.w(), i.h()));
+		}
+		return List.copyOf(out);
 	}
 
 	// ---------------------------------------------------------------- the mini Dock (spec 5.10)
@@ -466,12 +597,18 @@ public final class MacHelper implements HelperConnection.Listener {
 	/** Work mode at this point (spec 5.10 round 2): the helper puts the real cursor there and hands it the real mouse. */
 	public boolean workBegin(final PointerPoint p, final PointerButton button) {
 		cursor = null;
-		return send(new HelperProtocol.WorkBegin(p.slot(), p.x(), p.y(), button, w(p), h(p)));
+		return send(new HelperProtocol.WorkBegin(p.slot(), p.x(), p.y(), button, w(p), h(p), display(p)));
 	}
 
 	/** Where the real cursor is while working, or null. */
 	public HelperProtocol.@Nullable Cursor cursor() {
 		return cursor;
+	}
+
+	/** The monitor the working cursor is on when it is a slot-0 monitor other than the main one ("screens" helpers), or null. */
+	public @Nullable String workCursorDisplay() {
+		HelperProtocol.Cursor c = cursor;
+		return c == null ? null : c.display();
 	}
 
 	/** Called on the client thread when secure input goes on / off while typing (and off when the helper is gone). */
@@ -563,6 +700,7 @@ public final class MacHelper implements HelperConnection.Listener {
 			displays = List.copyOf(wanted.entrySet());
 		}
 		welcome = w;
+		helperScreens = null;
 		permissionDenied = false;
 		connected = true;
 		iconsAsked.clear(); // a new helper: ask again for what the Dock needs
@@ -570,10 +708,14 @@ public final class MacHelper implements HelperConnection.Listener {
 			send(new CreateDisplay(e.getKey(), e.getValue().w(), e.getValue().h()));
 		}
 		send(new ListApps()); // for the Dock: which of its apps are installed, and the "All apps" search
+		if (w.has(HelperProtocol.FEATURE_SCREENS)) {
+			send(new ListDisplays()); // the display map (and where a Mirror's chosen monitor is)
+		}
 		for (MacHelperSource s : attached) {
 			s.helperConnected();
 		}
 		fireStatus();
+		fireScreens();
 	}
 
 	@Override
@@ -656,6 +798,13 @@ public final class MacHelper implements HelperConnection.Listener {
 				}
 			}
 			case HelperProtocol.Cursor c -> cursor = c;
+			case Displays d -> {
+				helperScreens = screensOf(d);
+				for (MacHelperSource s : attached) {
+					s.screensChanged(); // a Mirror's chosen monitor came or went
+				}
+				fireScreens();
+			}
 			case HelperProtocol.Walk w -> {
 				java.util.Set<String> keys = java.util.Set.copyOf(w.keys());
 				for (Consumer<java.util.Set<String>> l : walkListeners) {
@@ -714,11 +863,13 @@ public final class MacHelper implements HelperConnection.Listener {
 		synchronized (this) {
 			online.clear();
 		}
+		helperScreens = null;
 		bySurface.clear();
 		for (MacHelperSource s : attached) {
 			s.helperDisconnected();
 		}
 		fireStatus();
+		fireScreens();
 	}
 
 	private void fireStatus() {

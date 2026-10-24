@@ -30,7 +30,7 @@ public final class CornerDrag {
 	public record Result(double width, double offX, double offY, double offZ) {
 		public HologramSpec apply(final HologramSpec s) {
 			return new HologramSpec(s.owner(), s.shape(), s.mode(), s.privacy(), s.displaySlot(), s.windowKey(), width, offX, offY,
-					offZ, s.yaw());
+					offZ, s.yaw(), s.mirrorDisplay());
 		}
 	}
 

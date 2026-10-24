@@ -406,6 +406,83 @@ public class HologramGameTests {
 		h.succeed();
 	}
 
+	/** An outdated copy of the handbook (same title, other pages). */
+	private static ItemStack outdatedHandbook() {
+		ItemStack old = StarterKit.handbook();
+		WrittenBookContent fresh = old.get(DataComponents.WRITTEN_BOOK_CONTENT);
+		old.set(DataComponents.WRITTEN_BOOK_CONTENT, new WrittenBookContent(fresh.title(), fresh.author(), 0,
+				List.of(Filterable.passThrough(Component.literal("Wand: craft runes at the Spell Binding Table."))), true));
+		return old;
+	}
+
+	/** The Settings page points at the screen map; no page overflows a written-book page (14 lines of about 19 chars). */
+	@GameTest
+	public void handbookSettingsMentionsIdentify(GameTestHelper h) {
+		h.assertTrue(StarterKit.pageBody("Settings").contains("Identify"), "the Settings page mentions Identify");
+		for (String title : StarterKit.pageTitles()) {
+			int lines = bookLines(StarterKit.pageBody(title));
+			h.assertTrue(lines <= 14, "handbook page " + title + " needs " + lines + " lines (max 14)");
+		}
+		h.succeed();
+	}
+
+	/** Greedy word wrap at 19 characters a line, about what a written-book line holds. */
+	private static int bookLines(String body) {
+		int lines = 0;
+		for (String para : body.split("\n", -1)) {
+			int used = 0;
+			lines++;
+			for (String word : para.split(" ")) {
+				int need = used == 0 ? word.length() : used + 1 + word.length();
+				if (need > 19 && used > 0) {
+					lines++;
+					used = word.length();
+				} else {
+					used = need;
+				}
+			}
+		}
+		return lines;
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void joinReplacesOutdatedHandbooksAndSaysSo(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			a.getInventory().setItem(7, outdatedHandbook());
+			a.setItemInHand(InteractionHand.OFF_HAND, outdatedHandbook());
+			h.assertTrue(StarterKit.refreshOnJoin(a), "replaced outdated copies and said so");
+			List<Filterable<Component>> current = StarterKit.handbook().get(DataComponents.WRITTEN_BOOK_CONTENT).pages();
+			h.assertTrue(a.getInventory().getItem(7).get(DataComponents.WRITTEN_BOOK_CONTENT).pages().equals(current), "slot 7 current");
+			h.assertTrue(a.getOffhandItem().get(DataComponents.WRITTEN_BOOK_CONTENT).pages().equals(current),
+					"off hand current");
+			h.assertValueEqual(countHandbooks(a), 2, "still two handbooks");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void joinWithCurrentOrNoHandbookIsSilent(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			a.getInventory().setItem(7, StarterKit.handbook());
+			h.assertFalse(StarterKit.refreshOnJoin(a), "current copy: silent");
+			h.assertValueEqual(countHandbooks(a), 1, "still one handbook");
+			clearHandbooks(a);
+			h.assertFalse(StarterKit.refreshOnJoin(a), "no handbook: silent");
+			h.assertValueEqual(countHandbooks(a), 0, "never gives a copy on join");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
 	@GameTest
 	public void handbookIsAboutGrimoireNotWizards(GameTestHelper h) {
 		StringBuilder text = new StringBuilder();
@@ -460,6 +537,143 @@ public class HologramGameTests {
 		h.assertBlockNotPresent(OfficeBlocks.HOLOGRAM_EMITTER, rel);
 		h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), before + 1, "emitter returned to owner");
 		h.assertItemEntityNotPresent(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, rel, 3.0);
+		h.succeed();
+	}
+
+	private static final String LG = "9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D";
+
+	/** The spec's {@code mirrorDisplay} as the update tag (what clients receive) carries it, or null. */
+	private static String syncedMirrorDisplay(GameTestHelper h, HologramBlockEntity be) {
+		CompoundTag spec = be.getUpdateTag(h.getLevel().registryAccess()).getCompound("spec").orElseThrow();
+		return spec.getString("mirrorDisplay").orElse(null);
+	}
+
+	@GameTest
+	public void setMirrorDisplayStoresIt(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		ServerPlayer b = survivalPlayer(h, new BlockPos(2, 0, 5));
+		HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
+		BlockPos abs = be.getBlockPos();
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(abs, LG)), "owner sets the monitor");
+		h.assertValueEqual(be.spec().mirrorDisplay(), LG, "stored");
+		h.assertValueEqual(syncedMirrorDisplay(h, be), LG, "synced in the update tag");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(abs, null)), "owner clears it");
+		h.assertTrue(be.spec().mirrorDisplay() == null, "null = the main display");
+		h.assertTrue(syncedMirrorDisplay(h, be) == null, "no key when null");
+		h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(abs, "x".repeat(65))), "65 characters refused");
+		h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(abs, "LG\nUUID")), "control character refused");
+		h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(abs, "")), "empty refused");
+		h.assertFalse(HologramActions.apply(b, new OfficePayloads.SetMirrorDisplay(abs, LG)), "non-owner refused");
+		h.assertTrue(be.spec().mirrorDisplay() == null, "nothing changed");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(abs, "\\\\.\\DISPLAY2")), "a Windows device name");
+		h.succeed();
+	}
+
+	@GameTest
+	public void updateAndMoveKeepMirrorDisplay(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
+		BlockPos abs = be.getBlockPos();
+		HologramSpec s = be.spec();
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(abs, s.shape(), Mode.MIRROR, Privacy.PRIVATE, 1, null)),
+				"becomes a Mirror");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(abs, LG)), "picks LG");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(abs, Shape.TALL_9_16, Mode.MIRROR, Privacy.PUBLIC, 1, null)),
+				"shape and privacy change");
+		h.assertValueEqual(be.spec().mirrorDisplay(), LG, "kept by UpdateHologram");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.MoveHologram(abs, 0.5, 2.0, -1.0, 45f)), "move");
+		h.assertValueEqual(be.spec().mirrorDisplay(), LG, "kept by MoveHologram");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.ResizeHologram(abs, 4.0)), "resize");
+		h.assertValueEqual(be.spec().mirrorDisplay(), LG, "kept by ResizeHologram");
+		h.succeed();
+	}
+
+	@GameTest
+	public void mirrorDisplaySurvivesSaveLoad(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetMirrorDisplay(be.getBlockPos(), LG)), "picks LG");
+		CompoundTag tag = be.saveCustomOnly(h.getLevel().registryAccess());
+		HologramBlockEntity copy = new HologramBlockEntity(be.getBlockPos(), be.getBlockState());
+		copy.loadCustomOnly(net.minecraft.world.level.storage.TagValueInput.create(
+				net.minecraft.util.ProblemReporter.DISCARDING, h.getLevel().registryAccess(), tag));
+		h.assertValueEqual(copy.spec().mirrorDisplay(), LG, "read back");
+		h.assertValueEqual(copy.spec(), be.spec(), "whole spec round-trips");
+		h.succeed();
+	}
+
+	private static boolean setPrivacy(ServerPlayer owner, HologramBlockEntity be, Privacy privacy) {
+		HologramSpec s = be.spec();
+		return HologramActions.apply(owner, new OfficePayloads.UpdateHologram(be.getBlockPos(), s.shape(), Mode.EXTEND, privacy, 1, null));
+	}
+
+	private static OfficePayloads.IdentifyHolograms identifyOne(HologramBlockEntity be, String label) {
+		return new OfficePayloads.IdentifyHolograms(List.of(new OfficePayloads.HologramLabel(be.getBlockPos(), label)));
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void identifyRelaysToViewersWhoMaySee(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		ServerPlayer v1 = h.makeMockServerPlayerInLevel();
+		ServerPlayer v2 = h.makeMockServerPlayerInLevel();
+		java.util.Map<UUID, List<OfficePayloads.HologramLabel>> got = new java.util.concurrent.ConcurrentHashMap<>();
+		AtomicLong now = new AtomicLong(5_000_000);
+		HologramActions.setClock(now::get);
+		HologramActions.setIdentifyBroadcast((viewer, labels) -> got.put(viewer.getUUID(), labels));
+		try {
+			HologramBlockEntity be = place(h, a, new BlockPos(1, 1, 1));
+			h.assertTrue(setPrivacy(a, be, Privacy.PUBLIC), "Public Extend");
+			h.assertTrue(HologramActions.apply(a, identifyOne(be, "1")), "Identify accepted");
+			List<OfficePayloads.HologramLabel> want = List.of(new OfficePayloads.HologramLabel(be.getBlockPos(), "1"));
+			h.assertValueEqual(got.get(v1.getUUID()), want, "Public: viewer 1 sees it");
+			h.assertValueEqual(got.get(v2.getUUID()), want, "Public: viewer 2 sees it");
+			h.assertFalse(got.containsKey(a.getUUID()), "the owner's client draws its own");
+
+			got.clear();
+			now.addAndGet(HologramActions.IDENTIFY_MIN_INTERVAL_MS);
+			h.assertTrue(setPrivacy(a, be, Privacy.PRIVATE), "Private");
+			h.assertTrue(HologramActions.apply(a, identifyOne(be, "1")), "accepted (the owner still sees their own)");
+			h.assertFalse(got.containsKey(v1.getUUID()) || got.containsKey(v2.getUUID()), "Private: nobody else");
+
+			got.clear();
+			now.addAndGet(HologramActions.IDENTIFY_MIN_INTERVAL_MS);
+			h.assertTrue(setPrivacy(a, be, new Privacy(Privacy.Level.SHOW_TO, java.util.Set.of(v1.getUUID()))), "Show to viewer 1");
+			h.assertTrue(HologramActions.apply(a, identifyOne(be, "1")), "accepted");
+			h.assertValueEqual(got.get(v1.getUUID()), want, "viewer 1 may see it");
+			h.assertFalse(got.containsKey(v2.getUUID()), "viewer 2 may not");
+		} finally {
+			HologramActions.setIdentifyBroadcast(null);
+			HologramActions.setClock(null);
+			h.getLevel().getServer().getPlayerList().remove(v1);
+			h.getLevel().getServer().getPlayerList().remove(v2);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	public void identifyRejectsBadInput(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		ServerPlayer b = survivalPlayer(h, new BlockPos(3, 0, 5));
+		AtomicLong now = new AtomicLong(9_000_000);
+		HologramActions.setClock(now::get);
+		HologramActions.setIdentifyBroadcast((viewer, labels) -> {});
+		try {
+			HologramBlockEntity mine = place(h, a, new BlockPos(1, 1, 1));
+			HologramBlockEntity theirs = place(h, b, new BlockPos(3, 1, 1));
+			for (String bad : new String[] {"AB", "LG", "5", "", "a"}) {
+				h.assertFalse(HologramActions.apply(a, identifyOne(mine, bad)), "label '" + bad + "' dropped");
+			}
+			h.assertFalse(HologramActions.apply(a, identifyOne(theirs, "1")), "someone else's hologram dropped");
+			h.assertTrue(HologramActions.apply(a, identifyOne(mine, "B")), "a letter on my own hologram");
+			now.addAndGet(HologramActions.IDENTIFY_MIN_INTERVAL_MS - 1);
+			h.assertFalse(HologramActions.apply(a, identifyOne(mine, "B")), "a second Identify within 1000 ms ignored");
+			now.addAndGet(1);
+			h.assertTrue(HologramActions.apply(a, identifyOne(mine, "2")), "a second later it works again");
+		} finally {
+			HologramActions.setIdentifyBroadcast(null);
+			HologramActions.setClock(null);
+		}
 		h.succeed();
 	}
 

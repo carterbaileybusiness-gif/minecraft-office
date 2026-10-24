@@ -95,6 +95,101 @@ class HelperProtocolTest {
         assertEquals(64 * 1024 * 1024, HelperProtocol.MAX_FRAME_LENGTH);
         assertEquals(64 * 1024, HelperProtocol.MAX_CONTROL_LENGTH);
         assertEquals(32, HelperProtocol.MAX_PATCH_RECTS);
+        assertEquals(24, HelperProtocol.LIST_DISPLAYS);
+        assertEquals(25, HelperProtocol.SET_ORIGINS);
+        assertEquals(26, HelperProtocol.IDENTIFY);
+        assertEquals(81, HelperProtocol.DISPLAYS);
+        assertEquals("screens", HelperProtocol.FEATURE_SCREENS);
+    }
+
+    // ---- the display map ("screens" feature) ----
+
+    private static final String MAIN_ID = "37D8832A-2D66-02CA-B9F7-8F30A301B230";
+    private static final String LG_ID = "9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D";
+    private static final String OFFICE_ID = "5A1E0F00-0000-4000-8000-0000000000A1";
+
+    @Test
+    void screensMessages() throws IOException {
+        checkModMessage("hello_features", new Hello(TOKEN, 1, 4242, List.of("screens")));
+        check("welcome_features", new Welcome(1, true, true, List.of("screens")));
+        checkModMessage("list_displays", new ListDisplays());
+        check("displays", new Displays(List.of(
+                new ScreenInfo(MAIN_ID, 0, true, "MacBook", 0, 0, 1440, 900),
+                new ScreenInfo(LG_ID, 0, false, "LG", -1920, -180, 1920, 1080),
+                new ScreenInfo(OFFICE_ID, 1, false, null, 1440, 0, 1920, 1080))));
+        checkModMessage("set_origins", new SetOrigins(List.of(new SlotOrigin(1, 1440, -180))));
+        checkModMessage("identify", new Identify(List.of(new IdentifyLabel(MAIN_ID, "A"), new IdentifyLabel(LG_ID, "B"),
+                new IdentifyLabel(OFFICE_ID, "1"))));
+        checkModMessage("capture_monitor", new Capture(9, CaptureKind.MAIN, null, null, 1920, 5, LG_ID));
+        checkModMessage("work_begin_monitor", new WorkBegin(0, 960, 540, PointerButton.LEFT, 1920, 1080, LG_ID));
+        check("cursor_monitor", new Cursor(0, 100, 200, 1920, 1080, LG_ID));
+        assertTrue(new Welcome(1, true, true, List.of("screens")).has(HelperProtocol.FEATURE_SCREENS));
+    }
+
+    @Test
+    void featuresAreOptional() throws IOException {
+        byte[] hello = fixture("hello");
+        FrameReader r = FrameReader.forModMessages();
+        r.push(hello, 0, hello.length);
+        assertNull(((Hello) r.next()).features());
+        byte[] welcome = fixture("welcome");
+        FrameReader r2 = FrameReader.forHelperMessages();
+        r2.push(welcome, 0, welcome.length);
+        Welcome w = (Welcome) r2.next();
+        assertNull(w.features());
+        assertFalse(w.has("screens"));
+        assertFalse(new Welcome(1, true, true, List.of()).has("screens"));
+    }
+
+    @Test
+    void screensRulesMatchTheHelper() {
+        Message[] bad = {
+            new SetOrigins(List.of()),
+            new SetOrigins(List.of(new SlotOrigin(1, 0, 0), new SlotOrigin(2, 0, 0), new SlotOrigin(3, 0, 0),
+                    new SlotOrigin(4, 0, 0), new SlotOrigin(1, 9, 9))),
+            new SetOrigins(List.of(new SlotOrigin(2, 0, 0), new SlotOrigin(2, 5, 5))),
+            new SetOrigins(List.of(new SlotOrigin(5, 0, 0))),
+            new Identify(List.of(new IdentifyLabel(LG_ID, "ABC"))),
+            new Identify(java.util.Collections.nCopies(17, new IdentifyLabel(LG_ID, "A"))),
+            new Identify(List.of()),
+            new Identify(List.of(new IdentifyLabel("x".repeat(65), "A"))),
+            new Capture(7, CaptureKind.DISPLAY, 1, null, 1280, 5, LG_ID),
+            new PointerMove(1, 10, 20, null, null, LG_ID),
+            new Cursor(1, 1, 2, 1920, 1080, LG_ID),
+            new Displays(List.of(new ScreenInfo(LG_ID, 5, false, null, 0, 0, 10, 10))),
+            new Displays(List.of(new ScreenInfo(LG_ID, 0, false, null, 0, 0, 0, 10))),
+            new Displays(List.of(new ScreenInfo("", 0, true, null, 0, 0, 10, 10))),
+            new Displays(java.util.Collections.nCopies(17, new ScreenInfo(LG_ID, 0, false, null, 0, 0, 10, 10))),
+        };
+        for (Message m : bad) {
+            assertNotNull(HelperProtocol.screensProblem(m), m.toString());
+            assertThrows(HelperProtocol.ProtocolException.class, () -> HelperProtocol.encode(m), m.toString());
+        }
+        // The same rules on the wire (the helper's side of the same check).
+        String[][] raw = {
+            {"25", "{\"origins\":[]}"},
+            {"25", "{\"origins\":[{\"slot\":5,\"x\":0,\"y\":0}]}"},
+            {"25", "{\"origins\":[{\"slot\":1,\"x\":0,\"y\":0},{\"slot\":1,\"x\":2,\"y\":0}]}"},
+            {"26", "{\"labels\":[{\"display\":\"" + LG_ID + "\",\"label\":\"ABC\"}]}"},
+            {"5", "{\"display\":\"" + LG_ID + "\",\"fps\":5,\"kind\":\"display\",\"maxW\":1280,\"slot\":1,\"surface\":7}"},
+            {"12", "{\"display\":\"" + LG_ID + "\",\"slot\":1,\"x\":10,\"y\":20}"},
+        };
+        for (String[] c : raw) {
+            byte[] bytes = envelope(Integer.parseInt(c[0]), c[1]);
+            FrameReader r = FrameReader.forModMessages();
+            r.push(bytes, 0, bytes.length);
+            assertThrows(HelperProtocol.ProtocolException.class, r::next, c[1]);
+        }
+        byte[] zeroHeight = envelope(HelperProtocol.DISPLAYS, "{\"displays\":[{\"h\":0,\"id\":\"a\",\"main\":true,\"slot\":0,\"w\":5,\"x\":0,\"y\":0}]}");
+        FrameReader r = FrameReader.forHelperMessages();
+        r.push(zeroHeight, 0, zeroHeight.length);
+        assertThrows(HelperProtocol.ProtocolException.class, r::next);
+        // Fine: every slot once, a two-character label, a slot-0 display.
+        assertNull(HelperProtocol.screensProblem(new SetOrigins(List.of(new SlotOrigin(1, 0, 0), new SlotOrigin(2, 0, 0),
+                new SlotOrigin(3, 0, 0), new SlotOrigin(4, 0, 0)))));
+        assertNull(HelperProtocol.screensProblem(new Identify(List.of(new IdentifyLabel(LG_ID, "12")))));
+        assertNull(HelperProtocol.screensProblem(new PointerMove(0, 1, 2, 1920, 1080, LG_ID)));
+        assertNull(HelperProtocol.screensProblem(new Displays(List.of())));
     }
 
     // ---- mod -> helper fixtures ----
@@ -315,9 +410,10 @@ class HelperProtocolTest {
     @Test
     void everyFixtureDecodesAndReencodes() throws IOException {
         List<byte[]> all = allFixtures();
-        // one per message type (38), a second and third CAPTURE, a DISPLAY with its side (window, main), Mirror (slot 0) POINTER_DOWN / CLICK /
-        // SCROLL, and OPEN_APP of a web page
-        assertEquals(45, all.size());
+        // one per message type (42), a second, third and fourth CAPTURE (window, main, a chosen monitor), a DISPLAY with
+        // its side, Mirror (slot 0) POINTER_DOWN / CLICK / SCROLL, OPEN_APP of a web page, HELLO / WELCOME with features,
+        // and WORK_BEGIN / CURSOR on a chosen monitor
+        assertEquals(54, all.size());
         for (byte[] bytes : all) {
             FrameReader reader = FrameReader.forHelperMessages();
             reader.push(bytes, 0, bytes.length);
@@ -434,7 +530,7 @@ class HelperProtocolTest {
 
     @Test
     void unknownTypeRejected() {
-        for (int type : new int[] {0, 17, 18, 24, 63, 81, 255}) { // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK
+        for (int type : new int[] {0, 17, 18, 27, 63, 82, 255}) { // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK
             FrameReader reader = FrameReader.forHelperMessages();
             byte[] bytes = envelope(type, "{}");
             reader.push(bytes, 0, bytes.length);

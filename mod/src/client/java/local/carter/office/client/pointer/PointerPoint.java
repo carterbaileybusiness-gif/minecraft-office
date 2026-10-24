@@ -13,12 +13,18 @@ import local.carter.office.core.Mode;
  * picture. On an Extend hologram the picture is the whole virtual display {@code slot} at its native size ({@code
  * Shape} pixels). On a Mirror hologram (spec 5.10) it is the main display, slot {@link HelperProtocol#MAIN_SLOT}: the
  * hologram shows the whole screen stretched onto its shape, so (u, v) of the hit is the same share of the screen; the
- * helper maps the pixel onto the main display's bounds in points by proportion (Retina safe).
+ * helper maps the pixel onto the main display's bounds in points by proportion (Retina safe). {@code display}: the
+ * monitor a Mirror copies instead of the main one (its spec's {@code mirrorDisplay}; the helper side resolves it).
  */
-public record PointerPoint(int slot, int x, int y, int w, int h) {
+public record PointerPoint(int slot, int x, int y, int w, int h, @Nullable String display) {
 	/** A pixel of virtual display {@code slot} (its size is the helper's to know). */
 	public PointerPoint(final int slot, final int x, final int y) {
-		this(slot, x, y, 0, 0);
+		this(slot, x, y, 0, 0, null);
+	}
+
+	/** A pixel of a {@code w} x {@code h} picture of the main display. */
+	public PointerPoint(final int slot, final int x, final int y, final int w, final int h) {
+		this(slot, x, y, w, h, null);
 	}
 
 	/** On the Mirror's main display. */
@@ -40,13 +46,13 @@ public record PointerPoint(int slot, int x, int y, int w, int h) {
 		int[] px = HologramGeometry.toPixel(hit, pw, ph);
 		return switch (spec.mode()) {
 			case EXTEND -> new PointerPoint(spec.displaySlot(), px[0], px[1]);
-			case MIRROR -> new PointerPoint(HelperProtocol.MAIN_SLOT, px[0], px[1], pw, ph);
+			case MIRROR -> new PointerPoint(HelperProtocol.MAIN_SLOT, px[0], px[1], pw, ph, spec.mirrorDisplay());
 			case WINDOW -> null;
 		};
 	}
 
 	/** On the same display and within {@code pixels} of {@code other}. */
 	public boolean near(final PointerPoint other, final int pixels) {
-		return slot == other.slot && Math.hypot(x - other.x, y - other.y) <= pixels;
+		return slot == other.slot && java.util.Objects.equals(display, other.display) && Math.hypot(x - other.x, y - other.y) <= pixels;
 	}
 }

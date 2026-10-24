@@ -42,6 +42,20 @@ class WorkCursorTest {
 	}
 
 	@Test
+	void aMirrorOfAnotherMonitorDrawsTheCursorOnThatMonitorOnly() {
+		HologramSpec lgMirror = spec(Mode.MIRROR, 1).withMirrorDisplay("LG");
+		HologramSpec mainMirror = spec(Mode.MIRROR, 1);
+		int[] cursor = {0, 960, 540, 1920, 1080};
+		assertArrayEquals(new double[] {960.5 / 1920, 540.5 / 1080}, WorkCursor.on(lgMirror, cursor, "LG", "LG"), 1e-12);
+		assertNull(WorkCursor.on(mainMirror, cursor, "LG", null), "the cursor is on LG, not the main display");
+		assertNull(WorkCursor.on(lgMirror, cursor, null, "LG"), "on the main display: not drawn on the LG Mirror");
+		assertArrayEquals(new double[] {960.5 / 1920, 540.5 / 1080}, WorkCursor.on(mainMirror, cursor, null, null), 1e-12,
+				"no display: the main Mirror");
+		assertArrayEquals(new double[] {960.5 / 1920, 540.5 / 1080}, WorkCursor.on(lgMirror, cursor, null, null), 1e-12,
+				"LG unplugged: that Mirror shows the main display, so it draws the main display's cursor");
+	}
+
+	@Test
 	void noCursorWhenItIsElsewhereOrUnknown() {
 		assertNull(WorkCursor.on(spec(Mode.MIRROR, 1), null));
 		assertNull(WorkCursor.on(spec(Mode.MIRROR, 1), new int[] {-1, 0, 0, 0, 0}), "on another monitor");
