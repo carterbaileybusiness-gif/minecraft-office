@@ -4,13 +4,18 @@ import java.util.List;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.ProjectileSpec;
+import local.carter.office.magic.spell.Projectiles;
+import local.carter.office.magic.spell.shadow.BlackHole;
 import local.carter.office.magic.spell.shadow.BlackHoleGeometry;
 import local.carter.office.magic.spell.shadow.BlackHoleGeometry.Cell;
 import local.carter.office.magic.spell.shadow.WellGeometry;
 import local.carter.office.magic.terrain.WorldTerrainEdits;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -21,9 +26,13 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
  * Black Hole, the Shadow ultimate. A gate circle opens before the caster and a sigil the size of the crater-to-be lights the
@@ -104,8 +113,35 @@ public final class BlackHoleFx implements SpellFx {
 				}
 			} else if (t == life) {
 				burst(kit, level, centre, cap, ground);
+				forks(e, kit, level, centre);
 			}
 		});
+	}
+
+	/** The collapse's forks: Supernova's wider blast, Dark Rain's bolts flying out (as the server flies them). */
+	private static void forks(FxEvent e, FxKit kit, ClientLevel level, Vec3 centre) {
+		SpellRank rank = e.spellRank();
+		if (rank.is(BlackHole.SUPERNOVA)) {
+			RankFx.shockRing(kit, level, centre, BlackHole.blastRadius(rank), 10, ShadowFx.MAGENTA, ParticleTypes.REVERSE_PORTAL);
+			RankFx.blast(kit, level, centre, BlackHole.blastRadius(rank) * 0.6, ShadowFx.PALE, ParticleTypes.SQUID_INK);
+		}
+		if (!rank.is(BlackHole.DARK_RAIN)) return;
+		for (ProjectileSpec s : BlackHole.rain(centre, e.seed())) {
+			boolean[] done = {false};
+			kit.simulate(1, s.maxTicks(), t -> {
+				if (done[0]) return;
+				Vec3 from = Projectiles.step(s, t);
+				Vec3 to = Projectiles.step(s, t + 1);
+				BlockHitResult hit = level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
+				Vec3 end = hit.getType() == HitResult.Type.MISS ? to : hit.getLocation();
+				kit.motes(end, t % 2 == 0 ? ShadowFx.VIOLET : ShadowFx.MAGENTA, 2, 0.08, Vec3.ZERO, 0.01, GlowMote.Drift.SINK, 0.2F, 5);
+				kit.trail(from, end, ParticleTypes.SMOKE, 2);
+				if (hit.getType() != HitResult.Type.MISS) {
+					done[0] = true;
+					kit.burst(end, ParticleTypes.REVERSE_PORTAL, 10, 0.2);
+				}
+			});
+		}
 	}
 
 	/** Tears loose (as ghost blocks) a fair share of what the sphere reaches this tick, and sprays grit off the rest. */

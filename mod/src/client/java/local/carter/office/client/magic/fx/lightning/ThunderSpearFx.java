@@ -1,11 +1,14 @@
 package local.carter.office.client.magic.fx.lightning;
 
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
@@ -14,6 +17,7 @@ import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.lightning.ThunderSpear;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.particles.ParticleTypes;
@@ -44,7 +48,8 @@ public final class ThunderSpearFx implements SpellFx {
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
-		ProjectileSpec spec = ThunderSpear.spec(e.origin(), e.dir());
+		SpellRank rank = e.spellRank();
+		ProjectileSpec spec = ThunderSpear.spec(e.origin(), e.dir(), rank);
 		Vec3 dir = spec.velocity().normalize();
 		float c = Mth.clamp(e.charge(), 0F, 1F);
 		Vec3 hand = Volts.hand(e, level);
@@ -72,9 +77,11 @@ public final class ThunderSpearFx implements SpellFx {
 			tail[0] = end;
 			if (struck != null) {
 				land(kit, level, all, end, dir.reverse(), seed, c);
+				forks(e, kit, level, rank, end);
 				done[0] = true;
 			} else if (blocked) {
 				land(kit, level, all, end, block.getDirection().getUnitVec3(), seed, c);
+				forks(e, kit, level, rank, end);
 				done[0] = true;
 			} else if (t + 1 >= spec.maxTicks()) {
 				// Out of range: it fizzles out in the air.
@@ -82,6 +89,39 @@ public final class ThunderSpearFx implements SpellFx {
 				done[0] = true;
 			}
 		});
+	}
+
+	/** The forks at the impact: Storm Spear's bolts round it, Chain Spear's arcs to the nearest creatures. */
+	private static void forks(FxEvent e, FxKit kit, ClientLevel level, SpellRank rank, Vec3 at) {
+		if (rank.is(ThunderSpear.STORM)) {
+			int i = 0;
+			for (Vec3 p : ThunderSpear.stormPoints(at, e.seed())) {
+				RankFx.skyBolt(kit, level, p, e.seed() + 31L * ++i, Element.LIGHTNING.argb());
+				RankFx.blast(kit, level, p.add(0, 0.2, 0), ThunderSpear.STORM_RADIUS, LightningLook.YELLOW, ParticleTypes.ELECTRIC_SPARK);
+			}
+		}
+		if (rank.is(ThunderSpear.CHAIN)) {
+			// The server's chain picks the nearest creatures in sight: drawn here to the nearest this client sees.
+			Vec3 from = at;
+			Set<Integer> seen = new HashSet<>();
+			for (int hop = 0; hop < ThunderSpear.CHAIN_HOPS; hop++) {
+				Entity next = null;
+				double best = ThunderSpear.CHAIN_RANGE * ThunderSpear.CHAIN_RANGE;
+				for (Entity en : level.getEntities((Entity) null, new AABB(from, from).inflate(ThunderSpear.CHAIN_RANGE),
+						x -> x.getId() != e.casterId() && TargetFilter.affects(null, x))) {
+					double d = en.getBoundingBox().getCenter().distanceToSqr(from);
+					if (d < best && d > 0.5 && !seen.contains(en.getId())) {
+						best = d;
+						next = en;
+					}
+				}
+				if (next == null) break;
+				seen.add(next.getId());
+				Vec3 to = next.getBoundingBox().getCenter();
+				kit.bolt(from, to, e.seed() + 101L * hop, Element.LIGHTNING.argb());
+				from = to;
+			}
+		}
 	}
 
 	/** One tick of flight to {@code head}: the shaft behind it (never further back than where it left the hand), its glow and sparks. */

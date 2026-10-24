@@ -95,7 +95,9 @@ public final class EarthWallFx implements SpellFx {
 		Set<Integer> planned = new HashSet<>();
 		RockLedger.Leash rise = new RockLedger.Leash(EarthStones.now());
 		int risen = EarthWallGeometry.LAST_PLACE + HOLD;
-		int sinkAt = EarthWallGeometry.DURATION - 1 - SINK_LEAD;
+		// The wall's life comes from the server (a ranked wall stands longer).
+		int life = e.duration() > 0 ? e.duration() : EarthWallGeometry.DURATION;
+		int sinkAt = life - 1 - SINK_LEAD;
 		EarthFx.drive(kit, rise, sinkAt + 1, t -> {
 			if (t <= risen) {
 				for (int k : g.order()) {

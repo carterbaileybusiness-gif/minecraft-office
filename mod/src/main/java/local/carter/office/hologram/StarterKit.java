@@ -173,5 +173,8 @@ public final class StarterKit {
 				+ "Shares Recall's cooldown.\n/magic travel off to refuse requests."},
 		{"Also", "Talk: press V for voice chat; friends nearby hear you (check its settings for the talk key).\n\n"
 				+ "Claim your office: press ' and claim the chunks around it. Party friends can still build."},
+		{"Skill tree", "Grimoire → Skill tree: rank your 5 spells I to V with XP levels and your element's materials.\n"
+				+ "III and V: pick one of two upgrades.\n"
+				+ "A Rebinding Seal re-picks them. Ranks stay through death and rebinding."},
 	};
 }

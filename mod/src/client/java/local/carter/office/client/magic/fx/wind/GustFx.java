@@ -39,6 +39,8 @@ public final class GustFx implements SpellFx {
 		float c = Mth.clamp(e.charge(), 0F, 1F);
 		float[] data = e.data();
 		double range = data.length > 0 && data[0] > 0 ? data[0] : Gust.range(c);
+		// Cyclone's wider cone (the server's half-angle comes in data[1]), drawn as wide.
+		double cone = data.length > 1 && data[1] > 0 ? CONE * data[1] / Gust.HALF_ANGLE : CONE;
 		BladeWindGeometry.Frame f = BladeWindGeometry.frame(e.dir());
 		Vec3 dir = f.forward();
 		Vec3 hand = e.origin().add(dir.scale(1.7)).add(0, -0.15, 0);
@@ -55,7 +57,7 @@ public final class GustFx implements SpellFx {
 		int lines = 16 + Math.round(10 * c);
 		for (int i = 0; i < lines; i++) {
 			double phase = Mth.TWO_PI * (i + r.nextDouble() * 0.6) / lines;
-			double spread = Math.tan(CONE) * (0.45 + 0.55 * r.nextDouble());
+			double spread = Math.tan(cone) * (0.45 + 0.55 * r.nextDouble());
 			double twist = (i % 2 == 0 ? 1 : -1) * (0.9 + 0.8 * r.nextDouble());
 			double reach = range * (0.75 + 0.25 * r.nextDouble());
 			int life = 8 + r.nextInt(4);

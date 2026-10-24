@@ -17,9 +17,10 @@ public final class GrimoireLayout {
 	/** Friends per page of the Friends tab (more turn pages with the arrows). */
 	public static final int FRIEND_ROWS = 8;
 	/** Index tabs: Spells, Friends, How to cast (more tabs: raise this and add the page in {@code GrimoireScreen}). */
-	public static final int TABS = 3;
+	public static final int TABS = 4;
 	/** Tooltip lang key per tab, in tab order. */
-	public static final String[] TAB_TIPS = {"magic.office.tab_spells", "magic.office.tab_friends", "magic.office.tab_howto"};
+	public static final String[] TAB_TIPS = {"magic.office.tab_spells", "magic.office.tab_friends", "magic.office.tab_howto",
+		"magic.office.tab_tree"};
 
 	static {
 		// A new tab needs its tooltip (and its page, icon and footer in GrimoireScreen) before the class loads at all.

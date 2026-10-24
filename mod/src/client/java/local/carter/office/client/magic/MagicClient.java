@@ -22,6 +22,7 @@ import local.carter.office.client.zoom.ZoomController;
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
 import local.carter.office.magic.net.MagicPayloads.SignAnswer;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
+import local.carter.office.magic.net.MagicPayloads.TreeResult;
 import local.carter.office.magic.spell.SpellIds;
 
 import net.minecraft.client.Minecraft;
@@ -48,6 +49,10 @@ public final class MagicClient {
 	public static void register() {
 		ClientPlayNetworking.registerGlobalReceiver(SignChallenge.TYPE, (payload, ctx) -> onChallenge(ctx.client(), payload));
 		ClientPlayNetworking.registerGlobalReceiver(OpenGrimoire.TYPE, (payload, ctx) -> onOpenGrimoire(ctx.client(), payload));
+		// The Skill tree's answer: its burst and chime, or why not (only while the grimoire is open).
+		ClientPlayNetworking.registerGlobalReceiver(TreeResult.TYPE, (payload, ctx) -> {
+			if (ctx.client().gui.screen() instanceof GrimoireScreen s) s.treePage().result(payload);
+		});
 		ManaBarHud.register();
 		TravelClient.register();
 		MagicTooltips.register();

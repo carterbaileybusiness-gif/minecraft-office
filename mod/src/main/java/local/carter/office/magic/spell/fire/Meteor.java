@@ -17,11 +17,14 @@ import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -54,6 +57,13 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * the rest is removed, and the bared floor turns 30 % magma block and 30 % blackstone.</li>
  * </ul>
  *
+ * <p>Ranks widen the blast (the size knob). Forks: III {@link #SCORCHED} (the crater burns {@link #SCORCH_TICKS}: creatures within
+ * {@link #SCORCH_RADIUS} take {@link #SCORCH_DAMAGE} every half second and burn) or {@link #SHOCKWAVE} (knockback
+ * {@link #SHOCKWAVE_KNOCK}×, thrown twice as high); V {@link #EXTINCTION} (crater +{@link #EXTINCTION_RADIUS}, up to 12; damage
+ * +25 %) or {@link #CLUSTER} (the rock shatters: {@link MeteorGeometry#FRAGMENTS} burning fragments land
+ * {@link MeteorGeometry#FRAGMENT_TICKS} later round it, {@link #FRAGMENT_DAMAGE}{@code × P} each within {@link #FRAGMENT_RADIUS};
+ * no block changes).
+ *
  * <p>Fx: {@code target} = the impact (on the ground), {@code dir} = the flat direction from the caster to it, {@code duration} =
  * {@link MeteorGeometry#FALL_TICKS}, {@code data} = {@code {radius, lift}} ({@code lift}: the clear share of the sky drop).
  */
@@ -62,6 +72,22 @@ public final class Meteor implements Spell {
 	public static final double KNOCK = 2.5;
 	public static final double KNOCK_UP = 0.8;
 	public static final int FIRE_TICKS = 100;
+	public static final String SCORCHED = "scorched";
+	public static final String SHOCKWAVE = "shockwave";
+	public static final String EXTINCTION = "extinction";
+	public static final String CLUSTER = "cluster";
+	public static final double SCORCH_RADIUS = 6;
+	public static final int SCORCH_TICKS = 100;
+	public static final float SCORCH_DAMAGE = 2;
+	public static final double SHOCKWAVE_KNOCK = 1.6;
+	public static final int EXTINCTION_RADIUS = 2;
+	public static final double FRAGMENT_RADIUS = 2.5;
+	public static final float FRAGMENT_DAMAGE = 6;
+
+	/** The blast's reach at {@code rank}: {@link MeteorGeometry#BLAST} times the size knob. */
+	public static double blast(SpellRank rank) {
+		return MeteorGeometry.BLAST * rank.mul(Knob.SIZE);
+	}
 
 	@Override
 	public Identifier id() {
@@ -87,11 +113,11 @@ public final class Meteor implements Spell {
 		Vec3 dir = toward.x * toward.x + toward.z * toward.z < 1.0E-4 ? FireWallGeometry.forward(p.getYRot()) : BarrageGeometry.flat(toward);
 		double lift = lift(level, impact, MeteorGeometry.drop(dir));
 		int radius = MeteorGeometry.radius(ctx.grimoireLevel());
+		if (ctx.rank().is(EXTINCTION)) radius = Math.min(MeteorGeometry.MAX_RADIUS, radius + EXTINCTION_RADIUS);
 		MeteorGeometry g = MeteorGeometry.of(impact, dir, lift, radius);
 		if (!ActiveEffects.add(ctx, new Fall(ctx, g))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		FxEvent fx = ctx.fx();
-		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), dir, impact, fx.charge(), fx.power(), fx.seed(),
-				MeteorGeometry.FALL_TICKS, new int[0], new float[] {radius, (float) lift}));
+		return CastOutcome.cast(fx.withDir(dir).withTarget(impact).withDuration(MeteorGeometry.FALL_TICKS).withData(radius, (float) lift));
 	}
 
 	/** Where it lands: the ground under the look ray's first block within range, else the ground 32 ahead. */
@@ -137,20 +163,35 @@ public final class Meteor implements Spell {
 		@Override
 		public boolean tick(ServerLevel level, int age) {
 			if (!MeteorGeometry.landed(age)) return true;
-			blast(level);
-			crater(level);
+			if (age == MeteorGeometry.FALL_TICKS) {
+				blast(level);
+				crater(level);
+				if (ctx.rank().is(SCORCHED)) {
+					RankKit.zone(ctx, RankKit.Zone.at(g.impact().add(0, 0.5, 0), SCORCH_RADIUS, SCORCH_TICKS).hurting(SCORCH_DAMAGE, 10).burning(40));
+				}
+			}
+			// Cluster: the fragments land a moment after the rock.
+			if (!ctx.rank().is(CLUSTER)) return false;
+			if (age < MeteorGeometry.FALL_TICKS + MeteorGeometry.FRAGMENT_TICKS) return true;
+			for (Vec3 f : MeteorGeometry.fragments(g.impact(), ctx.seed())) {
+				RankKit.blast(ctx, f.add(0, 0.5, 0), FRAGMENT_RADIUS, FRAGMENT_DAMAGE * ctx.power(), null, FIRE_TICKS, 0.6, 0.3);
+			}
 			return false;
 		}
 
 		private void blast(ServerLevel level) {
 			Vec3 at = g.impact();
 			Vec3 core = at.add(0, 1, 0);
-			for (LivingEntity e : Targets.radius(ctx, at, MeteorGeometry.BLAST)) {
+			double radius = Meteor.blast(ctx.rank());
+			boolean shock = ctx.rank().is(SHOCKWAVE);
+			double knock = KNOCK * (shock ? SHOCKWAVE_KNOCK : 1);
+			double up = KNOCK_UP * (shock ? 2 : 1);
+			for (LivingEntity e : Targets.radius(ctx, at, radius)) {
 				if (!FireballBarrage.reaches(level, core, e.getBoundingBox())) continue;
-				double f = MeteorGeometry.falloff(Math.sqrt(e.getBoundingBox().distanceToSqr(at)));
+				double f = MeteorGeometry.falloff(Math.sqrt(e.getBoundingBox().distanceToSqr(at)), radius);
 				Hurt.damage(ctx, e, (float) (DAMAGE * ctx.power() * f));
 				if (e.isAlive()) {
-					Hurt.knock(e, e.getBoundingBox().getCenter().subtract(at), KNOCK, KNOCK_UP);
+					Hurt.knock(e, e.getBoundingBox().getCenter().subtract(at), knock, up);
 					e.igniteForTicks(FIRE_TICKS);
 				}
 			}

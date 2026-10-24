@@ -2,11 +2,14 @@ package local.carter.office.client.magic.fx.lightning;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.lightning.ChidoriGeometry;
+import local.carter.office.magic.spell.lightning.ChidoriStrike;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -17,6 +20,7 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
@@ -78,7 +82,26 @@ public final class ChidoriStrikeFx implements SpellFx {
 				charge(kit, level, new Allowance(ChidoriLook.chargeShare(ChidoriGeometry.TICKS)), g, from, now, side, seed, t);
 				lastHand[0] = now;
 			}
-			if (t == ChidoriGeometry.TICKS) impact(e, kit, level, blast, g, seed);
+			if (t <= ChidoriGeometry.TICKS && e.spellRank().is(ChidoriStrike.CHIRPING)) {
+				// Chirping Path: the hand's lightning lashes out round the body as it passes.
+				Entity caster = level.getEntity(e.casterId());
+				if (caster != null) kit.ring(caster.position().add(0, 1, 0), ChidoriStrike.CHIRP_RADIUS, ParticleTypes.ELECTRIC_SPARK, 10);
+			}
+			if (t == ChidoriGeometry.TICKS) {
+				impact(e, kit, level, blast, g, seed);
+				SpellRank rank = e.spellRank();
+				if (rank.is(ChidoriStrike.KIRIN)) {
+					int i = 0;
+					for (Vec3 p : ChidoriStrike.kirinPoints(g.end(), seed)) {
+						RankFx.skyBolt(kit, level, p, seed + 53L * ++i, Element.LIGHTNING.argb());
+						RankFx.blast(kit, level, p.add(0, 0.2, 0), ChidoriStrike.KIRIN_RADIUS, LightningLook.CORE, ParticleTypes.ELECTRIC_SPARK);
+					}
+				}
+				if (rank.is(ChidoriStrike.STORM_TRAIL)) {
+					RankFx.zone(kit, level, g.start().add(0, 0.2, 0), g.end().add(0, 0.2, 0), ChidoriStrike.TRAIL_RADIUS, ChidoriStrike.TRAIL_TICKS,
+							LightningLook.YELLOW, ParticleTypes.ELECTRIC_SPARK, GlowMote.Drift.FLICKER);
+				}
+			}
 			if (t == ChidoriGeometry.TICKS + ChidoriLook.SECOND_WAVE) secondWave(kit, level, blast, g, seed);
 			int after = t - ChidoriGeometry.TICKS;
 			if (after > 0 && after % ChidoriLook.AFTER_EVERY == 0) aftermath(kit, level, g, seed, after / ChidoriLook.AFTER_EVERY);

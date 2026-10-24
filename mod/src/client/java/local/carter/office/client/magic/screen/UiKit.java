@@ -6,12 +6,16 @@ import java.util.Map;
 
 import local.carter.office.OfficeMod;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.locale.Language;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.FormattedText;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.FormattedCharSequence;
 
@@ -45,6 +49,13 @@ public final class UiKit {
 		return Component.translatable("spell." + spell.getNamespace() + "." + spell.getPath());
 	}
 
+	/** The spell's name with its skill-tree rank in Roman numerals when it has one ("Fire Bolt III"), for the player of {@code d}. */
+	public static Component rankedName(MagicData d, Identifier spell) {
+		int rank = d.rank(spell).rank();
+		Component name = spellName(spell);
+		return rank == 0 ? name : name.copy().append(" " + SpellRank.roman(rank));
+	}
+
 	public static Component elementName(Element e) {
 		return Component.translatable("element.office." + e.key());
 	}
@@ -57,6 +68,37 @@ public final class UiKit {
 	}
 
 	// ---------------------------------------------------------------- colour
+
+	/** WCAG relative luminance of {@code argb}'s colour (0 black .. 1 white). */
+	public static double luminance(int argb) {
+		double r = channel((argb >> 16) & 0xFF), g = channel((argb >> 8) & 0xFF), b = channel(argb & 0xFF);
+		return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+	}
+
+	private static double channel(int v) {
+		double c = v / 255.0;
+		return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+	}
+
+	/** WCAG contrast ratio of two colours (1 .. 21). */
+	public static double contrast(int a, int b) {
+		double la = luminance(a), lb = luminance(b);
+		return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+	}
+
+	/** {@code fg} darkened (toward the book's ink) just enough to read at 4.5:1 or better on {@code bg}. */
+	public static int readable(int fg, int bg) {
+		int c = fg;
+		for (int i = 1; i <= 20 && contrast(c, bg) < 4.6; i++) c = mix(fg, 0xFF24160C, i / 20f);
+		return c;
+	}
+
+	/** {@code argb} darkened just enough for white text on it to read at 4.5:1 or better. */
+	public static int deepen(int argb) {
+		int c = argb;
+		for (int i = 1; i <= 20 && contrast(WHITE, c) < 4.8; i++) c = mix(argb, 0xFF000000, i / 20f);
+		return c;
+	}
 
 	/** {@code argb} with its alpha multiplied by {@code k} (0..1). */
 	public static int alpha(int argb, float k) {
@@ -188,6 +230,25 @@ public final class UiKit {
 		out.clear();
 		out.addAll(w.lines());
 		return w.scale();
+	}
+
+	/**
+	 * Wraps {@code s} at exactly {@code scale} (it never shrinks: the Skill tree keeps text at the vanilla size or above) into at
+	 * most {@code maxLines} lines {@code room} wide; a cut-off last line ends in "…". Returns how many lines went into {@code out}.
+	 */
+	public static int wrapLines(Font font, Component s, float room, float scale, int maxLines, List<FormattedCharSequence> out) {
+		int width = Math.max(1, (int) Math.floor(room / scale));
+		List<FormattedText> parts = font.splitIgnoringLanguage(s, width);
+		out.clear();
+		for (int i = 0; i < parts.size() && i < maxLines; i++) {
+			FormattedText t = parts.get(i);
+			if (i == maxLines - 1 && parts.size() > maxLines) {
+				FormattedText dots = FormattedText.of("…");
+				t = FormattedText.composite(font.substrByWidth(t, Math.max(0, width - font.width(dots))), dots);
+			}
+			out.add(Language.getInstance().getVisualOrder(t));
+		}
+		return out.size();
 	}
 
 	private static float wrapNow(Font font, Component s, float room, float max, int maxLines, List<FormattedCharSequence> out) {

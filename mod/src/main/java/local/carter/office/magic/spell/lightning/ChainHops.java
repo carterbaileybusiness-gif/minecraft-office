@@ -37,7 +37,12 @@ public final class ChainHops {
 
 	/** Chain Lightning's damage to the target at {@code hop} (0 = the first target): {@code 6 × power × 0.8^hop}. */
 	public static float damage(int hop, float power) {
-		return (float) (DAMAGE * power * Math.pow(FALLOFF, hop));
+		return damage(hop, power, FALLOFF);
+	}
+
+	/** {@link #damage(int, float)} fading by {@code falloff} a hop (Conductor's is gentler). */
+	public static float damage(int hop, float power, float falloff) {
+		return (float) (DAMAGE * power * Math.pow(falloff, hop));
 	}
 
 	/**

@@ -18,12 +18,15 @@ import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Motion;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -70,6 +73,11 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * {@code launch}ed spinning out ({@link DrillGeometry#debris}; the core lands them only where the caster could build). A creature
  * or air detonation leaves the land alone.
  *
+ * <p>Ranks widen the blast (the size knob). Forks: III {@link #LONG_DRILL} (drill +{@link #LONG_DRILL_EXTRA}, up to
+ * {@link DrillGeometry#MAX_LENGTH}) or {@link #VORTEX} (a vortex for {@link #VORTEX_TICKS} pulls creatures within
+ * {@link #VORTEX_RADIUS} to where it went off); V {@link #SHURIKEN} (blast ×2, what it hits is thrown {@link #SHURIKEN_UP} up) or
+ * {@link #SHOCKWAVE} (a ring grows to {@link #SHOCKWAVE_RADIUS}: {@link #SHOCKWAVE_DAMAGE}{@code × P} and thrown out).
+ *
  * <p>Fx: {@code target} = the predicted detonation point, {@code duration} = the windup plus the predicted dash ticks
  * (rounded up), {@code entities} = the creature predicted to be struck (if any), {@code data} = {@code {drill length,
  * predicted dash ticks (fractional), kind}} with kind 0 = air, 1 = block, 2 = creature. The prediction is the same
@@ -85,6 +93,28 @@ public final class WindSphere implements Spell {
 	/** How far ahead of the body {@link #stalled} looks for what stopped it. */
 	static final double PRESS = 0.3;
 	public static final double KNOCK_UP = 0.5;
+	public static final String LONG_DRILL = "long_drill";
+	public static final String VORTEX = "vortex";
+	public static final String SHURIKEN = "shuriken";
+	public static final String SHOCKWAVE = "shockwave";
+	public static final int LONG_DRILL_EXTRA = 3;
+	public static final double VORTEX_RADIUS = 8;
+	public static final int VORTEX_TICKS = 60;
+	public static final double VORTEX_PULL = 0.3;
+	public static final double SHURIKEN_UP = 1.2;
+	public static final double SHOCKWAVE_RADIUS = 12;
+	public static final int SHOCKWAVE_TICKS = 10;
+	public static final float SHOCKWAVE_DAMAGE = 6;
+
+	/** The blast's reach at {@code rank}: the size knob on {@link DrillGeometry#BLAST}, Rasen-Shuriken's ×2 on top. */
+	public static double blast(SpellRank rank) {
+		return DrillGeometry.BLAST * rank.mul(Knob.SIZE) * (rank.is(SHURIKEN) ? 2 : 1);
+	}
+
+	/** The drill's length at grimoire level {@code level} and {@code rank} (Long Drill's extra, at most {@link DrillGeometry#MAX_LENGTH}). */
+	public static int length(int level, SpellRank rank) {
+		return Math.min(DrillGeometry.MAX_LENGTH, DrillGeometry.length(level) + (rank.is(LONG_DRILL) ? LONG_DRILL_EXTRA : 0));
+	}
 
 	/** What set the sphere off. */
 	public enum Kind {
@@ -120,7 +150,7 @@ public final class WindSphere implements Spell {
 		ServerPlayer p = ctx.caster();
 		Vec3 eye = ctx.eye();
 		Vec3 look = DrillGeometry.unit(ctx.look());
-		int length = DrillGeometry.length(ctx.grimoireLevel());
+		int length = length(ctx.grimoireLevel(), ctx.rank());
 		Predicate<Entity> touches = e -> TargetFilter.affects(p, e);
 		Strike predicted = predict(ctx.level(), eye, look, touches);
 		if (!ActiveEffects.add(ctx, new Dash(ctx, eye, look, length))) return CastOutcome.fizzle(CastService.BUSY_KEY);
@@ -287,6 +317,10 @@ public final class WindSphere implements Spell {
 		private void detonate(ServerLevel level, Strike s) {
 			blast(level, s);
 			if (s.kind() == Kind.BLOCK && s.drill() != null) drill(s.drill());
+			if (ctx.rank().is(VORTEX)) RankKit.zone(ctx, RankKit.Zone.at(s.at(), VORTEX_RADIUS, VORTEX_TICKS).pulling(VORTEX_PULL));
+			if (ctx.rank().is(SHOCKWAVE)) {
+				RankKit.ring(ctx, s.at(), SHOCKWAVE_RADIUS, SHOCKWAVE_TICKS, SHOCKWAVE_DAMAGE * ctx.power(), 1.2, 0.4);
+			}
 		}
 
 		private void blast(ServerLevel level, Strike s) {
@@ -297,7 +331,7 @@ public final class WindSphere implements Spell {
 				hit(struck, s.at(), damage);
 			}
 			Vec3 from = s.at().subtract(look.scale(0.3));
-			List<LivingEntity> near = Targets.radius(ctx, s.at(), DrillGeometry.BLAST);
+			List<LivingEntity> near = Targets.radius(ctx, s.at(), WindSphere.blast(ctx.rank()));
 			for (LivingEntity e : near) {
 				if (done.size() >= Targets.MAX_ENTITIES) break; // the struck one and the blast share the per-cast budget
 				if (done.contains(e) || !reaches(level, from, e.getBoundingBox())) continue;
@@ -312,7 +346,7 @@ public final class WindSphere implements Spell {
 			Vec3 away = e.getBoundingBox().getCenter().subtract(at);
 			Vec3 dir = new Vec3(look.x, 0, look.z).normalize().add(new Vec3(away.x, 0, away.z).scale(0.5));
 			if (dir.lengthSqr() < 1.0E-6) dir = away;
-			Hurt.knock(e, dir, DrillGeometry.KNOCK, KNOCK_UP);
+			Hurt.knock(e, dir, DrillGeometry.KNOCK, ctx.rank().is(SHURIKEN) ? SHURIKEN_UP : KNOCK_UP);
 		}
 
 		private void drill(Vec3 start) {

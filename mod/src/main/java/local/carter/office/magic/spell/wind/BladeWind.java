@@ -60,12 +60,23 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * hedge. The effect does what {@code Projectiles} would for entities (sweep widened by the radius, {@link TargetFilter#affects},
  * at most {@link Targets#MAX_ENTITIES} hits per cast).
  *
- * <p>Fx: {@code duration} = 14, {@code target} = where the middle blade stops, {@code data[0]} = blade count, {@code data[1..n]} =
+ * <p>Ranks add blades (the size knob, up to {@link BladeWindGeometry#MAX_BLADES}). Forks: III {@link #WIDE} (the fan opens to
+ * ±{@link BladeWindGeometry#WIDE_SPREAD}°) or {@link #LONG} (blades fly {@link BladeWindGeometry#LONG_TICKS} ticks); V
+ * {@link #CLEAVE} (+80 % damage, two fewer blades) or {@link #TEMPEST} (what a blade hits is thrown {@link #TEMPEST_UP} up and
+ * {@link #TEMPEST_BACK} back).
+ *
+ * <p>Fx: {@code duration} = the blades' flight (14), {@code target} = where the middle blade stops, {@code data[0]} = blade count, {@code data[1..n]} =
  * each blade's flight time in ticks (fractional; less than 14 where a solid block stops it), left to right. The client rebuilds
  * the blades with {@code BladeWindGeometry.specs(origin, dir, charge)}.
  */
 public final class BladeWind implements Spell {
 	public static final float DAMAGE = 5;
+	public static final String WIDE = "wide";
+	public static final String LONG = "long";
+	public static final String CLEAVE = "cleave";
+	public static final String TEMPEST = "tempest";
+	public static final double TEMPEST_UP = 0.8;
+	public static final double TEMPEST_BACK = 0.6;
 
 	@Override
 	public Identifier id() {
@@ -98,7 +109,7 @@ public final class BladeWind implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		// Decide before any side effect: a full effect list fizzles for free.
 		if (ActiveEffects.full(ctx.caster().getUUID())) return CastOutcome.fizzle(CastService.BUSY_KEY);
-		List<ProjectileSpec> specs = BladeWindGeometry.specs(ctx.eye(), ctx.look(), ctx.charge());
+		List<ProjectileSpec> specs = BladeWindGeometry.specs(ctx.eye(), ctx.look(), ctx.charge(), ctx.rank());
 		float[] stops = new float[specs.size()];
 		for (int i = 0; i < stops.length; i++) stops[i] = (float) flightTime(ctx.level(), specs.get(i));
 		Effect effect = new Effect(ctx, specs, stops);
@@ -108,7 +119,7 @@ public final class BladeWind implements Spell {
 		System.arraycopy(stops, 0, data, 1, stops.length);
 		int mid = specs.size() / 2;
 		Vec3 end = BladeWindGeometry.at(specs.get(mid), stops[mid]);
-		return CastOutcome.cast(ctx.fx().withTarget(end).withDuration(BladeWindGeometry.MAX_TICKS).withData(data));
+		return CastOutcome.cast(ctx.fx().withTarget(end).withDuration(BladeWindGeometry.maxTicks(ctx.rank())).withData(data));
 	}
 
 	/**
@@ -174,6 +185,7 @@ public final class BladeWind implements Spell {
 
 		private void strike(ServerLevel level, Vec3 a, Vec3 b) {
 			double r = BladeWindGeometry.RADIUS;
+			boolean tempest = ctx.rank().is(TEMPEST);
 			List<LivingEntity> crossed = new ArrayList<>();
 			Map<LivingEntity, Double> at = new HashMap<>();
 			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(a, b).inflate(r),
@@ -193,6 +205,8 @@ public final class BladeWind implements Spell {
 				if (hit.size() >= Targets.MAX_ENTITIES) return;
 				hit.add(e.getId());
 				Hurt.damage(ctx, e, DAMAGE * ctx.power());
+				// Tempest Blades: thrown up and back along the blade.
+				if (tempest && e.isAlive() && TargetFilter.controllable(ctx.caster(), e)) Hurt.knock(e, b.subtract(a), TEMPEST_BACK, TEMPEST_UP);
 			}
 		}
 

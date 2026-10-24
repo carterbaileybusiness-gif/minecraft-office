@@ -13,10 +13,13 @@ import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.HitBudget;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -44,6 +47,11 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * creature within {@link WellGeometry#hurtRadius} that it can see takes {@code HURT × (1 + charge)} (a boss too). No block changes; players,
  * pets, villagers, golems, named mobs and the rest are never moved or hurt.
  *
+ * <p>Ranks widen the pull (the size knob). Forks: III {@link #LONG_WELL} (lasts {@link #LONG_WELL_LIFE}× as long) or
+ * {@link #CRUSHING} (hurts every {@link #CRUSHING_EVERY} ticks); V {@link #SINGULARITY} (at its end it implodes:
+ * {@link #SINGULARITY_DAMAGE}{@code × P} within {@link #SINGULARITY_RADIUS}) or {@link #REPULSOR} (at its end it flings what it
+ * held out, {@link #REPULSOR_KNOCK} and {@link #REPULSOR_UP} up).
+ *
  * <p>Fx: {@code target} = the centre, {@code duration} = the life in ticks, {@code data[0]} = the pull radius.
  */
 public final class GravityWell implements Spell {
@@ -53,6 +61,21 @@ public final class GravityWell implements Spell {
 	static final int SYNC_EVERY = 2;
 	/** A pull shorter than this (something resting in the core) is not synced. */
 	static final double MIN_SYNC = 0.02;
+	public static final String LONG_WELL = "long_well";
+	public static final String CRUSHING = "crushing";
+	public static final String SINGULARITY = "singularity";
+	public static final String REPULSOR = "repulsor";
+	public static final float LONG_WELL_LIFE = 1.5F;
+	public static final int CRUSHING_EVERY = 5;
+	public static final double SINGULARITY_RADIUS = 4;
+	public static final float SINGULARITY_DAMAGE = 8;
+	public static final double REPULSOR_KNOCK = 1.6;
+	public static final double REPULSOR_UP = 0.6;
+
+	/** The well's life at {@code charge} and {@code rank} (Long Well). */
+	public static int life(float charge, SpellRank rank) {
+		return Math.round(WellGeometry.life(charge) * (rank.is(LONG_WELL) ? LONG_WELL_LIFE : 1));
+	}
 
 	@Override
 	public Identifier id() {
@@ -72,8 +95,8 @@ public final class GravityWell implements Spell {
 	@Override
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 centre = centre(ctx);
-		int life = WellGeometry.life(ctx.charge());
-		double radius = WellGeometry.radius(ctx.charge());
+		int life = life(ctx.charge(), ctx.rank());
+		double radius = WellGeometry.radius(ctx.charge()) * ctx.rank().mul(Knob.SIZE);
 		if (!ActiveEffects.add(ctx, new Well(ctx, centre, life, radius))) return CastOutcome.fizzle("magic.office.busy");
 		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withData((float) radius));
 	}
@@ -163,14 +186,20 @@ public final class GravityWell implements Spell {
 					e.needsSync = true;
 				}
 			}
-			if (age % WellGeometry.HURT_EVERY == 0) {
+			if (age % (ctx.rank().is(CRUSHING) ? CRUSHING_EVERY : WellGeometry.HURT_EVERY) == 0) {
 				for (LivingEntity l : Targets.radius(ctx, centre, WellGeometry.hurtRadius(ctx.charge()))) {
 					if (clips >= MAX_CLIPS) break;
 					clips++;
 					if (clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) {
-						Hurt.damage(ctx, l, WellGeometry.HURT * ChargeMath.size(ctx.charge()));
+						Hurt.damage(ctx, l, WellGeometry.HURT * ChargeMath.size(ctx.charge()) * ctx.rank().mul(Knob.DAMAGE));
 					}
 				}
+			}
+			if (age >= life) {
+				if (ctx.rank().is(SINGULARITY)) {
+					RankKit.blast(ctx, centre, SINGULARITY_RADIUS, SINGULARITY_DAMAGE * ctx.power(), null, 0, 0, 0);
+				}
+				if (ctx.rank().is(REPULSOR)) RankKit.blast(ctx, centre, radius, 0, null, 0, REPULSOR_KNOCK, REPULSOR_UP);
 			}
 			return age < life;
 		}

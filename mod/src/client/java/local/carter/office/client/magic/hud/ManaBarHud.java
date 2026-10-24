@@ -9,13 +9,13 @@ import org.jspecify.annotations.Nullable;
 import local.carter.office.client.magic.SpellWheel;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
 import local.carter.office.client.magic.screen.UiKit;
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.spell.Spell;
-import local.carter.office.magic.spell.SpellCost;
 import local.carter.office.magic.spell.SpellRegistry;
 
 import net.minecraft.client.DeltaTracker;
@@ -171,7 +171,7 @@ public final class ManaBarHud {
 		Optional<Spell> spell = d.selected().flatMap(id -> SpellRegistry.get(p.getUUID(), id));
 		Identifier sel = d.selected().orElse(null);
 		if (sel != null && !p.hasInfiniteMaterials()) {
-			int need = spell.map(Spell::cost).map(SpellCost::mana).orElse(0);
+			int need = spell.map(s -> CastService.cost(d, s).mana()).orElse(0);
 			if (need > mana && need <= max) {
 				int nx = x + ManaBarLayout.fillWidth(need, max);
 				float pulse = 0.55f + 0.45f * (float) Math.sin(System.currentTimeMillis() / 160.0);
@@ -226,7 +226,7 @@ public final class ManaBarHud {
 		int colour = SpellRegistry.get(mc.player.getUUID(), id).map(s -> s.element() == null ? Element.RECALL_ARGB : s.element().argb())
 				.orElse(e != null && !id.getPath().equals("recall") ? e.argb() : Element.RECALL_ARGB);
 		ManaBarLayout.Layout l = ManaBarLayout.layout(g.guiWidth(), g.guiHeight());
-		Component name = UiKit.spellName(id);
+		Component name = UiKit.rankedName(MagicAttachments.get(mc.player), id);
 		int tw = mc.font.width(name);
 		int icon = 9;
 		int total = icon + 3 + tw;

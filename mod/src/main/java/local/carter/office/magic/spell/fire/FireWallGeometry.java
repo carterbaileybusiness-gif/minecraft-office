@@ -3,8 +3,12 @@ package local.carter.office.magic.spell.fire;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.jspecify.annotations.Nullable;
+
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Shapes.Cell;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.AABB;
@@ -23,6 +27,8 @@ public record FireWallGeometry(Vec3 base, Vec3 forward, Vec3 side, double width,
 	public static final double AHEAD = 4;
 	/** A tap's width (twice that at full charge) and height (one more at full charge). */
 	public static final double WIDTH = 5;
+	/** Widest a ranked wall grows (its half-width stays within the medium edit radius of its foot, 6). */
+	public static final double MAX_WIDTH = 12;
 	public static final double HEIGHT = 3;
 	/** Depth of the burning zone along the aim line. */
 	public static final double THICKNESS = 1.0;
@@ -62,9 +68,20 @@ public record FireWallGeometry(Vec3 base, Vec3 forward, Vec3 side, double width,
 
 	/** The wall at {@code base} facing {@code forward} (flattened; straight ahead +Z if it has no flat part) for a cast at {@code charge}. */
 	public static FireWallGeometry of(Vec3 base, Vec3 forward, float charge) {
+		return of(base, forward, charge, null);
+	}
+
+	/** As {@link #of(Vec3, Vec3, float)} at {@code rank}: the width grows by the rank's size knob, up to {@link #MAX_WIDTH}. */
+	public static FireWallGeometry of(Vec3 base, Vec3 forward, float charge, @Nullable SpellRank rank) {
 		Vec3 f = flat(forward);
 		Vec3 side = new Vec3(-f.z, 0, f.x);
-		return new FireWallGeometry(base, f, side, width(charge), height(charge), duration(charge));
+		double width = Math.min(MAX_WIDTH, width(charge) * (rank == null ? 1 : rank.mul(Knob.SIZE)));
+		return new FireWallGeometry(base, f, side, width, height(charge), duration(charge));
+	}
+
+	/** This wall moved {@code d} along its facing (Marching Wall). */
+	public FireWallGeometry marched(double d) {
+		return new FireWallGeometry(base.add(forward.scale(d)), forward, side, width, height, duration);
 	}
 
 	/** The point {@code s} along the wall's width (−width/2..width/2, from its middle) and {@code h} up from its foot. */

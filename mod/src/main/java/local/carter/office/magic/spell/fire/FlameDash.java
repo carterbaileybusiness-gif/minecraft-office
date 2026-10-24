@@ -13,15 +13,19 @@ import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Motion;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
 
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
@@ -34,6 +38,11 @@ import net.minecraft.world.phys.Vec3;
  * moving), with no fall damage for {@link #NO_FALL_TICKS} ticks. For the next {@link #BURN_TICKS} ticks every creature within
  * {@link #reach} ({@code 1.5 + 0.75 × charge}) of the caster's body along the way (swept tick to tick, so speed never skips one;
  * never through a wall) takes {@code 3 × P} and burns for {@code FIRE_TICKS × (1 + charge)} ticks, each once. No block changes.
+ *
+ * <p>Ranks widen the burning reach (the size knob). Forks: III {@link #OVERDRIVE} (dashes {@link #OVERDRIVE_SPEED}× as fast, so as
+ * far) or {@link #PHOENIX} (Fire Resistance and Resistance I for {@link #PHOENIX_TICKS}); V {@link #COMET} (the dash ends in a blast
+ * of {@code 5 × P} within {@link #COMET_RADIUS}, throwing foes back) or {@link #WAKE} (burnt foes slowed and burning three times as
+ * long).
  *
  * <p>Fx: {@code target} = where the dash starts (the caster's feet), {@code dir} = the dash's flat direction, {@code duration} =
  * {@link #BURN_TICKS}, {@code data} = {@code {speed}}.
@@ -48,6 +57,17 @@ public final class FlameDash implements Spell {
 	public static final double CHARGE_REACH = 0.75;
 	public static final float DAMAGE = 3;
 	public static final int FIRE_TICKS = 40;
+	public static final String OVERDRIVE = "overdrive";
+	public static final String PHOENIX = "phoenix";
+	public static final String COMET = "comet";
+	public static final String WAKE = "wake";
+	public static final float OVERDRIVE_SPEED = 1.4F;
+	public static final int PHOENIX_TICKS = 80;
+	public static final double COMET_RADIUS = 3;
+	public static final float COMET_DAMAGE = 5;
+	public static final double COMET_KNOCK = 1.0;
+	public static final double COMET_UP = 0.4;
+	public static final int WAKE_SLOW_TICKS = 60;
 	/** Spacing of the points the path is checked at. */
 	private static final double SAMPLE = 0.25;
 
@@ -86,11 +106,15 @@ public final class FlameDash implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		ServerPlayer p = ctx.caster();
 		Vec3 dir = direction(ctx.look(), p.getYRot());
-		double speed = speed(ctx.charge());
+		double speed = speed(ctx.charge()) * (ctx.rank().is(OVERDRIVE) ? OVERDRIVE_SPEED : 1);
 		Vec3 start = p.position();
 		Trail trail = new Trail(ctx, centre(p));
 		if (!ActiveEffects.add(ctx, trail)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Motion.dash(p, dir.scale(speed).add(0, UP, 0), NO_FALL_TICKS);
+		if (ctx.rank().is(PHOENIX)) {
+			p.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, PHOENIX_TICKS, 0), p);
+			p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, PHOENIX_TICKS, 0), p);
+		}
 		return CastOutcome.cast(ctx.fx().withTarget(start).withDuration(BURN_TICKS).withData((float) speed));
 	}
 
@@ -118,11 +142,16 @@ public final class FlameDash implements Spell {
 			// nothing between is burnt. Standing still (dashed into a wall) still burns what is in reach of where they stand.
 			if (now.distanceToSqr(last) <= FireWallGeometry.MAX_SWEEP * FireWallGeometry.MAX_SWEEP) burn(level, last, now);
 			last = now;
+			// Comet Finish: the dash goes off where it ends.
+			if (age >= BURN_TICKS && ctx.rank().is(COMET)) {
+				RankKit.blast(ctx, now, COMET_RADIUS, COMET_DAMAGE * ctx.power(), null, FIRE_TICKS, COMET_KNOCK, COMET_UP);
+			}
 			return age < BURN_TICKS;
 		}
 
 		private void burn(ServerLevel level, Vec3 from, Vec3 to) {
-			double reach = reach(ctx.charge());
+			double reach = reach(ctx.charge()) * ctx.rank().mul(Knob.SIZE);
+			boolean wake = ctx.rank().is(WAKE);
 			AABB near = new AABB(from, to).inflate(reach + 1);
 			double len = from.distanceTo(to);
 			int steps = Math.max(1, (int) Math.ceil(len / SAMPLE));
@@ -141,7 +170,9 @@ public final class FlameDash implements Spell {
 				if (closest == null || !clear(level, closest, box.getCenter())) continue;
 				burnt.add(e.getId());
 				Hurt.damage(ctx, e, DAMAGE * ctx.power());
-				if (e.isAlive()) e.igniteForTicks(Math.round(FIRE_TICKS * ChargeMath.size(ctx.charge())));
+				if (!e.isAlive()) continue;
+				e.igniteForTicks(Math.round(FIRE_TICKS * ChargeMath.size(ctx.charge()) * (wake ? 3 : 1)));
+				if (wake) e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, WAKE_SLOW_TICKS, 1), ctx.caster());
 			}
 		}
 

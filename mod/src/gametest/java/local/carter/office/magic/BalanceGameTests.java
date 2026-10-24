@@ -1,6 +1,7 @@
 package local.carter.office.magic;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -33,6 +34,7 @@ import local.carter.office.magic.terrain.EditLog.LoggedCast;
 import local.carter.office.magic.terrain.EditLog.LoggedEdit;
 import local.carter.office.magic.terrain.EditTier;
 import local.carter.office.magic.terrain.WorldTerrainEdits;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
@@ -43,6 +45,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.boss.wither.WitherBoss;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.phys.Vec3;
@@ -69,6 +72,11 @@ import net.fabricmc.fabric.api.gametest.v1.GameTest;
  *
  * <p>Small-spell tests run in {@link #ENV}, terrain spells in {@link #TERRAIN}, each in a batch of its own: ultimates throw
  * debris that may land in a neighbouring arena, which must never be a small spell's.
+ *
+ * <p><b>Ranked.</b> {@code ranked<Spell>} (30 of them, {@link #everySpellHasARankedTest}) run the same checks for every pair of
+ * rank V forks at once: four casters, one per pair (III A or B × V A or B), all at rank V (three bumps), level 10 and full
+ * charge, cast together into a crowd of tough zombies ({@link #TOUGH} health, so every caster has something to hit), each held
+ * to its own fx, budgets and tier caps, and watched for {@link #SETTLE_RANKED} ticks (the longest ranked effects).
  */
 public class BalanceGameTests {
 	/** No terrain edits in this batch: small spells (block hashes), time-to-kill and the boss rules. */
@@ -80,6 +88,10 @@ public class BalanceGameTests {
 	static final int CROWD = 66;
 	/** Ticks from the cast to the checks: every spell (Bubble Shield, 240 at full charge, is the longest) has run out by then. */
 	static final int SETTLE = 260;
+	/** The ranked checks wait longer: Fortress's bubble lasts 360 ticks, Long Hold's prison 320. */
+	static final int SETTLE_RANKED = 400;
+	/** Health of the ranked tests' zombies. */
+	static final float TOUGH = 1000;
 
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 
@@ -236,6 +248,89 @@ public class BalanceGameTests {
 		});
 	}
 
+	/** The rank V fork pairs: III A or B, V A or B. */
+	private static final int[][] PAIRS = {{1, 1}, {1, 2}, {2, 1}, {2, 2}};
+
+	/** A zombie of {@link #TOUGH} health (a ranked volley never kills the crowd before every caster has had its go). */
+	private static void tough(Zombie z) {
+		z.getAttribute(Attributes.MAX_HEALTH).setBaseValue(TOUGH);
+		z.setHealth(TOUGH);
+	}
+
+	/** {@link #check} for every rank V fork pair at once (see the class comment). */
+	private static void checkRanked(GameTestHelper h, Identifier id) {
+		Case c = CASES.get(id);
+		Spell spell = SpellRegistry.get(id).orElseThrow(() -> new IllegalStateException("not registered: " + id));
+		int slot = spell.slot();
+		boolean small = slot == Slots.SMALL_A || slot == Slots.SMALL_B;
+		boolean ultimate = slot == Slots.ULTIMATE;
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		if (c.at() != null) {
+			boolean movable = id.equals(SpellIds.QUAKE);
+			int n = c.crowd() ? CROWD : 1;
+			for (int i = 0; i < n; i++) {
+				BlockPos cell = c.crowd() ? c.at().offset(i % 3 - 1, 0, i / 3 % 3 - 1) : c.at();
+				tough(movable ? MagicTestKit.movableDummy(h, cell) : MagicTestKit.dummy(h, cell));
+			}
+		}
+		long hash = MagicTestKit.blockHash(h);
+		List<ServerPlayer> casters = new ArrayList<>();
+		for (int[] pair : PAIRS) {
+			ServerPlayer p = MagicTestKit.caster(h, spell.element(), LEVEL);
+			MagicAttachments.set(p, MagicAttachments.get(p).withRank(new SpellRank(id, SpellRank.MAX, pair[0], pair[1])));
+			MagicTestKit.aim(p, c.aim());
+			casters.add(p);
+		}
+		for (ServerPlayer p : casters) {
+			watch(p);
+			Result r = ultimate ? MagicTestKit.castUltimate(p, id) : MagicTestKit.cast(p, id, 1f);
+			String who = id + " " + MagicAttachments.get(p).rank(id);
+			h.assertValueEqual(r, Result.CAST, who + ": result");
+			h.assertValueEqual(rec.fx(p).size(), 1, who + ": fx at the cast");
+		}
+		h.runAtTickTime(SETTLE_RANKED, () -> {
+			for (ServerPlayer p : casters) {
+				String who = id + " " + MagicAttachments.get(p).rank(id);
+				List<FxEvent> fx = rec.fx(p);
+				h.assertValueEqual(fx.size(), 1, who + ": one fx for the whole cast");
+				h.assertTrue(fx.getFirst().spellRank().rank() == SpellRank.MAX, who + ": the fx carries the rank");
+				int[] hurt = hurt(p);
+				h.assertTrue(hurt[1] <= Targets.MAX_ENTITIES, who + ": hurt " + hurt[1] + " different entities (cap " + Targets.MAX_ENTITIES + ")");
+				if (c.hurts()) h.assertTrue(hurt[1] > 0, who + ": positive control, it hurt nothing");
+				List<LoggedCast> logged = log().casts(p.getUUID());
+				int edits = 0, launched = 0;
+				for (LoggedCast lc : logged) {
+					edits += lc.edits().size();
+					for (LoggedEdit e : lc.edits()) if (e.launched()) launched++;
+				}
+				h.assertTrue(logged.size() <= 1, who + ": one logged cast at most, got " + logged.size());
+				if (small) {
+					h.assertValueEqual(edits, 0, who + ": logged edits of a small spell");
+				} else if (ultimate) {
+					h.assertTrue(launched <= WorldTerrainEdits.MAX_LAUNCH, who + ": launched " + launched);
+					h.assertTrue(edits <= EditTier.ULTIMATE.budget() + launched, who + ": " + edits + " edits");
+				} else {
+					h.assertValueEqual(launched, 0, who + ": a medium launched blocks");
+					h.assertTrue(edits <= EditTier.MEDIUM.budget(), who + ": " + edits + " edits");
+				}
+				LOGGER.info("[balance] {}: {} different hurt; {} edits, {} launched", who, hurt[1], edits, launched);
+			}
+			if (small) h.assertValueEqual(MagicTestKit.blockHash(h), hash, id + ": a ranked small spell changed a block");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV)
+	public void everySpellHasARankedTest(GameTestHelper h) {
+		Set<String> methods = new HashSet<>();
+		for (Method m : BalanceGameTests.class.getDeclaredMethods()) if (m.isAnnotationPresent(GameTest.class)) methods.add(m.getName());
+		for (Identifier id : CASES.keySet()) {
+			String name = "ranked" + camel(id.getPath());
+			h.assertTrue(methods.contains(name), "no ranked test " + name + " for " + id);
+		}
+		h.succeed();
+	}
+
 	private static local.carter.office.magic.terrain.EditLog log() {
 		if (!(MagicServer.kit().terrain() instanceof WorldTerrainEdits w)) throw new IllegalStateException("world terrain kit not installed");
 		return w.log();
@@ -373,6 +468,98 @@ public class BalanceGameTests {
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE + 40)
 	public void balanceBlackHole(GameTestHelper h) { check(h, SpellIds.BLACK_HOLE); }
+
+	// ---- Per spell, ranked: every rank V fork pair ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedFireBolt(GameTestHelper h) { checkRanked(h, SpellIds.FIRE_BOLT); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedFlameDash(GameTestHelper h) { checkRanked(h, SpellIds.FLAME_DASH); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedWaterBullet(GameTestHelper h) { checkRanked(h, SpellIds.WATER_BULLET); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedBubbleShield(GameTestHelper h) { checkRanked(h, SpellIds.BUBBLE_SHIELD); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedGust(GameTestHelper h) { checkRanked(h, SpellIds.GUST); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedAirStep(GameTestHelper h) { checkRanked(h, SpellIds.AIR_STEP); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedSpark(GameTestHelper h) { checkRanked(h, SpellIds.SPARK); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedBlink(GameTestHelper h) { checkRanked(h, SpellIds.BLINK); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedStoneBullet(GameTestHelper h) { checkRanked(h, SpellIds.STONE_BULLET); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedEarthSpikes(GameTestHelper h) { checkRanked(h, SpellIds.EARTH_SPIKES); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedShadowBolt(GameTestHelper h) { checkRanked(h, SpellIds.SHADOW_BOLT); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = SETTLE_RANKED + 40)
+	public void rankedShadowStep(GameTestHelper h) { checkRanked(h, SpellIds.SHADOW_STEP); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedFireWall(GameTestHelper h) { checkRanked(h, SpellIds.FIRE_WALL); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedFireballBarrage(GameTestHelper h) { checkRanked(h, SpellIds.FIREBALL_BARRAGE); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedMeteor(GameTestHelper h) { checkRanked(h, SpellIds.METEOR); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedTidalPush(GameTestHelper h) { checkRanked(h, SpellIds.TIDAL_PUSH); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedWaterPrison(GameTestHelper h) { checkRanked(h, SpellIds.WATER_PRISON); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedWaterDragon(GameTestHelper h) { checkRanked(h, SpellIds.WATER_DRAGON); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedBladeWind(GameTestHelper h) { checkRanked(h, SpellIds.BLADE_WIND); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedTornado(GameTestHelper h) { checkRanked(h, SpellIds.TORNADO); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedWindSphere(GameTestHelper h) { checkRanked(h, SpellIds.WIND_SPHERE); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedChainLightning(GameTestHelper h) { checkRanked(h, SpellIds.CHAIN_LIGHTNING); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedThunderSpear(GameTestHelper h) { checkRanked(h, SpellIds.THUNDER_SPEAR); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedChidoriStrike(GameTestHelper h) { checkRanked(h, SpellIds.CHIDORI_STRIKE); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedEarthWall(GameTestHelper h) { checkRanked(h, SpellIds.EARTH_WALL); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedQuake(GameTestHelper h) { checkRanked(h, SpellIds.QUAKE); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedMountainFist(GameTestHelper h) { checkRanked(h, SpellIds.MOUNTAIN_FIST); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedGravityWell(GameTestHelper h) { checkRanked(h, SpellIds.GRAVITY_WELL); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedShadowBind(GameTestHelper h) { checkRanked(h, SpellIds.SHADOW_BIND); }
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = TERRAIN, maxTicks = SETTLE_RANKED + 40)
+	public void rankedBlackHole(GameTestHelper h) { checkRanked(h, SpellIds.BLACK_HOLE); }
 
 	/** Recall: in Recall's environment (it reads a home), cast with a home 24 blocks away; one fx, home reached, no block changed. */
 	@GameTest(structure = MagicTestKit.ARENA, environment = RecallGameTests.ENV, maxTicks = 120)

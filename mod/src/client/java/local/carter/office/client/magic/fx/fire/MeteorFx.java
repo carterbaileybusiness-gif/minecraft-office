@@ -2,10 +2,13 @@ package local.carter.office.client.magic.fx.fire;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.fire.Meteor;
 import local.carter.office.magic.spell.fire.MeteorGeometry;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -87,10 +90,32 @@ public final class MeteorFx implements SpellFx {
 				falling(level, kit, g, r, fire, fall, t);
 			} else if (t == MeteorGeometry.FALL_TICKS) {
 				impact(level, kit, g, r, fire, impact);
+				forks(level, kit, e, g);
 			} else {
 				aftermath(level, kit, g, r, fire, impact, smoulder, t - MeteorGeometry.FALL_TICKS);
 			}
 		});
+	}
+
+	/** The forks' part at the impact: Scorched Earth's burning ground, Shockwave's ring, Cluster's fragments. */
+	private static void forks(ClientLevel level, FxKit kit, FxEvent e, MeteorGeometry g) {
+		SpellRank rank = e.spellRank();
+		Vec3 at = g.impact();
+		if (rank.is(Meteor.SCORCHED)) RankFx.zone(kit, level, at, at, Meteor.SCORCH_RADIUS, Meteor.SCORCH_TICKS, FireBoltFx.HOT, ParticleTypes.FLAME,
+				GlowMote.Drift.RISE);
+		if (rank.is(Meteor.SHOCKWAVE)) RankFx.shockRing(kit, level, at.add(0, 0.2, 0), Meteor.blast(rank), 10, FireBoltFx.HOT, ParticleTypes.FLAME);
+		if (!rank.is(Meteor.CLUSTER)) return;
+		// Cluster: burning fragments arc out of the crater and burst where they land.
+		for (Vec3 f : MeteorGeometry.fragments(at, e.seed())) {
+			Vec3 to = f.add(0, 0.5, 0);
+			kit.simulate(1, MeteorGeometry.FRAGMENT_TICKS + 1, t -> {
+				double k = t / (double) MeteorGeometry.FRAGMENT_TICKS;
+				Vec3 p = at.lerp(to, k).add(0, 4 * k * (1 - k) * 4, 0);
+				kit.motes(p, FireBoltFx.HOT, 2, 0.1, Vec3.ZERO, 0.02, GlowMote.Drift.COAST, 0.3F, 4);
+				level.addParticle(ParticleTypes.FLAME, p.x, p.y, p.z, 0, 0.02, 0);
+				if (t == MeteorGeometry.FRAGMENT_TICKS) RankFx.blast(kit, level, to, Meteor.FRAGMENT_RADIUS, FireBoltFx.HOT, ParticleTypes.LAVA);
+			});
+		}
 	}
 
 	/** One tick of the fall: the glow round the rock, flame sheets and flames streaming off it, smoke, lava, the rumble. */

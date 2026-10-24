@@ -9,10 +9,14 @@ import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.Motion;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -44,6 +48,10 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * It never lands on lava or deep water ({@link #unsafe}): then it fizzles ({@link #UNSAFE_KEY}) before anything happens, so it
  * costs nothing and starts no cooldown. Then the caster is invisible for {@code INVISIBLE_TICKS × (1 + charge)} ticks. No block changes, no damage.
  *
+ * <p>Ranks lengthen the step (the size knob, on both reaches). Forks: III {@link #BACKSTAB} (the target takes
+ * {@link #BACKSTAB_DAMAGE}{@code × P}) or {@link #LONG_SHADOW} (invisible three times as long); V {@link #SWAP} (the target, if a
+ * control effect may take it, is put where the caster stood) or {@link #PHANTOM} (Speed II and Strength I for {@link #PHANTOM_TICKS}).
+ *
  * <p>Fx: {@code origin} = the caster's eye before the step, {@code dir} = the look, {@code target} = where their feet landed,
  * {@code entities} = {the target} if there was one, {@code duration} = the invisibility's ticks, {@code data} = {where the feet were
  * before the step, relative to {@code target}: x, y, z}.
@@ -54,6 +62,12 @@ public final class ShadowStep implements Spell {
 	public static final double BEHIND = 1.5;
 	public static final double AHEAD = 8;
 	public static final int INVISIBLE_TICKS = 20;
+	public static final String BACKSTAB = "backstab";
+	public static final String LONG_SHADOW = "long_shadow";
+	public static final String SWAP = "swap";
+	public static final String PHANTOM = "phantom";
+	public static final float BACKSTAB_DAMAGE = 6;
+	public static final int PHANTOM_TICKS = 100;
 
 	/** How far the target ray reaches at {@code charge}: 16, 32 at full charge. */
 	public static double range(float charge) {
@@ -89,8 +103,9 @@ public final class ShadowStep implements Spell {
 		ServerPlayer p = ctx.caster();
 		ServerLevel level = ctx.level();
 		Vec3 from = p.position();
-		Optional<LivingEntity> target = Targets.ray(ctx, range(ctx.charge()), FORGIVENESS).filter(e -> seen(level, ctx.eye(), e));
-		Vec3 dest = target.map(e -> behind(level, from, e)).orElseGet(() -> ahead(level, p, ctx.look(), ahead(ctx.charge())));
+		double size = ctx.rank().mul(Knob.SIZE);
+		Optional<LivingEntity> target = Targets.ray(ctx, range(ctx.charge()) * size, FORGIVENESS).filter(e -> seen(level, ctx.eye(), e));
+		Vec3 dest = target.map(e -> behind(level, from, e)).orElseGet(() -> ahead(level, p, ctx.look(), ahead(ctx.charge()) * size));
 		// Behind something airborne (a phantom, a mob mid-jump or knocked up), land on the ground under that spot, not in the air.
 		if (target.isPresent() && !target.get().onGround()) dest = Targets.ground(level, dest);
 		// Lava or deep water where it would land (or under it): no step, and nothing spent.
@@ -103,8 +118,19 @@ public final class ShadowStep implements Spell {
 			face(p, at, target.get());
 			p.teleportTo(level, at.x, at.y, at.z, Set.of(), p.getYRot(), p.getXRot(), true);
 		}
-		int hidden = Math.round(INVISIBLE_TICKS * ChargeMath.size(ctx.charge()));
+		int hidden = Math.round(INVISIBLE_TICKS * ChargeMath.size(ctx.charge()) * (ctx.rank().is(LONG_SHADOW) ? 3 : 1));
 		p.addEffect(new MobEffectInstance(MobEffects.INVISIBILITY, hidden, 0, false, false, true));
+		SpellRank rank = ctx.rank();
+		if (target.isPresent()) {
+			LivingEntity t = target.get();
+			if (rank.is(BACKSTAB)) Hurt.damage(ctx, t, BACKSTAB_DAMAGE * ctx.power());
+			// Shadow Swap: the target stands where the caster stood (a control effect: never a boss, a pet or a villager).
+			if (rank.is(SWAP) && t.isAlive() && TargetFilter.controllable(p, t)) t.teleportTo(from.x, from.y, from.z);
+		}
+		if (rank.is(PHANTOM)) {
+			p.addEffect(new MobEffectInstance(MobEffects.SPEED, PHANTOM_TICKS, 1), p);
+			p.addEffect(new MobEffectInstance(MobEffects.STRENGTH, PHANTOM_TICKS, 0), p);
+		}
 		// Where it left, relative to where it landed (floats cannot hold world coordinates far from the origin).
 		Vec3 back = from.subtract(at);
 		FxEvent fx = ctx.fx().withTarget(at).withDuration(hidden).withData((float) back.x, (float) back.y, (float) back.z);

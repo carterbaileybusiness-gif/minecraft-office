@@ -52,7 +52,8 @@ public final class FxKit {
 	/** Most circles one event may draw. */
 	public static final int MAX_CIRCLES = 6;
 	/** Longest {@link #simulate} timer, in ticks, and most timers running at once across every event. */
-	public static final int MAX_SIMULATE_TICKS = 600;
+	/** Long enough for the longest lasting visual: a ranked Earth Wall stands 870 ticks. */
+	public static final int MAX_SIMULATE_TICKS = 900;
 	public static final int MAX_SIMULATIONS = 64;
 
 	public FxKit(FxEvent event, ClientLevel level) {

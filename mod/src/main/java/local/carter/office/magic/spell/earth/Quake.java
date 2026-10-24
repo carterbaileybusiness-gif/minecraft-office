@@ -24,6 +24,8 @@ import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.spell.earth.QuakeGeometry.Column;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -54,6 +56,11 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * one at the centre, and one per 36° arc for blocks more than 6 from it, its origin on the arc ({@link QuakeGeometry#originFor}).
  * Claims, budgets and the log come with the batches.
  *
+ * <p>Ranks widen the ring (the size knob, up to {@link #MAX_RADIUS}). Forks: III {@link #AFTERSHOCK} (a second ring
+ * {@link #AFTERSHOCK_DELAY} ticks later, {@link #AFTERSHOCK_SHARE} damage, no cracks) or {@link #FISSURE} (twice the cracks, still
+ * at most {@link QuakeGeometry#MAX_CRACKS}; Slowness II, a rider); V {@link #TECTONIC} (thrown twice as high and far) or
+ * {@link #PULL} (the ring drags creatures in instead of throwing them out).
+ *
  * <p>Fx: {@code target} = top centre of the centre block, {@code duration} = ticks the ring runs, {@code data} = {radius}.
  */
 public final class Quake implements Spell {
@@ -62,6 +69,19 @@ public final class Quake implements Spell {
 	public static final double KNOCK = 0.6;
 	/** How far above or below the centre a creature may stand and still feel the ring. */
 	public static final double FEEL = QuakeGeometry.REACH + 1;
+	public static final String AFTERSHOCK = "aftershock";
+	public static final String FISSURE = "fissure";
+	public static final String TECTONIC = "tectonic";
+	public static final String PULL = "pull";
+	/** Widest a ranked ring reaches (its far cracks stay within their arcs' medium radius). */
+	public static final double MAX_RADIUS = 12;
+	public static final int AFTERSHOCK_DELAY = 20;
+	public static final float AFTERSHOCK_SHARE = 0.5F;
+
+	/** The ring's radius at {@code charge} and {@code rank} (the size knob), at most {@link #MAX_RADIUS}. */
+	public static double radius(float charge, SpellRank rank) {
+		return Math.min(MAX_RADIUS, QuakeGeometry.radius(charge) * rank.mul(Knob.SIZE));
+	}
 
 	@Override
 	public Identifier id() {
@@ -82,9 +102,10 @@ public final class Quake implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		ServerPlayer p = ctx.caster();
 		BlockPos centre = centre(p.position());
-		double radius = QuakeGeometry.radius(ctx.charge());
-		Ripple ripple = new Ripple(ctx, centre, radius);
+		double radius = radius(ctx.charge(), ctx.rank());
+		Ripple ripple = new Ripple(ctx, centre, radius, 0, 1, true);
 		if (!ActiveEffects.add(ctx, ripple)) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (ctx.rank().is(AFTERSHOCK)) ActiveEffects.add(ctx, new Ripple(ctx, centre, radius, AFTERSHOCK_DELAY, AFTERSHOCK_SHARE, false));
 		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(centre.above())).withDuration(QuakeGeometry.duration(radius))
 				.withData((float) radius));
 	}
@@ -116,6 +137,10 @@ public final class Quake implements Spell {
 		private final boolean[] cracks;
 		private final int duration;
 		private final double radius;
+		/** An aftershock starts this many ticks late, hits for {@code share} and cracks nothing. */
+		private final int delay;
+		private final float share;
+		private final boolean cracking;
 		private int next;
 		/** Everything the ring has passed (struck or spared), so each is felt once. */
 		private final Set<Entity> passed = new HashSet<>();
@@ -123,21 +148,27 @@ public final class Quake implements Spell {
 		private int struck;
 		private final Map<BlockPos, EditBatch> batches = new HashMap<>();
 
-		Ripple(CastContext ctx, BlockPos centre, double radius) {
+		Ripple(CastContext ctx, BlockPos centre, double radius, int delay, float share, boolean cracking) {
 			this.ctx = ctx;
 			this.centre = centre;
 			this.radius = radius;
+			this.delay = delay;
+			this.share = share;
+			this.cracking = cracking;
 			this.stamp = Vec3.atBottomCenterOf(centre.above()).add(0, 0.9, 0);
 			this.disc = QuakeGeometry.disc(radius);
-			this.cracks = QuakeGeometry.cracks(disc.size(), ctx.seed());
+			double crackShare = QuakeGeometry.CRACK_SHARE * (ctx.rank().is(FISSURE) ? 2 : 1);
+			this.cracks = QuakeGeometry.cracks(disc.size(), ctx.seed(), crackShare);
 			this.duration = QuakeGeometry.duration(radius);
 		}
 
 		@Override
-		public boolean tick(ServerLevel level, int age) {
+		public boolean tick(ServerLevel level, int tick) {
+			int age = tick - delay;
+			if (age < 1) return true;
 			Predicate<BlockPos> solid = EarthSpikes.solid(level);
 			while (next < disc.size() && QuakeGeometry.tickOf(disc.get(next).dist()) <= age) {
-				if (cracks[next]) crack(level, disc.get(next), solid);
+				if (cracking && cracks[next]) crack(level, disc.get(next), solid);
 				next++;
 			}
 			feel(level, Math.min(radius, QuakeGeometry.ringAt(age)));
@@ -167,10 +198,13 @@ public final class Quake implements Spell {
 				if (!e.onGround() || !reaches(level, e)) continue;
 				// Only creatures count toward the per-cast entity budget (items and orbs are just thrown).
 				if (e instanceof LivingEntity && struck++ >= Targets.MAX_ENTITIES) continue;
-				if (e instanceof LivingEntity l) Hurt.damage(ctx, l, DAMAGE * ctx.power());
+				if (e instanceof LivingEntity l) Hurt.damage(ctx, l, DAMAGE * ctx.power() * share);
 				if (pushes(caster, e) && !e.isRemoved()) {
 					Vec3 out = e.position().subtract(stamp);
-					Hurt.knock(e, out, KNOCK, UP);
+					double k = ctx.rank().is(TECTONIC) ? 2 : 1;
+					// Seismic Pull: the ring drags inward, a little up so the ground's friction doesn't eat it.
+					if (ctx.rank().is(PULL)) Hurt.knock(e, out.reverse(), KNOCK * 1.2, UP * 0.5);
+					else Hurt.knock(e, out, KNOCK * k, UP * k);
 				}
 			}
 		}

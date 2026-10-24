@@ -1,5 +1,6 @@
 package local.carter.office.magic.spell.earth;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -16,6 +17,8 @@ import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -38,12 +41,34 @@ import net.minecraft.world.phys.Vec3;
  * {@code 4 × P} once; creatures a control effect may take (hostile mobs and animals, never a boss), items and XP orbs are also
  * thrown {@link #UP} up ({@link #liftable}). Small spell: no block changes, the spikes are the client's ghost blocks.
  *
+ * <p>Ranks lengthen the line (the size knob). Forks: III {@link #IMPALE} (twice the damage, the line 25 % shorter; knobs) or
+ * {@link #UPLIFT} (thrown twice as high); V {@link #FIELD} (three lines, ±{@link #FIELD_ANGLE}°, from the same first cell; each
+ * creature is struck once) or {@link #PETRIFY} (Slowness VI and Weakness, riders).
+ *
  * <p>Fx: {@code target} = bottom centre of the first cell, {@code dir} = the flat look, {@code duration} = the line's length in
- * ticks, {@code data} = {length}. The client follows the same ground rule on its own world.
+ * ticks, {@code data} = {length}. The client follows the same ground rule on its own world, and Spike Field's fan with
+ * {@link #lines}.
  */
 public final class EarthSpikes implements Spell {
 	public static final float DAMAGE = 4;
 	public static final double UP = 0.6;
+	public static final String IMPALE = "impale";
+	public static final String UPLIFT = "uplift";
+	public static final String FIELD = "field";
+	public static final String PETRIFY = "petrify";
+	public static final float FIELD_ANGLE = 20;
+
+	/** The line's length at {@code charge} and {@code rank} (the size knob, Impale's shortening), at least 1. */
+	public static int length(float charge, SpellRank rank) {
+		return Math.max(1, (int) Math.round(EarthSpikesGeometry.length(charge) * rank.mul(Knob.SIZE)));
+	}
+
+	/** The lines' directions: {@code forward}, and (Spike Field) one {@link #FIELD_ANGLE}° to each side. */
+	public static List<Vec3> lines(Vec3 forward, SpellRank rank) {
+		if (!rank.is(FIELD)) return List.of(forward);
+		float a = (float) Math.toRadians(FIELD_ANGLE);
+		return List.of(forward.yRot(a), forward, forward.yRot(-a));
+	}
 
 	@Override
 	public Identifier id() {
@@ -65,11 +90,13 @@ public final class EarthSpikes implements Spell {
 		ServerPlayer p = ctx.caster();
 		Vec3 forward = forward(ctx.look(), p.getYRot());
 		BlockPos start = EarthSpikesGeometry.start(p.position(), forward);
-		int length = EarthSpikesGeometry.length(ctx.charge());
-		List<BlockPos> path = EarthSpikesGeometry.path(start, forward, length, solid(ctx.level()));
-		if (!ActiveEffects.add(ctx, new Burst(ctx, path, forward))) return CastOutcome.fizzle(CastService.BUSY_KEY);
-		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(start)).withDuration(Math.max(1, path.size()))
-				.withData(length));
+		int length = length(ctx.charge(), ctx.rank());
+		List<List<BlockPos>> paths = new ArrayList<>();
+		for (Vec3 f : lines(forward, ctx.rank())) paths.add(EarthSpikesGeometry.path(start, f, length, solid(ctx.level())));
+		if (!ActiveEffects.add(ctx, new Burst(ctx, paths, forward))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		int longest = 1;
+		for (List<BlockPos> path : paths) longest = Math.max(longest, path.size());
+		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(start)).withDuration(longest).withData(length));
 	}
 
 	/** The flat look, or the body's facing when looking straight up or down. */
@@ -104,29 +131,35 @@ public final class EarthSpikes implements Spell {
 	/** One spike a tick: spike {@code i} on tick {@code i + 1} after the cast (the first one fx tick 0 draws). */
 	private static final class Burst implements LingeringEffect {
 		private final CastContext ctx;
-		private final List<BlockPos> path;
+		/** One line, or Spike Field's three: spike {@code i} of each bursts on the same tick, and each creature is struck once. */
+		private final List<List<BlockPos>> paths;
 		private final Vec3 forward;
 		private final Set<Entity> struck = new HashSet<>();
 
-		Burst(CastContext ctx, List<BlockPos> path, Vec3 forward) {
+		Burst(CastContext ctx, List<List<BlockPos>> paths, Vec3 forward) {
 			this.ctx = ctx;
-			this.path = path;
+			this.paths = paths;
 			this.forward = forward;
 		}
 
 		@Override
 		public boolean tick(ServerLevel level, int age) {
 			int i = age - 1;
-			if (i >= path.size()) return false;
-			AABB box = spikeBox(path.get(i));
+			boolean more = false;
+			double up = UP * (ctx.rank().is(UPLIFT) ? 2 : 1);
 			float damage = DAMAGE * ctx.power();
-			for (Entity e : level.getEntities((Entity) null, box, e -> !struck.contains(e) && TargetFilter.pushable(ctx.caster(), e))) {
-				if (struck.size() >= 64) break;
-				struck.add(e);
-				if (e instanceof LivingEntity l) Hurt.damage(ctx, l, damage);
-				if (liftable(ctx.caster(), e)) Hurt.knock(e, forward, 0, UP);
+			for (List<BlockPos> path : paths) {
+				if (i >= path.size()) continue;
+				AABB box = spikeBox(path.get(i));
+				for (Entity e : level.getEntities((Entity) null, box, e -> !struck.contains(e) && TargetFilter.pushable(ctx.caster(), e))) {
+					if (struck.size() >= 64) break;
+					struck.add(e);
+					if (e instanceof LivingEntity l) Hurt.damage(ctx, l, damage);
+					if (liftable(ctx.caster(), e)) Hurt.knock(e, forward, 0, up);
+				}
+				more |= i + 1 < path.size();
 			}
-			return i + 1 < path.size();
+			return more;
 		}
 
 		@Override

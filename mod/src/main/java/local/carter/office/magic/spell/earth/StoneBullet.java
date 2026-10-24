@@ -1,5 +1,7 @@
 package local.carter.office.magic.spell.earth;
 
+import org.jspecify.annotations.Nullable;
+
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
@@ -9,8 +11,11 @@ import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.ProjectileHit;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
 
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -27,6 +32,11 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * down over a long throw; its size is {@link #radius} ({@link #RADIUS} at a tap, twice that at full charge). The first entity it
  * hits takes 5 × P damage and is knocked {@code KNOCK × (1 + charge)} along the throw (plus a little lift). No block changes.
  *
+ * <p>Ranks grow the stone (the size knob). Forks: III {@link #BOULDER} (the stone ×1.5, knockback ×1.5, knobs) or
+ * {@link #SHRAPNEL} (it shatters: {@link #SHRAPNEL_SHARE} within {@link #SHRAPNEL_RADIUS}); V {@link #RICOCHET} (it bounces on to
+ * the nearest creature within {@link #RICOCHET_RANGE} in sight, {@link #RICOCHET_SHARE}) or {@link #CONCUSSION} (Blindness and
+ * Slowness III, riders).
+ *
  * <p>Fx: {@code origin} = the eye, {@code dir} = the unit look, {@code target} = where the arc meets a block (or where it ends),
  * {@code duration} = ticks to get there; {@code data} = {speed, gravity, radius}. The client flies the same arc ({@link #path},
  * which is {@link Projectiles#step} between ticks) and stops it at the first entity its own sweep meets.
@@ -42,6 +52,14 @@ public final class StoneBullet implements Spell {
 	public static final double LIFT = 0.2;
 	/** Cap on the upward push, so a stone thrown steeply up lifts a foe a little instead of launching it. */
 	public static final double MAX_UP = 0.5;
+	public static final String BOULDER = "boulder";
+	public static final String SHRAPNEL = "shrapnel";
+	public static final String RICOCHET = "ricochet";
+	public static final String CONCUSSION = "concussion";
+	public static final double SHRAPNEL_RADIUS = 2.5;
+	public static final float SHRAPNEL_SHARE = 0.4F;
+	public static final double RICOCHET_RANGE = 6;
+	public static final float RICOCHET_SHARE = 0.6F;
 
 	@Override
 	public Identifier id() {
@@ -61,9 +79,9 @@ public final class StoneBullet implements Spell {
 	@Override
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 dir = ctx.look().normalize();
-		ProjectileSpec spec = spec(ctx.eye(), dir, ctx.charge());
+		ProjectileSpec spec = new ProjectileSpec(ctx.eye(), dir.scale(SPEED), GRAVITY, RADIUS * ctx.rank().size(ctx.charge()), MAX_TICKS, false);
 		float damage = DAMAGE * ctx.power();
-		double knock = KNOCK * ChargeMath.size(ctx.charge());
+		double knock = KNOCK * ChargeMath.size(ctx.charge()) * ctx.rank().mul(Knob.KNOCK);
 		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, spec, damage, knock, hit))) return CastOutcome.fizzle("magic.office.busy");
 
 		// Where the arc meets a block, tick by tick as the projectile clips, so every client stops the stone at the same wall.
@@ -132,10 +150,27 @@ public final class StoneBullet implements Spell {
 
 	private static void hit(CastContext ctx, ProjectileSpec spec, float damage, double knock, ProjectileHit hit) {
 		LivingEntity e = hit.entity();
+		if (ctx.rank().is(SHRAPNEL)) RankKit.blast(ctx, hit.pos(), SHRAPNEL_RADIUS, damage * SHRAPNEL_SHARE, e, 0, 0, 0);
 		if (e == null) return;
 		// The direction the stone was travelling when it struck.
 		Vec3 dir = heading(spec, timeAt(spec, hit.pos()));
 		Hurt.damage(ctx, e, damage);
 		Hurt.knock(e, dir, knock, Math.min(MAX_UP, LIFT + knock * Math.max(0, dir.y)));
+		if (ctx.rank().is(RICOCHET)) {
+			LivingEntity next = ricochet(ctx, e);
+			if (next != null) {
+				Hurt.damage(ctx, next, damage * RICOCHET_SHARE);
+				Hurt.knock(next, next.position().subtract(e.position()), knock * RICOCHET_SHARE, LIFT);
+			}
+		}
+	}
+
+	/** Ricochet: the nearest other creature within {@link #RICOCHET_RANGE} of {@code from}, in its sight (shared rule with the fx). */
+	static @Nullable LivingEntity ricochet(CastContext ctx, LivingEntity from) {
+		Vec3 c = from.getBoundingBox().getCenter();
+		for (LivingEntity e : Targets.radius(ctx, c, RICOCHET_RANGE)) {
+			if (e != from && RankKit.reaches(ctx.level(), c, e.getBoundingBox())) return e;
+		}
+		return null;
 	}
 }

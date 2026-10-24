@@ -7,6 +7,8 @@ import java.util.List;
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
@@ -43,6 +45,10 @@ public final class BladeWindGeometry {
 	public static final int MAX_CUTS = 64;
 	/** Half the fan's spread at a tap, in degrees (twice that at full charge). */
 	public static final double SPREAD = 15;
+	/** Most blades a ranked fan throws; Wide Arc's half-spread; Long Reach's flight. */
+	public static final int MAX_BLADES = 9;
+	public static final double WIDE_SPREAD = 40;
+	public static final int LONG_TICKS = 21;
 
 	private BladeWindGeometry() {}
 
@@ -59,10 +65,37 @@ public final class BladeWindGeometry {
 		return SPREAD * ChargeMath.size(charge);
 	}
 
+	/**
+	 * Blades at {@code rank}: {@link #blades(float)} times the size knob, kept odd (one along the look), plus the forks' extra,
+	 * 1 to {@link #MAX_BLADES}.
+	 */
+	public static int blades(float charge, SpellRank rank) {
+		double scaled = blades(charge) * rank.mul(Knob.SIZE);
+		int odd = 2 * (int) Math.round((scaled - 1) / 2) + 1;
+		return Math.clamp(odd + Math.round(rank.add(Knob.COUNT)), 1, MAX_BLADES);
+	}
+
+	/** Half the fan's spread at {@code rank}: {@link #WIDE_SPREAD} for Wide Arc, else {@link #spread(float)}. */
+	public static double spread(float charge, SpellRank rank) {
+		return rank.is(BladeWind.WIDE) ? WIDE_SPREAD : spread(charge);
+	}
+
+	/** A blade's flight at {@code rank}: {@link #LONG_TICKS} for Long Reach, else {@link #MAX_TICKS}. */
+	public static int maxTicks(SpellRank rank) {
+		return rank.is(BladeWind.LONG) ? LONG_TICKS : MAX_TICKS;
+	}
+
 	/** Each blade's turn from the look, in degrees, left to right, evenly over ±{@link #spread}. */
 	public static double[] angles(float charge) {
-		int n = blades(charge);
-		double s = spread(charge);
+		return angles(blades(charge), spread(charge));
+	}
+
+	public static double[] angles(float charge, SpellRank rank) {
+		return angles(blades(charge, rank), spread(charge, rank));
+	}
+
+	private static double[] angles(int n, double s) {
+		if (n == 1) return new double[] {0};
 		double[] out = new double[n];
 		for (int i = 0; i < n; i++) out[i] = -s + 2 * s * i / (n - 1);
 		return out;
@@ -82,12 +115,21 @@ public final class BladeWindGeometry {
 
 	/** The cast's blades, left to right: from {@code eye} looking along {@code look} at {@code charge}. */
 	public static List<ProjectileSpec> specs(Vec3 eye, Vec3 look, float charge) {
+		return specs(eye, look, angles(charge), MAX_TICKS);
+	}
+
+	/** The cast's blades at {@code rank} (count, spread and flight time). */
+	public static List<ProjectileSpec> specs(Vec3 eye, Vec3 look, float charge, SpellRank rank) {
+		return specs(eye, look, angles(charge, rank), maxTicks(rank));
+	}
+
+	private static List<ProjectileSpec> specs(Vec3 eye, Vec3 look, double[] angles, int ticks) {
 		Frame fr = frame(look);
 		List<ProjectileSpec> out = new ArrayList<>();
-		for (double deg : angles(charge)) {
+		for (double deg : angles) {
 			double a = Math.toRadians(deg);
 			Vec3 dir = fr.forward().scale(Math.cos(a)).add(fr.side().scale(Math.sin(a))).normalize();
-			out.add(new ProjectileSpec(eye.add(dir.scale(START)), dir.scale(SPEED), 0, RADIUS, MAX_TICKS, true));
+			out.add(new ProjectileSpec(eye.add(dir.scale(START)), dir.scale(SPEED), 0, RADIUS, ticks, true));
 		}
 		return out;
 	}

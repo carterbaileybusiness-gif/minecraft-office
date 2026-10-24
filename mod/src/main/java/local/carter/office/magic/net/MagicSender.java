@@ -3,6 +3,7 @@ package local.carter.office.magic.net;
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
 import local.carter.office.magic.net.MagicPayloads.TravelRoster;
+import local.carter.office.magic.net.MagicPayloads.TreeResult;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -32,4 +33,9 @@ public interface MagicSender {
 
 	/** The Friends page roster for {@code p}. */
 	void roster(ServerPlayer p, TravelRoster r);
+
+	/** The answer to {@code p}'s rank-up or fork choice (recorders that don't record it hand it to the network). */
+	default void treeResult(ServerPlayer p, TreeResult r) {
+		MagicServer.network().treeResult(p, r);
+	}
 }

@@ -5,15 +5,23 @@ import org.jspecify.annotations.Nullable;
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
+import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Motion;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -21,6 +29,11 @@ import net.minecraft.world.phys.Vec3;
  * velocity is {@code look_h × 0.4 × (1 + charge)} level plus {@code 0.9 + 0.43 × charge} up, where {@code look_h} is the level
  * look direction at unit length (the facing when looking straight up or down): a tap rises about 5 blocks, a full charge about
  * 10 ({@link #apex}). It replaces the caster's velocity, so a falling caster is caught and thrown up. No fall damage for {@link #NO_FALL_TICKS} ticks ({@link Motion#dash}). No block changes; touches no one else.
+ *
+ * <p>Ranks raise the jump (the size knob: the up speed grows by its square root, so the height grows by about the knob). Forks:
+ * III {@link #FEATHER} (Slow Falling for {@link #FEATHER_TICKS}) or {@link #LONG_JUMP} ({@link #LONG_JUMP_FORWARD}× forward);
+ * V {@link #SECOND_WIND} (cooldown −60 %, a knob) or {@link #SHOCKWAVE} (landing within {@link #SHOCKWAVE_WAIT} ticks blasts
+ * {@link #SHOCKWAVE_DAMAGE}{@code × P} and throws foes out within {@link #SHOCKWAVE_RADIUS}).
  *
  * <p>Fx: {@code target} = the caster's feet, {@code data} = {@code {up speed}} ({@code dir} is the look, as always).
  */
@@ -31,6 +44,16 @@ public final class AirStep implements Spell {
 	public static final double FORWARD = 0.4;
 	/** Long enough for a full charge's rise and fall (about 40 ticks). */
 	public static final int NO_FALL_TICKS = 80;
+	public static final String FEATHER = "feather";
+	public static final String LONG_JUMP = "long_jump";
+	public static final String SECOND_WIND = "second_wind";
+	public static final String SHOCKWAVE = "shockwave";
+	public static final int FEATHER_TICKS = 100;
+	public static final double LONG_JUMP_FORWARD = 2.2;
+	public static final double SHOCKWAVE_RADIUS = 3;
+	public static final float SHOCKWAVE_DAMAGE = 3;
+	/** How long Shockwave Landing waits for the caster to come down. */
+	public static final int SHOCKWAVE_WAIT = 80;
 	/** Vanilla's player gravity and air drag, for {@link #apex}. */
 	private static final double GRAVITY = 0.08;
 	private static final double DRAG = 0.98;
@@ -57,6 +80,13 @@ public final class AirStep implements Spell {
 		return new Vec3(h.x * forward, UP + UP_PER_CHARGE * Mth.clamp(charge, 0F, 1F), h.z * forward);
 	}
 
+	/** The jump's velocity at {@code rank}: the up speed times the square root of the size knob, Long Jump's reach forward. */
+	public static Vec3 velocity(Vec3 look, float yRot, float charge, SpellRank rank) {
+		Vec3 v = velocity(look, yRot, charge);
+		double forward = rank.is(LONG_JUMP) ? LONG_JUMP_FORWARD : 1;
+		return new Vec3(v.x * forward, v.y * Math.sqrt(rank.mul(Knob.SIZE)), v.z * forward);
+	}
+
 	/** How high a jump of {@code up} blocks a tick climbs in open air (vanilla's step: move, then less gravity, times drag). */
 	public static double apex(double up) {
 		double y = 0;
@@ -72,11 +102,40 @@ public final class AirStep implements Spell {
 		return new Vec3(-Mth.sin(r), 0, Mth.cos(r));
 	}
 
+	/** Shockwave Landing: waits for the caster to leave the ground and come back down, then blasts round their feet. */
+	private static final class Landing implements LingeringEffect {
+		private final CastContext ctx;
+		private boolean airborne;
+
+		Landing(CastContext ctx) {
+			this.ctx = ctx;
+		}
+
+		@Override
+		public boolean tick(ServerLevel level, int age) {
+			ServerPlayer p = ctx.caster();
+			if (p.isRemoved() || !p.isAlive() || p.level() != level) return false;
+			if (!p.onGround()) airborne = true;
+			else if (airborne || age > 10) {
+				RankKit.blast(ctx, p.position().add(0, 0.3, 0), SHOCKWAVE_RADIUS, SHOCKWAVE_DAMAGE * ctx.power(), null, 0, 1.0, 0.5);
+				return false;
+			}
+			return age < SHOCKWAVE_WAIT;
+		}
+
+		@Override
+		public String toString() {
+			return "AirStep.Landing[" + ctx.caster().getScoreboardName() + "]";
+		}
+	}
+
 	@Override
 	public CastOutcome cast(CastContext ctx) {
 		ServerPlayer p = ctx.caster();
-		Vec3 v = velocity(ctx.look(), p.getYRot(), ctx.charge());
+		Vec3 v = velocity(ctx.look(), p.getYRot(), ctx.charge(), ctx.rank());
 		Motion.dash(p, v, NO_FALL_TICKS);
+		if (ctx.rank().is(FEATHER)) p.addEffect(new MobEffectInstance(MobEffects.SLOW_FALLING, FEATHER_TICKS, 0), p);
+		if (ctx.rank().is(SHOCKWAVE)) ActiveEffects.add(ctx, new Landing(ctx));
 		Vec3 feet = p.position();
 		return CastOutcome.cast(ctx.fx().withTarget(feet).withData((float) v.y));
 	}

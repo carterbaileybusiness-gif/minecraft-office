@@ -9,6 +9,7 @@ import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.wind.Tornado;
 import local.carter.office.magic.spell.wind.TornadoGeometry;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -60,10 +61,20 @@ public final class TornadoFx implements SpellFx {
 		if (kit.budget().particles(ring.cost()) >= ring.cost()) Minecraft.getInstance().particleEngine.add(ring);
 		kit.motes(start.add(0, 0.4, 0), PALE, 20, 0.8, new Vec3(0, 0.12, 0), 0.12, GlowMote.Drift.SWIRL, 0.12F, 14);
 
-		Funnel funnel = new Funnel(level, geo, c, e.seed());
+		SpellRank rank = e.spellRank();
+		double widen = TornadoGeometry.radius(c, rank) / TornadoGeometry.RADIUS;
+		boolean twin = rank.is(Tornado.TWIN);
+		funnel(level, kit, geo, c, widen, e.seed(), life, twin ? 2 : 1);
+		// Twin Tornadoes: the second one leaves turned, as the server sends it.
+		if (twin) funnel(level, kit, new TornadoGeometry(geo.origin(), Tornado.twinDir(geo.dir()), life), c, widen, e.seed() + 1, life, 2);
+	}
+
+	/** One funnel along {@code geo}, with its dust and motes; it gets {@code 1 / of} of what the budget has left. */
+	private static void funnel(ClientLevel level, FxKit kit, TornadoGeometry geo, float c, double widen, long seed, int life, int of) {
+		Funnel funnel = new Funnel(level, geo, c, widen, seed);
 		Minecraft.getInstance().particleEngine.add(funnel);
 		int steps = (life + STEP - 1) / STEP;
-		int share = Math.max(0, (kit.budget().particlesLeft() - RESERVE) / steps);
+		int share = Math.max(0, (kit.budget().particlesLeft() - RESERVE) / steps / of);
 		int funnelCost = funnel.cost();
 		int[] left = {0};
 		RandomSource r = kit.random();
@@ -165,10 +176,10 @@ public final class TornadoFx implements SpellFx {
 		private int ended = -1;
 		private boolean paid = true;
 
-		Funnel(ClientLevel level, TornadoGeometry geo, float charge, long seed) {
+		Funnel(ClientLevel level, TornadoGeometry geo, float charge, double widen, long seed) {
 			super(level, geo.origin().x, geo.origin().y, geo.origin().z, MagicCircleRenderer.sprite("line"));
 			this.geo = geo;
-			this.widen = TornadoGeometry.radius(charge) / TornadoGeometry.RADIUS;
+			this.widen = widen;
 			this.base = geo.origin();
 			this.prevBase = base;
 			this.strands = BASE_STRANDS + 14 + Math.round(4 * charge);

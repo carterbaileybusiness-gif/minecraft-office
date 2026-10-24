@@ -6,10 +6,13 @@ import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.LightPipeline;
 import local.carter.office.client.magic.fx.MagicCircleRenderer;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.water.DragonGeometry;
+import local.carter.office.magic.spell.water.WaterDragon;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -88,6 +91,9 @@ public final class WaterDragonFx implements SpellFx {
 				}
 			} else if (t == DragonGeometry.FLIGHT) {
 				impact(kit, level, target, ground, flood, r);
+				SpellRank rank = e.spellRank();
+				if (rank.is(WaterDragon.MAELSTROM)) RankFx.vortex(kit, level, target, WaterDragon.MAELSTROM_RADIUS, WaterDragon.MAELSTROM_TICKS, WaterFx.LIGHT);
+				if (rank.is(WaterDragon.TORRENT)) RankFx.shockRing(kit, level, target, WaterDragon.strikeRadius(rank), 8, WaterFx.FOAM, ParticleTypes.SPLASH);
 			} else {
 				after(kit, level, target, ground, flood, t - DragonGeometry.FLIGHT, r);
 			}

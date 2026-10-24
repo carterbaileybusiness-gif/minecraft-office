@@ -14,8 +14,10 @@ import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.tree.Knob;
 
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -43,6 +45,10 @@ import net.minecraft.world.phys.Vec3;
  * friend's pearl, splash heal or XP is never lost to the bubble). No block changes. A new bubble replaces the
  * caster's old one. It ends early if the caster dies, leaves or changes dimension.
  *
+ * <p>Ranks grow the bubble (the size knob). Forks: III {@link #MIRROR} (what it stops flies back at its shooter, now the caster's)
+ * or {@link #MENDING} (Regeneration I while it lasts); V {@link #FORTRESS} (Resistance II, lasts {@link #FORTRESS_LIFE}× as long) or
+ * {@link #POP} (when it runs out it bursts: {@link #POP_DAMAGE}{@code × P} and a push within its radius).
+ *
  * <p>Fx: {@code target} = the bubble's centre at the cast, {@code duration} = its life, {@code data[0]} = its radius.
  */
 public final class BubbleShield implements Spell {
@@ -50,6 +56,15 @@ public final class BubbleShield implements Spell {
 	public static final int RESISTANCE_AMPLIFIER = 0;
 	/** What is left of a trident's speed when the bubble turns it back. */
 	public static final double TRIDENT_BOUNCE = 0.15;
+	public static final String MIRROR = "mirror";
+	public static final String MENDING = "mending";
+	public static final String FORTRESS = "fortress";
+	public static final String POP = "pop";
+	/** What is left of a projectile's speed when Mirror sends it back. */
+	public static final double MIRROR_BOUNCE = 0.8;
+	public static final float FORTRESS_LIFE = 1.5F;
+	public static final float POP_DAMAGE = 4;
+	public static final double POP_PUSH = 1.0;
 
 	/** {@code AbstractArrow.isInGround} and {@code FireworkRocketEntity.isAttachedToEntity} are not public; 26.x runs unobfuscated. */
 	private static final @Nullable Method IN_GROUND = method(AbstractArrow.class, "isInGround");
@@ -76,8 +91,8 @@ public final class BubbleShield implements Spell {
 	@Override
 	public CastOutcome cast(CastContext ctx) {
 		ServerPlayer caster = ctx.caster();
-		int life = BubbleShieldGeometry.duration(ctx.charge());
-		double radius = BubbleShieldGeometry.radius(ctx.charge());
+		int life = Math.round(BubbleShieldGeometry.duration(ctx.charge()) * (ctx.rank().is(FORTRESS) ? FORTRESS_LIFE : 1));
+		double radius = BubbleShieldGeometry.radius(ctx.charge()) * ctx.rank().mul(Knob.SIZE);
 		Bubble bubble = new Bubble(ctx, life, radius);
 		// at the per-caster cap, the bubble being refreshed frees its own slot first
 		Bubble current = ACTIVE.get(caster.getUUID());
@@ -85,7 +100,9 @@ public final class BubbleShield implements Spell {
 		if (!ActiveEffects.add(ctx, bubble)) return CastOutcome.fizzle("magic.office.busy");
 		Bubble old = ACTIVE.put(caster.getUUID(), bubble);
 		if (old != null) ActiveEffects.remove(old);
-		caster.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, life, RESISTANCE_AMPLIFIER, false, false, true), caster);
+		int armour = ctx.rank().is(FORTRESS) ? RESISTANCE_AMPLIFIER + 1 : RESISTANCE_AMPLIFIER;
+		caster.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, life, armour, false, false, true), caster);
+		if (ctx.rank().is(MENDING)) caster.addEffect(new MobEffectInstance(MobEffects.REGENERATION, life, 0, false, false, true), caster);
 		Vec3 centre = BubbleShieldGeometry.centre(caster.position(), caster.getBbHeight());
 		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withData((float) radius));
 	}
@@ -109,6 +126,21 @@ public final class BubbleShield implements Spell {
 
 	/** Stops {@code p}: a trident is turned back (it drops by the bubble), anything else is removed. */
 	static void stop(Projectile p) {
+		stop(p, null);
+	}
+
+	/**
+	 * Stops {@code p}; with a {@code mirror} caster (Mirror) anything but a trident flies back the way it came at
+	 * {@link #MIRROR_BOUNCE} of its speed, now the caster's (so it can hit its shooter and the bubble lets it go).
+	 */
+	static void stop(Projectile p, @Nullable ServerPlayer mirror) {
+		if (mirror != null && !(p instanceof ThrownTrident)) {
+			p.setDeltaMovement(p.getDeltaMovement().scale(-MIRROR_BOUNCE));
+			p.setOwner(mirror);
+			p.syncVelocity = true;
+			p.needsSync = true;
+			return;
+		}
 		if (p instanceof ThrownTrident) {
 			p.setDeltaMovement(p.getDeltaMovement().scale(-TRIDENT_BOUNCE));
 			p.syncVelocity = true;
@@ -159,10 +191,12 @@ public final class BubbleShield implements Spell {
 			AABB near = new AABB(centre, centre).inflate(radius + BubbleShieldGeometry.SEARCH);
 			for (Projectile pr : level.getEntitiesOfClass(Projectile.class, near, pr -> !pr.isRemoved() && pr.getOwner() != p)) {
 				if (stops(pr) && BubbleShieldGeometry.threatens(centre, pr.position(), pr.getDeltaMovement(), radius)) {
-					stop(pr);
+					stop(pr, ctx.rank().is(MIRROR) ? p : null);
 					stopped++;
 				}
 			}
+			// Pop: run out, it bursts outward.
+			if (age >= life && ctx.rank().is(POP)) RankKit.blast(ctx, centre, radius, POP_DAMAGE * ctx.power(), null, 0, POP_PUSH, 0.3);
 			return age < life;
 		}
 

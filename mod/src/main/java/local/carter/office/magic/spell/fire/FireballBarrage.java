@@ -11,9 +11,8 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
-import org.jspecify.annotations.Nullable;
-
 import com.google.common.annotations.VisibleForTesting;
+import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
@@ -40,6 +39,8 @@ import local.carter.office.magic.terrain.EditTier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
@@ -65,6 +66,11 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * {@code Shapes.bowl(1.5, 0.6)} crater there and turns {@link #NETHERRACK} of the floor it bared into netherrack.</li>
  * </ul>
  *
+ * <p>Ranks add fireballs (the size knob, up to {@link BarrageGeometry#MAX_COUNT}). Forks: III {@link #CARPET} (+2, spread
+ * {@link BarrageGeometry#CARPET_SPREAD}×) or {@link #NAPALM} (burns three times as long and slows); V {@link #RAPID} (one every
+ * {@link BarrageGeometry#RAPID_INTERVAL} ticks, +2) or {@link #HEAVY} (blast {@link BarrageGeometry#HEAVY_BLAST}, crater
+ * {@link BarrageGeometry#HEAVY_CRATER}, one fewer).
+ *
  * <p>Fx: {@code target} = the aim point, {@code dir} = the caster's flat facing, {@code duration} = the whole volley's life,
  * {@code data} = {@code {count, lift_0, …, lift_(count−1)}} (each fireball's clear share of its sky drop).
  */
@@ -79,6 +85,11 @@ public final class FireballBarrage implements Spell {
 	public static final float NETHERRACK = 0.2F;
 	public static final double CRATER_RADIUS = 1.5;
 	public static final double CRATER_DEPTH = 0.6;
+	public static final String CARPET = "carpet";
+	public static final String NAPALM = "napalm";
+	public static final String RAPID = "rapid";
+	public static final String HEAVY = "heavy";
+	public static final int NAPALM_SLOW_TICKS = 60;
 	/** A creature struck at most this high above the ground still leaves a crater under it. */
 	private static final double CRATER_REACH = 2;
 
@@ -112,25 +123,26 @@ public final class FireballBarrage implements Spell {
 	@Override
 	public CastOutcome cast(CastContext ctx) {
 		ServerLevel level = ctx.level();
-		int count = BarrageGeometry.count(ctx.charge());
+		int count = BarrageGeometry.count(ctx.charge(), ctx.rank());
 		Vec3 point = Targets.point(ctx, BarrageGeometry.RANGE);
 		Vec3 dir = BarrageGeometry.flat(ctx.look().lengthSqr() > 0 && Math.abs(ctx.look().y) < 0.999
 				? ctx.look() : FireWallGeometry.forward(ctx.caster().getYRot()));
 		float[] lifts = new float[count];
-		List<Vec3> aims = BarrageGeometry.aims(point, ctx.seed(), count);
+		double spread = BarrageGeometry.spreadMul(ctx.rank());
+		int interval = BarrageGeometry.interval(ctx.rank());
+		List<Vec3> aims = BarrageGeometry.aims(point, ctx.seed(), count, spread);
 		Vec3 drop = BarrageGeometry.drop(dir);
 		for (int i = 0; i < count; i++) lifts[i] = (float) lift(level, aims.get(i), drop);
-		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(point, dir, ctx.seed(), count, lifts);
+		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(point, dir, ctx.seed(), count, lifts, spread, interval);
 		// The volley flies its own fireballs, so once it is running every one of them flies (nothing else can take their slots).
 		if (!ActiveEffects.add(ctx, new Volley(ctx, volley))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 
 		float[] data = new float[1 + count];
 		data[0] = count;
 		System.arraycopy(lifts, 0, data, 1, count);
-		int life = (count - 1) * BarrageGeometry.INTERVAL + BarrageGeometry.MAX_TICKS;
+		int life = (count - 1) * interval + BarrageGeometry.MAX_TICKS;
 		FxEvent fx = ctx.fx();
-		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), dir, point, fx.charge(), fx.power(), fx.seed(), life,
-				new int[0], data));
+		return CastOutcome.cast(fx.withDir(dir).withTarget(point).withDuration(life).withData(data));
 	}
 
 	/**
@@ -234,19 +246,22 @@ public final class FireballBarrage implements Spell {
 		// The blast is judged from just outside what it struck, so a fireball on a wall never hurts what stands behind it.
 		Vec3 blast = at.subtract(dir.scale(0.3));
 		float cap = MAX_DAMAGE * ctx.power();
-		for (LivingEntity e : Targets.radius(ctx, at, BarrageGeometry.BLAST)) {
+		double radius = BarrageGeometry.blast(ctx.rank());
+		boolean napalm = ctx.rank().is(NAPALM);
+		for (LivingEntity e : Targets.radius(ctx, at, radius)) {
 			if (!reaches(level, blast, e.getBoundingBox()) || !budget.admit(e)) continue;
-			double f = BarrageGeometry.falloff(Math.sqrt(e.getBoundingBox().distanceToSqr(at)));
+			double f = BarrageGeometry.falloff(Math.sqrt(e.getBoundingBox().distanceToSqr(at)), radius);
 			float already = dealt.getOrDefault(e.getId(), 0F);
 			float amount = Math.min((float) (DAMAGE * ctx.power() * f), cap - already);
 			if (amount > 0 && Hurt.damage(ctx, e, amount)) dealt.put(e.getId(), already + amount);
 			if (e.isAlive()) {
-				e.igniteForTicks(FIRE_TICKS);
+				e.igniteForTicks(Math.max(e.getRemainingFireTicks(), FIRE_TICKS * (napalm ? 3 : 1)));
+				if (napalm) e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, NAPALM_SLOW_TICKS, 0), ctx.caster());
 				Hurt.knock(e, e.getBoundingBox().getCenter().subtract(at), KNOCK, KNOCK_UP);
 			}
 		}
 		BlockPos crater = craterOrigin(level, hit);
-		int removed = crater == null ? 0 : crater(ctx, crater);
+		int removed = crater == null ? 0 : crater(ctx, crater, ctx.rank().is(HEAVY) ? BarrageGeometry.HEAVY_CRATER : CRATER_RADIUS);
 		Impact done = new Impact(ctx.caster().getUUID(), at, crater, removed);
 		for (Consumer<Impact> l : LISTENERS) l.accept(done);
 	}
@@ -270,13 +285,13 @@ public final class FireballBarrage implements Spell {
 	}
 
 	/** The crater's own MEDIUM batch: the bowl blasted out, a share of the floor it bares turned to netherrack. Returns blocks removed. */
-	private static int crater(CastContext ctx, BlockPos origin) {
+	private static int crater(CastContext ctx, BlockPos origin, double radius) {
 		ServerLevel level = ctx.level();
 		if (level.getBlockState(origin).isAir()) return 0;
 		List<BlockPos> bared = new ArrayList<>();
 		int removed = 0;
 		try (EditBatch b = ctx.kit().terrain().begin(ctx, origin, EditTier.MEDIUM)) {
-			for (Cell c : Shapes.bowl(CRATER_RADIUS, CRATER_DEPTH)) {
+			for (Cell c : Shapes.bowl(radius, CRATER_DEPTH)) {
 				BlockPos p = origin.offset(c.x(), c.y(), c.z());
 				if (!b.remove(p)) continue;
 				removed++;

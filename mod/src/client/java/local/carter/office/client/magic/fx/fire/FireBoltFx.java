@@ -6,13 +6,14 @@ import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
-import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.fire.FireBolt;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -52,24 +53,30 @@ public final class FireBoltFx implements SpellFx {
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
 		float c = Mth.clamp(e.charge(), 0F, 1F);
-		ProjectileSpec spec = FireBolt.spec(e.origin(), e.dir(), c);
-		Vec3 dir = spec.velocity().normalize();
-		Vec3[] basis = basis(dir);
-
-		Vec3 mouth = e.origin().add(dir.scale(1.6)).add(0, -0.18, 0);
+		SpellRank rank = e.spellRank();
+		Vec3 look = e.dir().lengthSqr() < 1.0E-12 ? new Vec3(0, 0, 1) : e.dir().normalize();
+		Vec3 mouth = e.origin().add(look.scale(1.6)).add(0, -0.18, 0);
 		// The caster's own first-person view already has the charge circle; a second one there would cover the crosshair.
 		if (!ownFirstPerson(e.casterId())) {
-			kit.circle(mouth, dir.reverse(), 0xFF000000 | FIRE, 0.42F * (1F + c), 2 + Math.round(2 * c), 9 + Math.round(4 * c));
+			kit.circle(mouth, look.reverse(), 0xFF000000 | FIRE, 0.42F * (1F + c), 2 + Math.round(2 * c), 9 + Math.round(4 * c));
 		}
-		kit.motes(mouth, HOT, 8 + Math.round(6 * c), 0.18, dir.scale(0.22), 0.05, GlowMote.Drift.COAST, 0.11F, 7);
+		kit.motes(mouth, HOT, 8 + Math.round(6 * c), 0.18, look.scale(0.22), 0.05, GlowMote.Drift.COAST, 0.11F, 7);
 		level.playLocalSound(mouth.x, mouth.y, mouth.z, SoundEvents.FIRECHARGE_USE, SoundSource.PLAYERS, 0.7F + 0.2F * c,
 				1.15F + 0.2F * (1 - c) + level.getRandom().nextFloat() * 0.1F, false);
 		level.playLocalSound(mouth.x, mouth.y, mouth.z, SoundEvents.BLAZE_SHOOT, SoundSource.PLAYERS, 0.35F, 1.5F, false);
+		// Every bolt the server throws (Scatter: three in a fan), each flown as the server flies it.
+		for (Vec3 d : FireBolt.dirs(e.dir(), rank)) bolt(e, level, kit, FireBolt.spec(e.origin(), d, c, rank), rank);
+	}
 
+	/** One bolt: its streak tick by tick until a block (or, unless it pierces, a creature) stops it, then its pop. */
+	private static void bolt(FxEvent e, ClientLevel level, FxKit kit, ProjectileSpec spec, SpellRank rank) {
+		Vec3 dir = spec.velocity().normalize();
+		Vec3[] basis = basis(dir);
 		boolean[] done = {false};
-		// The bolt is drawn as big as the server's (FireBolt.radius): twice a tap's at full charge.
-		float size = ChargeMath.size(c);
-		kit.simulate(1, FireBolt.MAX_TICKS + 1, t -> {
+		boolean flare = rank.is(FireBolt.FLARE);
+		// The bolt is drawn as big as the server's (FireBolt.spec's radius): twice a tap's at full charge, the rank's size on top.
+		float size = (float) (spec.radius() / FireBolt.RADIUS);
+		kit.simulate(1, spec.maxTicks() + 1, t -> {
 			if (done[0]) return;
 			Vec3 from = Projectiles.step(spec, t);
 			Vec3 to = Projectiles.step(spec, t + 1);
@@ -77,14 +84,22 @@ public final class FireBoltFx implements SpellFx {
 			boolean blocked = block.getType() != HitResult.Type.MISS;
 			Vec3 end = blocked ? block.getLocation() : to;
 			Vec3 struck = struck(level, e.casterId(), from, end, spec.radius());
+			if (struck != null && spec.pierce()) {
+				// Lance: it burns through and flies on.
+				kit.burst(struck, ParticleTypes.FLAME, 12, 0.12);
+				kit.motes(struck, HOT, 8, 0.2, Vec3.ZERO, 0.12, GlowMote.Drift.COAST, 0.1F, 8);
+				struck = null;
+			}
 			if (struck != null) end = struck;
 			streak(level, kit, e.origin(), dir, basis, from, end, t, size);
 			if (struck != null) {
 				pop(level, kit, end, dir.reverse(), size);
+				if (flare) RankFx.blast(kit, level, end, FireBolt.FLARE_RADIUS, HOT, ParticleTypes.FLAME);
 				done[0] = true;
 			} else if (blocked) {
 				Vec3 n = block.getDirection().getUnitVec3();
 				pop(level, kit, end.add(n.scale(0.1)), n, size);
+				if (flare) RankFx.blast(kit, level, end.add(n.scale(0.1)), FireBolt.FLARE_RADIUS, HOT, ParticleTypes.FLAME);
 				done[0] = true;
 			} else if (t + 1 >= spec.maxTicks()) {
 				// Out of range: it gutters out.

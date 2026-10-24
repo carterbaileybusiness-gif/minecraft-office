@@ -9,18 +9,23 @@ import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
@@ -52,10 +57,38 @@ import net.minecraft.world.phys.Vec3;
  * log apply as for any terrain spell, and {@code /magic undo} takes the water back.</li>
  * </ul>
  *
+ * <p>Ranks widen the strike (the size knob). Forks: III {@link #DROWNING} (struck foes lose all their air and get Slowness III for
+ * {@link #DROWNING_TICKS}) or {@link #TORRENT} (knockback {@link #TORRENT_KNOCK}×, strike radius +{@link #TORRENT_RADIUS}); V
+ * {@link #LEVIATHAN} (flood radius +{@link #LEVIATHAN_FLOOD}, up to 12; damage +25 %) or {@link #MAELSTROM} (a whirlpool for
+ * {@link #MAELSTROM_TICKS} drags creatures within {@link #MAELSTROM_RADIUS} to the impact, {@link #MAELSTROM_DAMAGE} every half
+ * second).
+ *
  * <p>Fx: {@code target} = the impact point, {@code duration} = {@link DragonGeometry#FLIGHT}, {@code data} = {flood radius,
  * mud radius, impact cell y}. The client rebuilds the path from {@code origin}, {@code dir}, {@code target} and {@code seed}.
  */
 public final class WaterDragon implements Spell {
+	public static final String DROWNING = "drowning";
+	public static final String TORRENT = "torrent";
+	public static final String LEVIATHAN = "leviathan";
+	public static final String MAELSTROM = "maelstrom";
+	public static final int DROWNING_TICKS = 100;
+	public static final double TORRENT_KNOCK = 1.6;
+	public static final double TORRENT_RADIUS = 2;
+	public static final int LEVIATHAN_FLOOD = 2;
+	public static final double MAELSTROM_RADIUS = 8;
+	public static final int MAELSTROM_TICKS = 100;
+	public static final float MAELSTROM_DAMAGE = 2;
+	public static final double MAELSTROM_PULL = 0.3;
+
+	/** The strike's reach at {@code rank}: {@link DragonGeometry#DAMAGE_RADIUS} times the size knob, Torrent's extra on top. */
+	public static double strikeRadius(SpellRank rank) {
+		return DragonGeometry.DAMAGE_RADIUS * rank.mul(Knob.SIZE) + (rank.is(TORRENT) ? TORRENT_RADIUS : 0);
+	}
+
+	/** The flood's radius at grimoire level {@code level} and {@code rank} (Leviathan's extra, at most {@link DragonGeometry#MAX_REACH}). */
+	public static int floodRadius(int level, SpellRank rank) {
+		return Math.min(DragonGeometry.MAX_REACH, DragonGeometry.floodRadius(level) + (rank.is(LEVIATHAN) ? LEVIATHAN_FLOOD : 0));
+	}
 	@Override
 	public Identifier id() {
 		return SpellIds.WATER_DRAGON;
@@ -88,7 +121,7 @@ public final class WaterDragon implements Spell {
 			cell = hit.getBlockPos().relative(hit.getDirection());
 		}
 		Vec3 start = DragonGeometry.start(eye, look);
-		int flood = DragonGeometry.floodRadius(ctx.grimoireLevel());
+		int flood = floodRadius(ctx.grimoireLevel(), ctx.rank());
 		int mud = DragonGeometry.mudRadius(ctx.grimoireLevel());
 		Flight flight = new Flight(ctx, impact, cell, flood, mud);
 		if (!ActiveEffects.add(ctx, flight)) return CastOutcome.fizzle("magic.office.busy");
@@ -117,19 +150,31 @@ public final class WaterDragon implements Spell {
 			if (age < DragonGeometry.FLIGHT) return true;
 			strike(level);
 			flood(level);
+			if (ctx.rank().is(MAELSTROM)) {
+				RankKit.zone(ctx, RankKit.Zone.at(impact.add(0, 0.5, 0), MAELSTROM_RADIUS, MAELSTROM_TICKS).pulling(MAELSTROM_PULL)
+						.hurting(MAELSTROM_DAMAGE, 10));
+			}
 			return false;
 		}
 
 		private void strike(ServerLevel level) {
 			float damage = DragonGeometry.DAMAGE * ctx.power();
-			for (LivingEntity e : Targets.radius(ctx, impact, DragonGeometry.DAMAGE_RADIUS)) {
+			double radius = strikeRadius(ctx.rank());
+			double knock = DragonGeometry.KNOCK * (ctx.rank().is(TORRENT) ? TORRENT_KNOCK : 1);
+			boolean drowning = ctx.rank().is(DROWNING);
+			for (LivingEntity e : Targets.radius(ctx, impact, radius)) {
 				Hurt.damage(ctx, e, damage);
 				if (e.isAlive() && TargetFilter.controllable(ctx.caster(), e)) {
 					Vec3 away = e.position().subtract(impact);
-					Hurt.knock(e, away.horizontalDistanceSqr() < 1.0E-4 ? ctx.look() : away, DragonGeometry.KNOCK, DragonGeometry.KNOCK_UP);
+					Hurt.knock(e, away.horizontalDistanceSqr() < 1.0E-4 ? ctx.look() : away, knock, DragonGeometry.KNOCK_UP);
+					// Drowning Tide: the water takes their breath.
+					if (drowning) {
+						if (!e.canBreatheUnderwater()) e.setAirSupply(0);
+						e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, DROWNING_TICKS, 2), ctx.caster());
+					}
 				}
 			}
-			for (Entity e : level.getEntities((Entity) null, new AABB(impact, impact).inflate(DragonGeometry.DAMAGE_RADIUS), Entity::isOnFire)) {
+			for (Entity e : level.getEntities((Entity) null, new AABB(impact, impact).inflate(radius), Entity::isOnFire)) {
 				e.extinguishFire();
 			}
 		}

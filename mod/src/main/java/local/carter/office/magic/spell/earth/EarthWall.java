@@ -13,7 +13,9 @@ import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
@@ -21,6 +23,8 @@ import local.carter.office.magic.spell.earth.EarthWallGeometry.Cell;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
 import local.carter.office.magic.terrain.TempBlockData;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -28,6 +32,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
@@ -61,13 +67,34 @@ import net.minecraft.world.phys.Vec3;
  * everything above it ({@link #fill}). All of it falls back to what was there {@link EarthWallGeometry#DURATION} ticks after
  * the cast (temporary blocks, so a crash or restart never leaves it behind).
  *
- * <p>Fx: {@code target} = bottom centre of the wall's centre cell, {@code duration} = {@link EarthWallGeometry#DURATION},
+ * <p>Ranks make it stand longer (the size knob on {@link EarthWallGeometry#DURATION}; never wider or taller: its shape keeps to the
+ * medium radius). Forks: III {@link #THORNS} (creatures touching it take {@link #THORN_DAMAGE}{@code × P} a second and are pushed
+ * off) or {@link #UPHEAVAL} (rising, it throws what is near {@link #UPHEAVAL_KNOCK} away and {@link #UPHEAVAL_UP} up); V
+ * {@link #BASTION} (Resistance II and Regeneration I while the caster stands within {@link #BASTION_RANGE} of it) or {@link #CRUMBLE}
+ * (when it falls it crashes forward: {@link #CRUMBLE_DAMAGE}{@code × P} within {@link #CRUMBLE_RADIUS} in front).
+ *
+ * <p>Fx: {@code target} = bottom centre of the wall's centre cell, {@code duration} = its life ({@link #life}),
  * {@code data} = {axis x, axis z, width, height}. The client runs the same rules on its own world (ground, materials and
  * the cells people stand in) to draw the columns rising.
  */
 public final class EarthWall implements Spell {
 	/** A lifted mob gets this little hop as it lands on top. */
 	public static final double LIFT_HOP = 0.2;
+	public static final String THORNS = "thorns";
+	public static final String UPHEAVAL = "upheaval";
+	public static final String BASTION = "bastion";
+	public static final String CRUMBLE = "crumble";
+	public static final float THORN_DAMAGE = 2;
+	public static final double UPHEAVAL_KNOCK = 1.2;
+	public static final double UPHEAVAL_UP = 0.6;
+	public static final double BASTION_RANGE = 4;
+	public static final float CRUMBLE_DAMAGE = 8;
+	public static final double CRUMBLE_RADIUS = 3;
+
+	/** How long the wall stands at {@code rank}: {@link EarthWallGeometry#DURATION} times the size knob. */
+	public static int life(SpellRank rank) {
+		return Math.round(EarthWallGeometry.DURATION * rank.mul(Knob.SIZE));
+	}
 
 	@Override
 	public Identifier id() {
@@ -91,7 +118,12 @@ public final class EarthWall implements Spell {
 		EarthWallGeometry g = EarthWallGeometry.of(ctx.caster().position(), forward, ahead, ctx.charge());
 		Rise rise = new Rise(ctx, g);
 		if (!ActiveEffects.add(ctx, rise)) return CastOutcome.fizzle("magic.office.busy");
-		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(g.origin())).withDuration(EarthWallGeometry.DURATION)
+		SpellRank rank = ctx.rank();
+		if (rank.is(THORNS) || rank.is(BASTION) || rank.is(CRUMBLE)) ActiveEffects.add(ctx, new Standing(ctx, g, forward));
+		if (rank.is(UPHEAVAL)) {
+			RankKit.blast(ctx, Vec3.atBottomCenterOf(g.origin()).add(0, 1, 0), g.width() / 2.0 + 1.5, 0, null, 0, UPHEAVAL_KNOCK, UPHEAVAL_UP);
+		}
+		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(g.origin())).withDuration(life(rank))
 				.withData(g.ax(), g.az(), g.width(), g.height()));
 	}
 
@@ -219,6 +251,61 @@ public final class EarthWall implements Spell {
 	 * Each column: as it starts rising, its short vegetation is torn out; at its place tick, its cells are filled and what
 	 * stands in them lifted. Then it ends (the temporary blocks restore themselves).
 	 */
+	/**
+	 * What a forked wall does while it stands: Thorns (once a second, creatures touching it are hurt and pushed off), Bastion (the
+	 * caster near it is armoured and healed) and Crumble (when it falls it crashes forward).
+	 */
+	static final class Standing implements LingeringEffect {
+		private final CastContext ctx;
+		private final EarthWallGeometry g;
+		private final Vec3 forward;
+		private final AABB box;
+		private final int life;
+
+		Standing(CastContext ctx, EarthWallGeometry g, Vec3 forward) {
+			this.ctx = ctx;
+			this.g = g;
+			this.forward = forward;
+			this.life = life(ctx.rank());
+			BlockPos o = g.origin();
+			int half = g.width() / 2;
+			BlockPos a = o.offset(-g.ax() * half, 0, -g.az() * half);
+			BlockPos b = o.offset(g.ax() * half, g.height(), g.az() * half);
+			this.box = new AABB(Vec3.atLowerCornerOf(a), Vec3.atLowerCornerOf(b).add(1, 0, 1)).inflate(0.6, 0.2, 0.6);
+		}
+
+		@Override
+		public boolean tick(ServerLevel level, int age) {
+			ServerPlayer p = ctx.caster();
+			if (age % 20 == 0 && age < life) {
+				if (ctx.rank().is(THORNS)) {
+					for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, box, e -> TargetFilter.affects(p, e))) {
+						Hurt.damage(ctx, e, THORN_DAMAGE * ctx.power());
+						if (e.isAlive() && TargetFilter.controllable(p, e)) RankKit.throwFrom(e, box.getCenter(), 0.6, 0.2);
+					}
+				}
+				if (ctx.rank().is(BASTION) && p.isAlive() && p.level() == level
+						&& box.getCenter().distanceTo(p.position()) <= BASTION_RANGE + g.width() / 2.0) {
+					p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, 30, 1), p);
+					p.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 30, 0), p);
+				}
+			}
+			if (age >= life) {
+				if (ctx.rank().is(CRUMBLE)) {
+					Vec3 front = Vec3.atBottomCenterOf(g.origin()).add(forward.scale(2)).add(0, 1, 0);
+					RankKit.blast(ctx, front, CRUMBLE_RADIUS, CRUMBLE_DAMAGE * ctx.power(), null, 0, 0.8, 0.3);
+				}
+				return false;
+			}
+			return true;
+		}
+
+		@Override
+		public String toString() {
+			return "EarthWall.Standing[" + ctx.caster().getScoreboardName() + "]";
+		}
+	}
+
 	static final class Rise implements LingeringEffect {
 		private final CastContext ctx;
 		private final EarthWallGeometry g;
@@ -267,7 +354,7 @@ public final class EarthWall implements Spell {
 			List<BlockPos> fill = fill(level, g.cells(base, cells), ctx.caster());
 			if (fill.isEmpty()) return;
 			BlockState material = material(level, base.below());
-			int ticks = Math.max(1, EarthWallGeometry.DURATION - age);
+			int ticks = Math.max(1, life(ctx.rank()) - age);
 			BlockPos top = null;
 			for (BlockPos c : fill) {
 				if (!batch().placeTemporary(c, cellMaterial(material, c), ticks)) break;

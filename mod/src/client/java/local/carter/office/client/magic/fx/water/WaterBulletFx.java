@@ -4,12 +4,14 @@ import java.util.Optional;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.water.WaterBullet;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.particles.ParticleTypes;
@@ -39,10 +41,14 @@ public final class WaterBulletFx implements SpellFx {
 		float[] data = e.data();
 		double speed = data.length > 0 && data[0] > 0 ? data[0] : WaterBullet.SPEED;
 		double radius = data.length > 1 ? data[1] : WaterBullet.RADIUS;
-		ProjectileSpec spec = new ProjectileSpec(origin, dir.scale(speed), 0, radius, WaterBullet.MAX_TICKS, false);
+		SpellRank rank = e.spellRank();
+		boolean pierce = rank.is(WaterBullet.LANCE);
+		boolean splash = rank.is(WaterBullet.SPLASH);
+		int maxTicks = pierce ? WaterBullet.LANCE_TICKS : WaterBullet.MAX_TICKS;
+		ProjectileSpec spec = new ProjectileSpec(origin, dir.scale(speed), 0, radius, maxTicks, pierce);
 		double stop = e.target().distanceTo(origin);
 		// The server names the wall it meets, or the end of its range: a jet that runs out just falls apart.
-		boolean spent = stop >= speed * WaterBullet.MAX_TICKS - 0.01;
+		boolean spent = stop >= speed * maxTicks - 0.01;
 
 		// The muzzle: a quick circle facing the caster, a puff of spray and a ring of light thrown out in its plane.
 		Vec3 muzzle = origin.add(dir.scale(1.7)).add(0, -0.15, 0);
@@ -53,7 +59,7 @@ public final class WaterBulletFx implements SpellFx {
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.PLAYER_SPLASH, SoundSource.PLAYERS, 0.35F, 1.7F, false);
 
 		// As big as the server's jet (WaterBullet.radius): twice a tap's at full charge.
-		float orb = 0.44F * (1F + c);
+		float orb = 0.44F * (float) (radius / WaterBullet.RADIUS);
 		// A short flight can afford a dense wake; a long one thins it so the splash keeps its share of the budget.
 		double spacing = e.duration() <= 8 ? 0.18 : 0.32;
 		boolean[] done = {false};
@@ -64,6 +70,11 @@ public final class WaterBulletFx implements SpellFx {
 			Vec3 from = Projectiles.step(spec, t);
 			Vec3 to = origin.add(dir.scale(b));
 			Optional<Vec3> hit = sweep(level, e.casterId(), from, to, radius);
+			if (hit.isPresent() && pierce) {
+				// Pressure Lance: it bursts through and flies on.
+				kit.burst(hit.get(), ParticleTypes.SPLASH, 14, 0.2);
+				hit = Optional.empty();
+			}
 			boolean wall = (t + 1) * speed >= stop;
 			Vec3 head = hit.orElse(to);
 			double headAt = hit.map(h -> h.distanceTo(origin)).orElse(b);
@@ -90,6 +101,7 @@ public final class WaterBulletFx implements SpellFx {
 				done[0] = true;
 				if (hit.isEmpty() && spent) dissipate(kit, head, dir);
 				else impact(kit, level, head, dir, c, hit.isPresent());
+				if (splash && !(hit.isEmpty() && spent)) RankFx.blast(kit, level, head, WaterBullet.SPLASH_RADIUS, WaterFx.LIGHT, ParticleTypes.SPLASH);
 			}
 		});
 	}

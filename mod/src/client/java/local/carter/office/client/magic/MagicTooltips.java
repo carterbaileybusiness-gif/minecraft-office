@@ -1,8 +1,11 @@
 package local.carter.office.client.magic;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiFunction;
 
 import local.carter.office.magic.core.Element;
@@ -10,6 +13,7 @@ import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.item.MagicItems;
+import local.carter.office.magic.tree.RankCost;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -17,10 +21,14 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.FormattedText;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
+import net.minecraft.world.item.Item;
 
 import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
 
-/** Item tooltips that teach the Grimoire and the Rebinding Seal. The text lives in the lang file; the lines are built here. */
+/**
+ * Item tooltips that teach the Grimoire, the Rebinding Seal and the Skill tree's materials ("Used to rank up Fire spells", on the
+ * items your own element's ranks take). The text lives in the lang file; the lines are built here.
+ */
 public final class MagicTooltips {
 	private MagicTooltips() {}
 
@@ -35,7 +43,9 @@ public final class MagicTooltips {
 			} else if (stack.is(MagicItems.REBINDING_SEAL)) {
 				ours = seal();
 			} else {
-				return;
+				Optional<Element> e = mc.player == null ? Optional.empty() : MagicAttachments.get(mc.player).element();
+				if (e.isEmpty() || !materials(e.get()).contains(stack.getItem())) return;
+				ours = material(e.get());
 			}
 			int max = Math.min(MAX_WIDTH, mc.getWindow().getGuiScaledWidth() / 2);
 			lines.addAll(wrap(ours, max, (text, width) -> mc.font.getSplitter().splitLines(text, width, Style.EMPTY)));
@@ -71,6 +81,19 @@ public final class MagicTooltips {
 		return List.of(
 				Component.translatable("item.office.grimoire.tip_bound", name, level).withStyle(s -> s.withColor(e.argb() & 0xFFFFFF)),
 				Component.translatable("item.office.grimoire.tip_cast").withStyle(ChatFormatting.GRAY));
+	}
+
+	private static final Map<Element, Set<Item>> MATERIALS = new EnumMap<>(Element.class);
+
+	/** What {@code e}'s ranks take (built once). */
+	static Set<Item> materials(Element e) {
+		return MATERIALS.computeIfAbsent(e, RankCost::materials);
+	}
+
+	/** "Used to rank up Fire spells" in the element's colour. */
+	public static List<Component> material(Element e) {
+		return List.of(Component.translatable("magic.office.material_tip", Component.translatable("element.office." + e.key()))
+				.withStyle(s -> s.withColor(e.argb() & 0xFFFFFF)));
 	}
 
 	public static List<Component> seal() {

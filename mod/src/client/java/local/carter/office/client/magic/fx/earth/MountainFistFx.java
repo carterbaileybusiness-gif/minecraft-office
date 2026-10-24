@@ -11,6 +11,7 @@ import org.joml.Vector3f;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
@@ -19,6 +20,7 @@ import local.carter.office.magic.spell.earth.EarthWallGeometry;
 import local.carter.office.magic.spell.earth.MountainFist;
 import local.carter.office.magic.spell.earth.MountainFistGeometry;
 import local.carter.office.magic.spell.earth.QuakeGeometry;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -186,7 +188,18 @@ public final class MountainFistFx implements SpellFx {
 		int debris = d.length > 2 ? Math.round(d[2]) : MountainFistGeometry.debris(7);
 		Set<Long> thrown = debrisCells(e.seed(), baseRadius, debris, target);
 		Predicate<BlockPos> solid = EarthSpikes.solid(level);
+		SpellRank rank = e.spellRank();
+		if (rank.is(MountainFist.STONE_SKIN)) RankFx.aura(kit, level, caster, EarthFx.CLAY, MountainFist.SKIN_TICKS);
+		List<Vec3> boulders = rank.is(MountainFist.AVALANCHE) ? MountainFist.boulders(foot, e.seed()) : List.of();
 		EarthFx.drive(kit, leash, TOTAL, t -> {
+			// Avalanche: boulders fall out of the sky round the spire, one a tick from BOULDER_TICK (as the server's blasts).
+			for (int i = 0; i < boulders.size(); i++) {
+				int land = MountainFist.BOULDER_TICK + i;
+				Vec3 b = boulders.get(i);
+				if (t >= land - 5 && t < land) kit.motes(b.add(0, 1.2 * (land - t), 0), EarthFx.CLAY, 2, 0.25, new Vec3(0, -0.4, 0), 0.02,
+						GlowMote.Drift.FALL, 0.35F, 3);
+				if (t == land) RankFx.blast(kit, level, b.add(0, 0.2, 0), MountainFist.BOULDER_RADIUS, EarthFx.CLAY, EarthFx.GRIT);
+			}
 			if (t == 0) {
 				// The fist first: if the rock caps are ever reached, the plates and fangs go without.
 				fistRocks(kit, leash, fist, target, height, surface, caster, r);

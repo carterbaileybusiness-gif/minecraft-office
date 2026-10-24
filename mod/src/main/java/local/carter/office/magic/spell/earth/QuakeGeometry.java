@@ -95,16 +95,26 @@ public final class QuakeGeometry {
 
 	/** How many columns of a disc of {@code columns} crack: a quarter, at most {@link #MAX_CRACKS}. */
 	public static int crackCount(int columns) {
-		return Math.min(MAX_CRACKS, (int) Math.floor(columns * CRACK_SHARE));
+		return crackCount(columns, CRACK_SHARE);
+	}
+
+	/** {@code share} of a disc's columns, at most {@link #MAX_CRACKS}. */
+	public static int crackCount(int columns, double share) {
+		return Math.min(MAX_CRACKS, (int) Math.floor(columns * share));
 	}
 
 	/** Which of the disc's columns (indices into {@link #disc}) crack, picked from {@code seed}: {@link #crackCount} of them. */
 	public static boolean[] cracks(int columns, long seed) {
+		return cracks(columns, seed, CRACK_SHARE);
+	}
+
+	/** As {@link #cracks(int, long)} with {@code share} of the columns (Fissure's is twice a quarter). */
+	public static boolean[] cracks(int columns, long seed, double share) {
 		List<Integer> order = new ArrayList<>(columns);
 		for (int i = 0; i < columns; i++) order.add(i);
 		java.util.Collections.shuffle(order, new Random(seed));
 		boolean[] out = new boolean[columns];
-		for (int i = 0; i < crackCount(columns); i++) out[order.get(i)] = true;
+		for (int i = 0; i < crackCount(columns, share); i++) out[order.get(i)] = true;
 		return out;
 	}
 

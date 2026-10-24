@@ -8,6 +8,7 @@ import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.earth.EarthSpikes;
+import local.carter.office.magic.spell.earth.Quake;
 import local.carter.office.magic.spell.earth.QuakeGeometry;
 import local.carter.office.magic.spell.earth.QuakeGeometry.Column;
 
@@ -67,6 +68,7 @@ public final class QuakeFx implements SpellFx {
 		boolean[] heave = new boolean[disc.size()];
 		for (int i = 0; i < disc.size(); i++) heave[i] = r.nextFloat() < share;
 
+		if (e.spellRank().is(Quake.AFTERSHOCK)) aftershock(kit, level, stamp, radius, floor);
 		EarthFx.Share front = new EarthFx.Share(FRONT);
 		EarthFx.Crumbs crumbs = new EarthFx.Crumbs(kit, CRUMB_CAP);
 		int caster = e.casterId();
@@ -92,6 +94,21 @@ public final class QuakeFx implements SpellFx {
 				level.playLocalSound(stamp.x, stamp.y, stamp.z, SoundEvents.ROOTED_DIRT_BREAK, SoundSource.PLAYERS, 0.8F, 0.45F + 0.03F * age, false);
 				level.playLocalSound(stamp.x, stamp.y, stamp.z, SoundEvents.GRAVEL_BREAK, SoundSource.PLAYERS, 0.6F, 0.5F, false);
 			}
+		});
+	}
+
+	/** Aftershock: a second, fainter ring of dust a second later (no heaves: the server cracks nothing this time). */
+	private static void aftershock(FxKit kit, ClientLevel level, Vec3 stamp, double radius, BlockState floor) {
+		int duration = QuakeGeometry.duration(radius);
+		kit.simulate(1, Quake.AFTERSHOCK_DELAY + duration + 1, t -> {
+			int age = t - Quake.AFTERSHOCK_DELAY + 1;
+			if (age < 1) return;
+			if (age == 1) {
+				level.playLocalSound(stamp.x, stamp.y, stamp.z, SoundEvents.MACE_SMASH_GROUND, SoundSource.PLAYERS, 0.8F, 0.6F, false);
+				kit.shake(0.2F, 8);
+			}
+			double ring = QuakeGeometry.ringAt(age);
+			kit.ring(stamp.add(0, 0.05, 0), ring, new BlockParticleOption(ParticleTypes.DUST_PILLAR, floor), 3 + (int) Math.round(ring * 1.5));
 		});
 	}
 
