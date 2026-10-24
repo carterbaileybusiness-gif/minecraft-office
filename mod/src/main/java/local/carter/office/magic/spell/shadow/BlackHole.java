@@ -88,18 +88,18 @@ public final class BlackHole implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 centre = GravityWell.hover(ctx, BlackHoleGeometry.RANGE, BlackHoleGeometry.HEIGHT);
 		double cap = BlackHoleGeometry.cap(ctx.grimoireLevel());
-		if (!ActiveEffects.add(ctx.level(), new Hole(ctx, centre, cap))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, new Hole(ctx, centre, cap))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(BlackHoleGeometry.LIFE)
 				.withData((float) cap, (float) BlackHoleGeometry.PULL_RADIUS));
 	}
 
 	/**
-	 * The scorched stone for a rim cell of {@code kind}: blackstone, or for {@link BlackHoleGeometry#KIND_CRYING} amethyst. Crying
-	 * obsidian (the brief's pick) is in {@code #office:magic_immune}, which the terrain core refuses to place, so amethyst stands in
-	 * for its violet.
+	 * The scorched stone for a rim cell of {@code kind}: blackstone, or for {@link BlackHoleGeometry#KIND_CRACKED} cracked polished
+	 * blackstone bricks. (The brief's crying obsidian is in {@code #office:magic_immune}, which the terrain core refuses to place;
+	 * ruling, fix round 1.)
 	 */
 	static BlockState scorch(int kind) {
-		return (kind == BlackHoleGeometry.KIND_CRYING ? Blocks.AMETHYST_BLOCK : Blocks.BLACKSTONE).defaultBlockState();
+		return (kind == BlackHoleGeometry.KIND_CRACKED ? Blocks.CRACKED_POLISHED_BLACKSTONE_BRICKS : Blocks.BLACKSTONE).defaultBlockState();
 	}
 
 	/** The running hole. */
@@ -112,6 +112,8 @@ public final class BlackHole implements Spell {
 		/** The outer layer's cells waiting for the collapse. */
 		private final List<Cell> held = new ArrayList<>();
 		private int next;
+		/** Changes this cast's batch accepted. */
+		private int used;
 		private @Nullable EditBatch batch;
 
 		Hole(CastContext ctx, Vec3 centre, double cap) {
@@ -178,15 +180,17 @@ public final class BlackHole implements Spell {
 				Cell c = cells.get(next++);
 				BlockPos pos = new BlockPos(c.x(), c.y(), c.z());
 				if (!BlackHoleGeometry.isRim(c, cap)) {
-					b.remove(pos);
+					// Eating keeps the reserve back for the rim and the collapse.
+					if (used < EditTier.ULTIMATE.budget() - BlackHoleGeometry.RESERVE && b.remove(pos)) used++;
 					continue;
 				}
 				int kind = BlackHoleGeometry.rimKind(c, cap, ctx.seed());
-				if (kind == BlackHoleGeometry.KIND_NONE) {
+				// Scorched only in the bowl, over ground that stays: never a block hung in the air or in a tree.
+				if (kind != BlackHoleGeometry.KIND_NONE && BlackHoleGeometry.scorchable(c, centre, cap) && solid(level, pos)
+						&& solid(level, pos.below())) {
+					if (b.set(pos, scorch(kind))) used++;
+				} else {
 					held.add(c);
-				} else if (solid(level, pos)) {
-					// Scorched only where there is ground: never a block hung in the air.
-					b.set(pos, scorch(kind));
 				}
 			}
 		}

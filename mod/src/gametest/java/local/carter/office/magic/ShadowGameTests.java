@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import local.carter.office.magic.cast.CastService.Result;
+import local.carter.office.magic.command.MagicCommand;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.net.FxEvent;
@@ -17,6 +18,7 @@ import local.carter.office.magic.spell.shadow.ShadowBind;
 import local.carter.office.magic.spell.shadow.ShadowBolt;
 import local.carter.office.magic.spell.shadow.ShadowStep;
 import local.carter.office.magic.spell.shadow.WellGeometry;
+import local.carter.office.magic.terrain.EditLog.UndoReport;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -32,6 +34,7 @@ import net.minecraft.world.entity.animal.sheep.Sheep;
 import net.minecraft.world.entity.animal.wolf.Wolf;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.warden.Warden;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.level.block.Blocks;
@@ -588,6 +591,8 @@ public class ShadowGameTests {
 		fence(h);
 		// A mound to devour as well as the floor.
 		MagicTestKit.fill(h, new BlockPos(14, 4, 13), new BlockPos(18, 5, 17), Blocks.STONE);
+		// A pillar its rim cuts through above the centre (a tree trunk, a wall): never scorched up there.
+		MagicTestKit.fill(h, new BlockPos(22, 4, 12), new BlockPos(22, 12, 12), Blocks.STONE);
 		List<BlockPos> before = solidCells(h);
 		long t0 = h.getTick();
 		Vec3 c = castHole(h, p);
@@ -622,7 +627,14 @@ public class ShadowGameTests {
 			}
 			h.assertTrue(removed >= 200, "blocks removed " + removed);
 			h.assertTrue(far > 5.5, "it reached its cap: " + far);
-			h.assertTrue(MagicTestKit.count(h, Blocks.BLACKSTONE) + MagicTestKit.count(h, Blocks.AMETHYST_BLOCK) > 0, "a scorched rim");
+			h.assertTrue(MagicTestKit.count(h, Blocks.BLACKSTONE) + MagicTestKit.count(h, Blocks.CRACKED_POLISHED_BLACKSTONE_BRICKS) > 0, "a scorched rim");
+			// Scorch only in the bowl (below the centre) and over ground: none on the pillar it cuts through above, none afloat.
+			for (BlockPos b : before) {
+				var s = h.getBlockState(b);
+				if (!s.is(Blocks.BLACKSTONE) && !s.is(Blocks.CRACKED_POLISHED_BLACKSTONE_BRICKS)) continue;
+				h.assertTrue(b.getY() + 0.5 < c.y, "scorched above the centre: " + b);
+				h.assertTrue(!h.getBlockState(b.below()).isAir(), "scorched block afloat: " + b);
+			}
 		});
 		// Let the debris land in this arena before it is torn down.
 		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 50, h::succeed);
@@ -732,5 +744,62 @@ public class ShadowGameTests {
 			h.assertTrue(MagicTestKit.recorder(h).messageKeys(p).contains("magic.office.protected"), "told the land is protected");
 			h.succeed();
 		});
+	}
+
+	// ---- Task 23, fix round 1 ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 200)
+	public void blackHoleUndoRestores(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 7);
+		MagicTestKit.recorder(h);
+		fence(h);
+		long hash = MagicTestKit.blockHash(h);
+		long t0 = h.getTick();
+		castHole(h, p);
+		// After the collapse and the debris' landings: one logged cast, and undoing it puts the arena back as it was.
+		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE + 60, () -> {
+			long changed = MagicTestKit.blockHash(h);
+			h.assertTrue(changed != hash, "positive control: the hole changed the arena");
+			UndoReport r = MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
+			h.assertTrue(r.casts() == 1 && r.restored() >= 200, "undo restores the crater, the scorch and the debris: " + r);
+			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "the arena is as it was");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
+	public void shadowBindSparesBosses(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 5);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		// A warden: hostile, but a boss (ruling): hurt, never held. NoAI so it stays put and stays calm.
+		Warden w = h.spawn(EntityTypes.WARDEN, new BlockPos(16, 4, 12));
+		w.setNoAi(true);
+		w.setPersistenceRequired();
+		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
+		float before = w.getHealth();
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_BIND, 0f), Result.CAST, "result");
+		FxEvent fx = rec.fx(p).getLast();
+		h.assertValueEqual(fx.entities()[0], w.getId(), "the warden was the target");
+		h.assertValueEqual(fx.data()[0], 0f, "not rooted");
+		h.assertTrue(w.getHealth() < before, "the damage still lands: " + w.getHealth());
+		h.assertTrue(!w.hasEffect(MobEffects.SLOWNESS), "no slowness on a boss");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
+	public void shadowStepLandsOnTheGroundUnderAnAirborneTarget(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 3);
+		MagicTestKit.recorder(h);
+		// A NoAI zombie hanging 4 above the floor (not on the ground).
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 8, 12));
+		h.assertTrue(!z.onGround(), "positive control: the target is airborne");
+		MagicTestKit.aim(p, new BlockPos(16, 9, 12));
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.CAST, "result");
+		Vec3 at = p.position();
+		h.assertTrue(Math.abs(h.relativeVec(at).y - (MagicTestKit.FLOOR_TOP + 1)) < 1.0E-6, "on the floor: " + h.relativeVec(at));
+		h.assertTrue(at.z > z.getZ() + 0.5, "on the far side: " + h.relativeVec(at));
+		h.assertTrue(new Vec3(at.x - z.getX(), 0, at.z - z.getZ()).length() <= 2, "under and behind it");
+		assertStepped(h, p);
+		h.succeed();
 	}
 }

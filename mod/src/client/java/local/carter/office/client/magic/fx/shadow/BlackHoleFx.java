@@ -10,6 +10,7 @@ import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.shadow.BlackHoleGeometry;
 import local.carter.office.magic.spell.shadow.BlackHoleGeometry.Cell;
 import local.carter.office.magic.spell.shadow.WellGeometry;
+import local.carter.office.magic.terrain.WorldTerrainEdits;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -21,6 +22,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -190,9 +192,14 @@ public final class BlackHoleFx implements SpellFx {
 		level.playLocalSound(centre.x, centre.y, centre.z, SoundEvents.RESPAWN_ANCHOR_DEPLETE.value(), SoundSource.PLAYERS, 2.0F, 0.5F, false);
 	}
 
-	/** Whether the hole eats (and the client tears loose) a block like {@code s}: anything but air and fluid. */
+	/**
+	 * Whether the hole eats (and the client tears loose) a block like {@code s}: not air or fluid, and nothing the terrain core
+	 * refuses (block entities, {@code #office:magic_immune}, either half of a two-block-tall block), so no ghost doubles a block
+	 * that stays. (Claims are the server's to know: a refused claimed block may still get a ghost.)
+	 */
 	static boolean eats(BlockState s) {
-		return !s.isAir() && s.getFluidState().isEmpty();
+		return !s.isAir() && s.getFluidState().isEmpty() && !s.hasBlockEntity() && !s.is(WorldTerrainEdits.IMMUNE)
+				&& !s.hasProperty(BlockStateProperties.DOUBLE_BLOCK_HALF);
 	}
 
 	/** Shake share at {@code d} blocks from the hole: 1 within 24, 0.8 at 32, 0 past 64. */

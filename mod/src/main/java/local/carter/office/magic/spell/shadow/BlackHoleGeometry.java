@@ -14,7 +14,7 @@ import net.minecraft.world.phys.Vec3;
  * <p><b>Devour.</b> A sphere round the centre grows from {@link #START_RADIUS} at tick 0 to {@link #cap} at {@link #LIFE}
  * ({@link #radius}, linear, so it never shrinks). Every block whose centre it reaches is eaten ({@link #sphere} lists them,
  * nearest first). {@link #RIM_SHARE} of its outermost layer ({@link #isRim}) is not eaten but scorched instead ({@link #rimKind}:
- * half {@link #KIND_CRYING}, half {@link #KIND_BLACKSTONE}); the rest of that layer is held back for the collapse at the end,
+ * half {@link #KIND_CRACKED}, half {@link #KIND_BLACKSTONE}); the rest of that layer is held back for the collapse at the end,
  * where its lip ({@link #isLip}) is flung out as debris ({@link #debrisVelocity}).
  *
  * <p><b>Pull.</b> Anything within {@link #PULL_RADIUS} moves toward the centre at {@link #pullSpeed} blocks a tick (0.08 at the
@@ -55,8 +55,8 @@ public final class BlackHoleGeometry {
 	public static final double LIP_DEPTH = 3.6;
 
 	public static final int KIND_NONE = 0;
-	/** Crying-obsidian-like scorch (see {@link BlackHole#scorch}). */
-	public static final int KIND_CRYING = 1;
+	/** Cracked polished blackstone bricks (see {@link BlackHole#scorch}). */
+	public static final int KIND_CRACKED = 1;
 	public static final int KIND_BLACKSTONE = 2;
 
 	private BlackHoleGeometry() {}
@@ -128,16 +128,32 @@ public final class BlackHoleGeometry {
 	}
 
 	/**
-	 * What a rim cell becomes: {@link #KIND_CRYING} or {@link #KIND_BLACKSTONE} for {@link #RIM_SHARE} of them (half each, picked by
+	 * What a rim cell becomes: {@link #KIND_CRACKED} or {@link #KIND_BLACKSTONE} for {@link #RIM_SHARE} of them (half each, picked by
 	 * a hash of the cell and the cast's seed, the same on every client), {@link #KIND_NONE} for the rest (and for cells off the rim).
 	 */
 	public static int rimKind(Cell c, double cap, long seed) {
 		if (!isRim(c, cap)) return KIND_NONE;
 		double u = unit(seed, c.x(), c.y(), c.z(), 0);
-		if (u < RIM_SHARE / 2) return KIND_CRYING;
+		if (u < RIM_SHARE / 2) return KIND_CRACKED;
 		if (u < RIM_SHARE) return KIND_BLACKSTONE;
 		return KIND_NONE;
 	}
+
+	/**
+	 * Whether a scorched rim cell {@code c} may be scorched at all: only below the centre (the crater's bowl, never the canopy of a
+	 * tree or the top of a wall the sphere cuts through). The server also wants a solid block under it.
+	 */
+	public static boolean scorchable(Cell c, Vec3 centre, double cap) {
+		if (c.y() + 0.5 >= centre.y) return false;
+		// The block under it must stay: outside the sphere (a cell below the centre only gets farther from it going down).
+		double dx = c.x() + 0.5 - centre.x;
+		double dy = c.y() - 0.5 - centre.y;
+		double dz = c.z() + 0.5 - centre.z;
+		return dx * dx + dy * dy + dz * dz > cap * cap;
+	}
+
+	/** Changes the cast keeps back from eating, for the scorched rim and the collapse (nearest-first eating would starve them). */
+	public static final int RESERVE = 60;
 
 	/** Whether rim cell {@code c} is part of the crater's lip: no deeper than {@link #LIP_DEPTH} below the centre. */
 	public static boolean isLip(Cell c, Vec3 centre) {

@@ -109,7 +109,7 @@ class BlackHoleGeometryTest {
 		double cap = 9;
 		List<Cell> cells = BlackHoleGeometry.sphere(CENTRE, cap);
 		int rim = 0;
-		int crying = 0;
+		int cracked = 0;
 		int black = 0;
 		for (Cell c : cells) {
 			int kind = BlackHoleGeometry.rimKind(c, cap, 1234L);
@@ -120,17 +120,33 @@ class BlackHoleGeometryTest {
 			}
 			assertTrue(c.dist() > cap - 1, "the rim is the outermost layer");
 			rim++;
-			if (kind == BlackHoleGeometry.KIND_CRYING) crying++;
+			if (kind == BlackHoleGeometry.KIND_CRACKED) cracked++;
 			if (kind == BlackHoleGeometry.KIND_BLACKSTONE) black++;
 		}
 		assertTrue(rim > 500, "rim cells " + rim);
-		assertEquals(0.10, (crying + black) / (double) rim, 0.025, "a tenth of the rim");
-		assertEquals(0.5, crying / (double) (crying + black), 0.15, "half each");
+		assertEquals(0.10, (cracked + black) / (double) rim, 0.025, "a tenth of the rim");
+		assertEquals(0.5, cracked / (double) (cracked + black), 0.15, "half each");
 		int differ = 0;
 		for (Cell c : cells) {
 			if (BlackHoleGeometry.rimKind(c, cap, 1234L) != BlackHoleGeometry.rimKind(c, cap, 99L)) differ++;
 		}
 		assertTrue(differ > 0, "another cast scorches other cells");
+	}
+
+	@Test
+	void onlyTheBowlIsScorchedAndOnlyOverGroundThatStays() {
+		double cap = 7;
+		List<Cell> cells = BlackHoleGeometry.sphere(CENTRE, cap);
+		int scorchable = 0;
+		for (Cell c : cells) {
+			if (!BlackHoleGeometry.scorchable(c, CENTRE, cap)) continue;
+			scorchable++;
+			assertTrue(c.y() + 0.5 < CENTRE.y, "below the centre: " + c);
+			Vec3 below = new Vec3(c.x() + 0.5, c.y() - 0.5, c.z() + 0.5);
+			assertTrue(below.distanceTo(CENTRE) > cap, "the block under it is never eaten: " + c);
+		}
+		assertTrue(scorchable > 30, "the bowl has room to scorch: " + scorchable);
+		assertTrue(BlackHoleGeometry.RESERVE >= 50 && BlackHoleGeometry.RESERVE < 1500, "a reserve for the rim and the collapse");
 	}
 
 	@Test

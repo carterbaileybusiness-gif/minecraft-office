@@ -33,7 +33,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * <p>The target is the first creature the look ray meets within {@link #RANGE} ({@link Targets#ray}, forgiveness
  * {@link #FORGIVENESS}) that the caster can actually see ({@link #seen}: aim assist never reaches round a wall). The caster lands
  * {@link #BEHIND} behind it, on the far side from where they stood, facing it; with its back to a wall, beside it
- * instead ({@link #behind}). With no target the caster steps {@link #AHEAD} along their flat facing, stopping short of a wall. Either way
+ * instead ({@link #behind}); behind something not on the ground, on the ground under that spot ({@link Targets#ground}). With no target the caster steps {@link #AHEAD} along their flat facing, stopping short of a wall. Either way
  * the move is {@link Motion#teleportSafe}: it never ends inside a block (it steps back along the path until the body fits).
  * Then the caster is invisible for {@link #INVISIBLE_TICKS} ticks. No block changes, no damage.
  *
@@ -72,6 +72,8 @@ public final class ShadowStep implements Spell {
 		Vec3 from = p.position();
 		Optional<LivingEntity> target = Targets.ray(ctx, RANGE, FORGIVENESS).filter(e -> seen(level, ctx.eye(), e));
 		Vec3 dest = target.map(e -> behind(level, from, e)).orElseGet(() -> ahead(level, p, ctx.look()));
+		// Behind something airborne (a phantom, a mob mid-jump or knocked up), land on the ground under that spot, not in the air.
+		if (target.isPresent() && !target.get().onGround()) dest = Targets.ground(level, dest);
 		if (target.isPresent()) face(p, dest, target.get());
 		Vec3 at = Motion.teleportSafe(p, dest);
 		if (target.isPresent() && at.distanceToSqr(dest) > 1.0E-4 && at.distanceToSqr(from) > 1.0E-4) {

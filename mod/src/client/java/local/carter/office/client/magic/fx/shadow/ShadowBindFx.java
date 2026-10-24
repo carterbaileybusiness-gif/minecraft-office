@@ -59,7 +59,7 @@ public final class ShadowBindFx implements SpellFx {
 
 	/** The tendrils: dark, tapering coils wound round the foe, lit by violet along their edge, over a pool of darkness. */
 	static final class Tendrils extends UmbraParticle {
-		private static final int PIECES = 40;
+		private static final int PIECES = 96;
 		private final @Nullable Entity foe;
 		private Vec3 feet;
 		private Vec3 feetO;
@@ -114,14 +114,13 @@ public final class ShadowBindFx implements SpellFx {
 					double s = (j + 0.5) / PIECES;
 					if (s > out) break;
 					Vec3 p = BindGeometry.tendril(base, width, height, i, s, t, life);
-					// Thick at the root, a thin tip; pieces close enough to overlap, so it reads as one strand, not beads.
-					float w = (float) (0.22 - 0.16 * s);
-					umbra.dark(p, w, 0.95F * k);
-					if (j % 3 == 1) {
-						// A pulse of violet running up the strand.
-						float glint = 0.35F + 0.45F * Mth.sin((float) (t * 0.9 - s * 9 + i * 1.9));
-						umbra.light(p, w * 0.7F, Math.max(0F, glint) * k, j > PIECES * 0.7 ? ShadowFx.PALE : ShadowFx.MAGENTA);
-					}
+					// Thick at the root, a thin tip. The pieces sit well under half their width apart (a coil is about 5 blocks long),
+					// so their soft edges merge into one strand instead of a row of beads.
+					float w = (float) (0.2 - 0.13 * s);
+					umbra.dark(p, w, 0.9F * k);
+					// A thin, continuous vein of violet down the coil (on every piece, faint, so it never beads), a pulse running up it.
+					float glint = 0.18F + 0.26F * Mth.sin((float) (t * 0.9 - s * 9 + i * 1.9));
+					umbra.light(p, w * 0.5F, Math.max(0.08F, glint) * k, j > PIECES * 0.7 ? ShadowFx.PALE : ShadowFx.MAGENTA);
 				}
 			}
 			// Faint violet light rising round it while it holds.

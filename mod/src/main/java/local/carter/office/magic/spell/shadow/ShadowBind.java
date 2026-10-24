@@ -16,13 +16,19 @@ import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 
+import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+import net.minecraft.world.entity.boss.wither.WitherBoss;
 import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.entity.monster.warden.Warden;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -73,7 +79,8 @@ public final class ShadowBind implements Spell {
 		}
 		LivingEntity e = target.get();
 		boolean roots = roots(e);
-		if (roots && !ActiveEffects.add(ctx.level(), new Root(e, life))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		// The root is the caster's effect (it counts against their cap), though it holds the foe.
+		if (roots && !ActiveEffects.add(ctx.level(), ctx.caster().getUUID(), new Root(e, life))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Hurt.damage(ctx, e, BindGeometry.DAMAGE * ctx.power());
 		if (roots && e.isAlive()) {
 			e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, life, BindGeometry.SLOWNESS_AMPLIFIER), ctx.caster());
@@ -83,9 +90,19 @@ public final class ShadowBind implements Spell {
 		return CastOutcome.cast(fx.withTarget(e.position()).withEntities(e.getId()).withData(roots ? 1F : 0F));
 	}
 
-	/** Whether the bind holds {@code e}: hostile mobs only (the lane's control rule). */
+	/** The conventional {@code #c:bosses} entity tag (Fabric's convention tags fill it when present). */
+	static final TagKey<EntityType<?>> BOSSES = TagKey.create(Registries.ENTITY_TYPE, Identifier.fromNamespaceAndPath("c", "bosses"));
+
+	/**
+	 * Whether the bind holds {@code e}: hostile mobs only (the lane's control rule), never a boss (ruling: {@code #c:bosses}, and the
+	 * Wither, Ender Dragon and Warden by name in case the tag is empty). A boss still takes the damage.
+	 */
 	static boolean roots(LivingEntity e) {
-		return e instanceof Enemy && !TargetFilter.isProtected(e);
+		return e instanceof Enemy && !TargetFilter.isProtected(e) && !boss(e);
+	}
+
+	static boolean boss(LivingEntity e) {
+		return e.getType().builtInRegistryHolder().is(BOSSES) || e instanceof WitherBoss || e instanceof EnderDragon || e instanceof Warden;
 	}
 
 	/** The root: holds the foe where it stood for its life, or until it dies, leaves the level or is teleported. */
