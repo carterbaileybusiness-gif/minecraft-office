@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.state.BlockState;
  * ({@code #office:magic_temp_safe}: stone family, packed/blue ice, glass…) may be placed: never liquids, falling blocks,
  * melting ice, block entities, two-block-tall blocks or light sources. Water and ice effects use packed or blue ice, or display entities,
  * never a temporary liquid. Spells go through {@link EditBatch#placeTemporary}, which also applies the claim rules.
+ * A temporary block never drops anything: broken by any means, its original block comes back at once ({@link TempBlockGuard}).
  */
 public interface TempBlocks {
 	boolean place(ServerLevel level, BlockPos pos, BlockState placed, int ticks);

@@ -100,6 +100,8 @@ Builder numbers (spec §7 left them to us; one source each):
    nobody is left encased. Tests in Task 5.
 5. Death, disconnect or dimension change during a charge, a Recall channel or a hand-sign prompt → no cast, no mana lost, and
    the channel and challenge are discarded. Tests in Tasks 4, 6 and 7.
+6. Mining, silk-touching, blowing up, piston-pushing or enderman-grabbing a temporary block (Earth Wall) → no items, no XP,
+   no moved real block; a broken one gets its original block back at once. Tests in `TempBlockBreakGameTests`.
 
 ---
 

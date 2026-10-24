@@ -3,12 +3,14 @@ package local.carter.office;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Mount;
 import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
+import local.carter.office.hologram.EmitterCommand;
 import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.HologramIndex;
@@ -31,6 +33,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.Filterable;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.item.PrimedTnt;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.Item;
@@ -43,6 +46,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.AttachFace;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
@@ -593,20 +597,26 @@ public class HologramGameTests {
 		String teamBefore = String.valueOf(a.getTeam());
 		List<List<UUID>> sent = new ArrayList<>();
 		HologramActions.setWorkingBroadcast((server, working) -> sent.add(working));
+		AtomicLong now = new AtomicLong(1_000_000);
+		HologramActions.setClock(now::get);
 		try {
 			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "working");
+			now.addAndGet(1000);
 			h.assertTrue(HologramActions.isWorking(a.getUUID()), "server knows");
 			h.assertTrue(sent.size() == 1 && sent.get(0).contains(a.getUUID()), "broadcast with the player: " + sent);
 			h.assertTrue(HologramActions.workingPayload().players().contains(a.getUUID()), "what a joining player is sent");
 			h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "repeat is a no-op");
+			now.addAndGet(1000);
 			h.assertValueEqual(sent.size(), 1, "no broadcast without a change");
 			h.assertValueEqual(String.valueOf(a.getTeam()), teamBefore, "teams / scoreboard untouched");
 			h.assertFalse(a.getDisplayName().getString().contains("working"), "server-side name (chat) unchanged");
 
 			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(false)), "stopped working");
+			now.addAndGet(1000);
 			h.assertFalse(sent.get(sent.size() - 1).contains(a.getUUID()), "broadcast without the player");
 
 			HologramActions.apply(a, new OfficePayloads.SetWorking(true));
+			now.addAndGet(1000);
 			int before = sent.size();
 			HologramActions.clearWorking(a); // disconnect
 			h.assertFalse(HologramActions.isWorking(a.getUUID()), "cleared on disconnect");
@@ -616,6 +626,181 @@ public class HologramGameTests {
 			h.assertValueEqual(sent.size(), before + 1, "clearing someone not working sends nothing");
 		} finally {
 			HologramActions.setWorkingBroadcast(null);
+			HologramActions.setClock(null);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	public void workingToggleIsThrottledButEndStateIsCorrect(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		var server = h.getLevel().getServer();
+		List<List<UUID>> sent = new ArrayList<>();
+		AtomicLong now = new AtomicLong(5_000_000);
+		HologramActions.setWorkingBroadcast((srv, working) -> sent.add(working));
+		HologramActions.setClock(now::get);
+		try {
+			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "first toggle applies");
+			h.assertValueEqual(sent.size(), 1, "one broadcast");
+
+			// Inside the window: held back, nothing broadcast, state unchanged.
+			now.addAndGet(100);
+			h.assertFalse(HologramActions.apply(a, new OfficePayloads.SetWorking(false)), "too soon: ignored");
+			h.assertTrue(HologramActions.isWorking(a.getUUID()), "still working");
+			h.assertValueEqual(sent.size(), 1, "no broadcast inside the window");
+			now.addAndGet(100);
+			HologramActions.flushWorking(server);
+			h.assertTrue(HologramActions.isWorking(a.getUUID()), "tick before the window ends changes nothing");
+			h.assertValueEqual(sent.size(), 1, "still one broadcast");
+
+			// Window over: the latest state goes through on the next tick.
+			now.addAndGet(100);
+			HologramActions.flushWorking(server);
+			h.assertFalse(HologramActions.isWorking(a.getUUID()), "latest state applied");
+			h.assertValueEqual(sent.size(), 2, "one broadcast for the held toggle");
+			h.assertFalse(sent.get(1).contains(a.getUUID()), "broadcast without the player");
+			HologramActions.flushWorking(server);
+			h.assertValueEqual(sent.size(), 2, "nothing left to flush");
+
+			// A burst of flip-flops collapses to its last state (here equal to the current one: no extra broadcast).
+			now.addAndGet(1000);
+			h.assertTrue(HologramActions.apply(a, new OfficePayloads.SetWorking(true)), "applies");
+			for (int i = 0; i < 9; i++) {
+				now.addAndGet(10);
+				HologramActions.apply(a, new OfficePayloads.SetWorking(i % 2 != 0));
+			}
+			h.assertValueEqual(sent.size(), 3, "burst broadcasts nothing extra");
+			now.addAndGet(500);
+			HologramActions.flushWorking(server);
+			h.assertFalse(HologramActions.isWorking(a.getUUID()), "end state is the last toggle (false)");
+			h.assertValueEqual(sent.size(), 4, "one broadcast for the burst");
+
+			// Disconnect drops anything held back.
+			now.addAndGet(1000);
+			HologramActions.apply(a, new OfficePayloads.SetWorking(true));
+			now.addAndGet(10);
+			HologramActions.apply(a, new OfficePayloads.SetWorking(false));
+			HologramActions.apply(a, new OfficePayloads.SetWorking(true));
+			HologramActions.clearWorking(a);
+			now.addAndGet(1000);
+			HologramActions.flushWorking(server);
+			h.assertFalse(HologramActions.isWorking(a.getUUID()), "a held toggle does not resurrect a disconnected player");
+		} finally {
+			HologramActions.setWorkingBroadcast(null);
+			HologramActions.setClock(null);
+			HologramActions.clearWorking(a);
+		}
+		h.succeed();
+	}
+
+	private static int itemEntitiesNear(GameTestHelper h, ServerPlayer p) {
+		return h.getLevel().getEntitiesOfClass(ItemEntity.class, new AABB(p.blockPosition()).inflate(16)).size();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void emitterSpamCannotExceedLimit(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		AtomicLong now = new AtomicLong(1_000_000);
+		EmitterCommand.setClock(now::get);
+		try {
+			a.getInventory().clearContent(); // saved data of the shared mock UUID may carry items over
+			// 3 placed + spam: carried + placed never passes the limit.
+			a.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 3));
+			Vec3 v = h.absoluteVec(Vec3.atBottomCenterOf(new BlockPos(4, 0, 6)));
+			a.setPos(v.x, v.y, v.z);
+			for (int x = 0; x < 3; x++) {
+				place(h, a, new BlockPos(x, 1, 1));
+			}
+			a.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY); // mock player may be creative: nothing consumed
+			HologramIndex index = HologramIndex.get(h.getLevel().getServer());
+			h.assertValueEqual(index.countOwnedBy(a.getUUID()), 3, "three placed");
+			int given = 0;
+			for (int i = 0; i < 40; i++) {
+				now.addAndGet(EmitterCommand.COOLDOWN_MS + 1);
+				if (EmitterCommand.tryGive(a) == EmitterCommand.Outcome.GIVEN) {
+					given++;
+				}
+				h.assertTrue(index.countOwnedBy(a.getUUID()) + count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM) <= HologramEmitterBlock.MAX_HOLOGRAMS,
+						"never above the limit (round " + i + ")");
+			}
+			h.assertValueEqual(given, 5, "exactly the remaining 5");
+			now.addAndGet(EmitterCommand.COOLDOWN_MS + 1);
+			h.assertTrue(EmitterCommand.tryGive(a) == EmitterCommand.Outcome.LIMIT, "limit reached");
+			// Same through the real command.
+			h.getLevel().getServer().getCommands().performPrefixedCommand(a.createCommandSourceStack(), "emitter");
+			h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), 5, "command adds nothing at the limit");
+
+			// Off-hand emitters count too.
+			a.getInventory().clearContent();
+			a.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 5));
+			now.addAndGet(EmitterCommand.COOLDOWN_MS + 1);
+			h.assertTrue(EmitterCommand.tryGive(a) == EmitterCommand.Outcome.LIMIT, "3 placed + 5 in the off hand = limit");
+			a.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 4));
+			h.assertTrue(EmitterCommand.tryGive(a) == EmitterCommand.Outcome.GIVEN, "3 placed + 4 in the off hand has room for one");
+			h.assertValueEqual(itemEntitiesNear(h, a), 0, "nothing dropped");
+		} finally {
+			EmitterCommand.setClock(null);
+			a.getInventory().clearContent();
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void emitterFullInventoryGivesNothingAndDropsNothing(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		AtomicLong now = new AtomicLong(1_000_000);
+		EmitterCommand.setClock(now::get);
+		try {
+			Vec3 v = h.absoluteVec(Vec3.atBottomCenterOf(new BlockPos(4, 0, 6)));
+			a.setPos(v.x, v.y, v.z);
+			Inventory inv = a.getInventory();
+			inv.clearContent();
+			for (int i = 0; i < Inventory.INVENTORY_SIZE; i++) {
+				inv.setItem(i, new ItemStack(Items.STONE, 64));
+			}
+			EmitterCommand.Outcome full = EmitterCommand.tryGive(a);
+			h.assertTrue(full == EmitterCommand.Outcome.FULL, "full inventory: " + full + " size " + inv.getContainerSize() + " carried " + count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM));
+			h.assertTrue(EmitterCommand.message(EmitterCommand.Outcome.FULL).contains("full"), "says so");
+			h.getLevel().getServer().getCommands().performPrefixedCommand(a.createCommandSourceStack(), "emitter");
+			h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), 0, "gave nothing");
+			h.assertValueEqual(itemEntitiesNear(h, a), 0, "dropped nothing");
+			// A failed attempt does not burn the cooldown.
+			inv.setItem(0, ItemStack.EMPTY);
+			h.assertTrue(EmitterCommand.tryGive(a) == EmitterCommand.Outcome.GIVEN, "works once there is room");
+			h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), 1, "got one");
+		} finally {
+			EmitterCommand.setClock(null);
+			a.getInventory().clearContent();
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
+	@SuppressWarnings("removal")
+	public void emitterCooldownMessage(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		AtomicLong now = new AtomicLong(1_000_000);
+		EmitterCommand.setClock(now::get);
+		try {
+			a.getInventory().clearContent();
+			h.assertTrue(EmitterCommand.tryGive(a) == EmitterCommand.Outcome.GIVEN, "first is given");
+			now.addAndGet(EmitterCommand.COOLDOWN_MS - 1);
+			EmitterCommand.Outcome again = EmitterCommand.tryGive(a);
+			h.assertTrue(again == EmitterCommand.Outcome.COOLDOWN, "inside 10 s: cooldown");
+			h.assertValueEqual(EmitterCommand.message(again), EmitterCommand.COOLDOWN_MESSAGE, "cooldown message");
+			h.assertTrue(EmitterCommand.COOLDOWN_MESSAGE.toLowerCase().contains("wait"), "friendly: tells them to wait");
+			h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), 1, "nothing extra given");
+			now.addAndGet(1);
+			h.assertTrue(EmitterCommand.tryGive(a) == EmitterCommand.Outcome.GIVEN, "after 10 s: given again");
+			h.assertValueEqual(count(a, OfficeBlocks.HOLOGRAM_EMITTER_ITEM), 2, "two now");
+		} finally {
+			EmitterCommand.setClock(null);
+			a.getInventory().clearContent();
+			h.getLevel().getServer().getPlayerList().remove(a);
 		}
 		h.succeed();
 	}
