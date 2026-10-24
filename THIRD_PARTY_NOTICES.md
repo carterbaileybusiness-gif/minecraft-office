@@ -21,6 +21,7 @@ The magic fx core adapts Wildercord's client code. These files start with
 | `client/magic/fx/ShaderCompat.java` | `compat/ShaderCompat.java`, `mixin/QuadParticleRenderStateMixin.java` (magic on vanilla's translucent layer under a shader pack) |
 | `client/magic/fx/wind/WindRibbon.java` | `fx/Facing.java` (`along`, via our `BoltParticle`: ribbon pieces turned to face the camera) |
 | `client/magic/fx/lightning/ArcParticle.java` | `fx/BoltParticle.java` (camera-facing jagged arc pieces with halo and core passes) |
+| `client/magic/fx/water/WaterPen.java` | `fx/Facing.java` (`along`: camera-facing stroke pieces) |
 
 No Wildercord textures or other assets are included: the fx textures are drawn by `tools/make_fx_textures.py`.
 

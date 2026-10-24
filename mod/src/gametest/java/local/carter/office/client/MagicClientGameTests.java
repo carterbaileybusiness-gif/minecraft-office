@@ -463,7 +463,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 	/** Probes under the real FIRE slot 0/1 ids, so the wheel shows real names and icons in the screenshots. */
 	private static final Identifier PROBE_0 = SpellIds.at(Element.FIRE, 0);
 	private static final Identifier PROBE_1 = SpellIds.at(Element.FIRE, 1);
-	private static final int FULL_MANA = ManaMath.max(3);
+	private static final int CAST_LEVEL = 2; // only slots 0-1 (probes) + Recall unlocked
+	private static final int FULL_MANA = ManaMath.max(CAST_LEVEL);
 
 	/**
 	 * Casting stance (grimoire in the off hand, empty main hand, FIRE level 3, FIRE slot 0/1 probes): a chest still opens, a
@@ -481,7 +482,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			p.getInventory().clearContent();
 			p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
 			long now = p.level().getGameTime();
-			MagicAttachments.set(p, MagicData.EMPTY.withElement(Optional.of(Element.FIRE)).withLevel(3)
+			MagicAttachments.set(p, MagicData.EMPTY.withElement(Optional.of(Element.FIRE)).withLevel(CAST_LEVEL)
 					.withSelected(Optional.of(PROBE_0)).withReadyAt(Map.of(SpellIds.RECALL, now + 600L)));
 			MagicAttachments.setMana(p, FULL_MANA); // full: no regen, so any spend shows
 			BlockPos stand = p.blockPosition();

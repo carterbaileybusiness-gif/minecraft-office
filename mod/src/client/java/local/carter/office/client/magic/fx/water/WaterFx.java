@@ -26,6 +26,9 @@ public final class WaterFx {
 	public static void register() {
 		SpellFxRegistry.register(SpellIds.WATER_BULLET, new WaterBulletFx());
 		SpellFxRegistry.register(SpellIds.TIDAL_PUSH, new TidalPushFx());
+		SpellFxRegistry.register(SpellIds.BUBBLE_SHIELD, new BubbleShieldFx());
+		SpellFxRegistry.register(SpellIds.WATER_PRISON, new WaterPrisonFx());
+		SpellFxRegistry.register(SpellIds.WATER_DRAGON, new WaterDragonFx());
 	}
 
 	/** {@code v} normalised (+Z if it has no length). */

@@ -29,6 +29,11 @@ public record FireWallGeometry(Vec3 base, Vec3 forward, Vec3 side, double width,
 	public static final double THICKNESS = 1.0;
 	public static final int BASE_TICKS = 100;
 	public static final int CHARGE_TICKS = 60;
+	/**
+	 * Longest move in one tick that still counts as passing through the wall ({@link #sweeps}). Anything that went farther in a
+	 * single tick was teleported (ender pearl, chorus fruit, an enderman, a spell), not thrown, and never crossed the fire.
+	 */
+	public static final double MAX_SWEEP = 4;
 
 	/** The caster's flat facing for a yaw in degrees (Minecraft's: 0 = +Z, 90 = −X). Never zero, whatever the pitch. */
 	public static Vec3 forward(float yRotDegrees) {
@@ -107,6 +112,15 @@ public record FireWallGeometry(Vec3 base, Vec3 forward, Vec3 side, double width,
 		if (Math.abs(cx * side.x + cz * side.z) > halfW + hx * Math.abs(side.x) + hz * Math.abs(side.z)) return false;
 		if (Math.abs(cx) > hx + halfT * Math.abs(forward.x) + halfW * Math.abs(side.x)) return false;
 		return Math.abs(cz) <= hz + halfT * Math.abs(forward.z) + halfW * Math.abs(side.z);
+	}
+
+	/**
+	 * Whether a move of {@code motion} in one tick is a real pass through space that the wall should sweep back along: longer than
+	 * a hair and no longer than {@link #MAX_SWEEP} (a longer one is a teleport).
+	 */
+	public static boolean sweeps(Vec3 motion) {
+		double l2 = motion.lengthSqr();
+		return l2 > 1.0E-6 && l2 <= MAX_SWEEP * MAX_SWEEP;
 	}
 
 	/** Whether {@code box} moving by {@code motion} this tick touches the slab anywhere along the way (fast projectiles). */
