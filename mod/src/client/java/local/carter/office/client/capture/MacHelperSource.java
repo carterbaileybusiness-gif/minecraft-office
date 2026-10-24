@@ -214,7 +214,10 @@ public final class MacHelperSource implements CaptureSource {
 				Target t = target;
 				boolean extend = t.mode() == Mode.EXTEND;
 				boolean mirror = t.mode() == Mode.MIRROR;
-				if (mirror) {
+				if (mirror && helper.mirrorWaitsForScreens(t.monitor())) {
+					stopSurface = surface; // wait for DISPLAYS (screensChanged): never the main display in the meantime
+					surface = 0;
+				} else if (mirror) {
 					stopSurface = surface;
 					surface = helper.newSurface(this);
 					generation = -1;
@@ -269,17 +272,22 @@ public final class MacHelperSource implements CaptureSource {
 
 	/**
 	 * The screens changed (DISPLAYS): a Mirror whose chosen monitor was unplugged falls back to the main display, and goes
-	 * back to that monitor when it is plugged in again.
+	 * back to that monitor when it is plugged in again. A Mirror of another monitor that waited for the first DISPLAYS
+	 * since connecting starts now.
 	 */
 	public void screensChanged() {
+		boolean waiting;
 		synchronized (lock) {
 			Target t = target;
-			if (!running || ended || t == null || t.mode() != Mode.MIRROR || surface == 0
-					|| java.util.Objects.equals(helper.resolveMirror(t.monitor()), capturedMonitor)) {
+			if (!running || ended || t == null || t.mode() != Mode.MIRROR) {
+				return;
+			}
+			waiting = surface == 0;
+			if (!waiting && java.util.Objects.equals(helper.resolveMirror(t.monitor()), capturedMonitor)) {
 				return;
 			}
 		}
-		update(true);
+		update(!waiting);
 	}
 
 	public void helperDisconnected() {

@@ -239,6 +239,32 @@ class MacHelperSourceTest {
 	}
 
 	@Test
+	void aReconnectHoldsAMirrorOfAnotherMonitorUntilTheScreensAreKnown() {
+		screensWelcome();
+		helper.message(displays(true));
+		MacHelperSource s = source();
+		s.start(mirrorOf(LG), 5, sink);
+		assertEquals(LG, last(Capture.class).display());
+
+		helper.disconnected();
+		sent.clear();
+		screensWelcome();
+		assertTrue(sent.stream().noneMatch(Capture.class::isInstance),
+				"no CAPTURE before DISPLAYS: the main display must never flash on a Mirror of LG");
+		helper.message(displays(true));
+		assertEquals(LG, last(Capture.class).display(), "DISPLAYS arrived: LG straight away");
+		assertEquals(1, sent.stream().filter(Capture.class::isInstance).count());
+
+		// the main display's Mirror doesn't wait
+		helper.disconnected();
+		sent.clear();
+		MacHelperSource main = source();
+		main.start(new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9, null), 5, sink);
+		screensWelcome();
+		assertTrue(sent.stream().anyMatch(m -> m instanceof Capture c && c.display() == null), "main: captured at once");
+	}
+
+	@Test
 	void oldHelperMirrorIsMain() {
 		welcome(true); // no features
 		helper.message(displays(true));
