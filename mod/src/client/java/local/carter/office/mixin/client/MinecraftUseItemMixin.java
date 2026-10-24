@@ -9,6 +9,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import local.carter.office.client.interact.ClickGate;
 import local.carter.office.client.interact.HologramInteractions;
+import local.carter.office.client.magic.MagicInputGate;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
@@ -35,6 +36,13 @@ public abstract class MinecraftUseItemMixin {
 			return; // vanilla's own guards apply; it does nothing (or its usual thing) here
 		}
 		if (HologramInteractions.onUse((Minecraft) (Object) this)) {
+			rightClickDelay = ClickGate.RIGHT_CLICK_DELAY;
+			ci.cancel();
+			return;
+		}
+		// Magic (spec §6): nothing while typing, and the off-hand grimoire never casts at a hologram. Anything else stays
+		// vanilla, so main-hand block and entity interactions (chests, doors, villagers) run before the off-hand grimoire.
+		if (MagicInputGate.blocksUse((Minecraft) (Object) this)) {
 			rightClickDelay = ClickGate.RIGHT_CLICK_DELAY;
 			ci.cancel();
 		}

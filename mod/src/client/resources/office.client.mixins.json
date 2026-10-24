@@ -6,6 +6,7 @@
 		"CameraZoomMixin",
 		"DynamicFpsFocusMixin",
 		"EntityRendererNameTagMixin",
+		"EntityTurnWheelMixin",
 		"GameRendererSkipWorldMixin",
 		"KeyMappingAccessor",
 		"MinecraftAttackMixin",
