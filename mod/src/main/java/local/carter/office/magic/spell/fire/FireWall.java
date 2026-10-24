@@ -175,7 +175,7 @@ public final class FireWall implements Spell {
 			this.ctx = ctx;
 			this.g = g;
 			// Fast creatures and projectiles are swept along their motion, so look a little beyond the wall.
-			this.near = g.bounds().inflate(4);
+			this.near = g.bounds().inflate(FireWallGeometry.MAX_SWEEP);
 		}
 
 		@Override
@@ -201,12 +201,12 @@ public final class FireWall implements Spell {
 			}
 		}
 
-		/** In the slab now, or crossed it on the way here this tick. */
+		/** In the slab now, or crossed it on the way here this tick (a teleport across it is no crossing: {@link FireWallGeometry#sweeps}). */
 		private boolean inWall(LivingEntity e) {
 			AABB box = e.getBoundingBox();
 			if (g.touches(box)) return true;
 			Vec3 back = new Vec3(e.xo - e.getX(), e.yo - e.getY(), e.zo - e.getZ());
-			return back.lengthSqr() > 1.0E-6 && g.crosses(box, back);
+			return FireWallGeometry.sweeps(back) && g.crosses(box, back);
 		}
 
 		private void burnProjectiles(ServerLevel level) {
