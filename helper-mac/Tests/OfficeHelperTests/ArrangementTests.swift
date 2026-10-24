@@ -105,6 +105,13 @@ enum ArrangementTests {
             expectEqual(store.load().origins(forMain: "M"), [:], "slot keys outside 1...4 are ignored")
         }
 
+        run("identify: a centred square, 28 % of the shorter side") {
+            expectEqual(IdentifyLayout.square(in: main), CGRect(x: 594, y: 324, width: 252, height: 252), "the MacBook")
+            expectEqual(IdentifyLayout.square(in: rect(-1920, -180)), CGRect(x: -1111, y: 209, width: 302, height: 302),
+                        "a monitor left of / above the main display")
+            expectEqual(IdentifyLayout.square(in: rect(0, 0, 1080, 1920)), CGRect(x: 389, y: 809, width: 302, height: 302), "portrait")
+        }
+
         run("monitor names: short, and never empty") {
             expectEqual(MonitorNames.short("Built-in Retina Display", builtIn: true), "MacBook")
             expectEqual(MonitorNames.short("LG HDR 4K", builtIn: false), "LG")

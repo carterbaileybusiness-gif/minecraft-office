@@ -152,6 +152,16 @@ devclient's HELLO lists `"screens"`, so the helper also pushes DISPLAYS after ev
    display follows (no ENDED); plug it back → frames of the monitor again. An unknown UUID mirrors the main display
    (`helper.log`: "is not connected; mirroring the main display").
 
+## 6f. Identify overlays
+
+`helper; dev create 1 1920 1080 identify sleep 4`, with TextEdit (or Minecraft) in front.
+- Expected: for 3 s a dark rounded square sits in the middle of every screen — **A** on the built-in display, **B**, C…
+  on monitors, **1** on Office Display 1 (see it in System Settings › Displays' arrangement or through a capture:
+  `capture 1 display 1 1280 5` shows the square) — its side 28 % of the screen's shorter side, a big white label.
+- Clicks on a square go through to the window under it; the app in front keeps the keyboard (type during the 3 s); the
+  helper never shows in the Dock or ⌘-Tab. A second `identify` within 3 s replaces the squares (no doubles).
+- On a full-screen app's Space the squares show too.
+
 ## 7. With the mod (after Task 9)
 
 Place an Extend hologram → "Office Display 1" appears in System Settings › Displays; quit Minecraft → it disappears

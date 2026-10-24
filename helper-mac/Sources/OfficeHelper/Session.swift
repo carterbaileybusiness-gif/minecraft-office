@@ -12,6 +12,8 @@ import ScreenCaptureKit
     let input = InWorldInput()
     /// The mini Dock: installed apps, icons, opening an app onto a hologram's display (spec 5.10).
     let launcher = AppLauncher()
+    /// The display map's Identify: a big label on every screen for 3 s.
+    let identifyOverlay = IdentifyOverlay()
     private var captures: [Int: SurfaceCapture] = [:]
     /// Mirrors of a chosen monitor (CAPTURE main + display), by surface: while that monitor is unplugged the Mirror shows
     /// the main display, and it switches back when the monitor returns (checked once a second).
@@ -114,6 +116,7 @@ import ScreenCaptureKit
         pollTimer?.invalidate(); pollTimer = nil
         permissionTimer?.invalidate(); permissionTimer = nil
         screensMod = false
+        identifyOverlay.hide()
         endZoom(notifyMod: false, activateMinecraft: false)
         input.shutdown()
         for capture in captures.values { capture.stop() }
@@ -157,8 +160,7 @@ import ScreenCaptureKit
             launcher.open(p)
         case .listDisplays: sendDisplays()
         case .setOrigins(let p): setOrigins(p)
-        case .identify:
-            sendError("bad_request", "\(message.type): not yet")
+        case .identify(let p): identify(p)
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
@@ -246,6 +248,12 @@ import ScreenCaptureKit
             self.rememberArrangement()
             self.sendDisplays()
         }
+    }
+
+    /// IDENTIFY: each label on its screen for 3 s; ids that aren't connected are skipped. No reply.
+    private func identify(_ p: IdentifyPayload) {
+        let items = p.labels.compactMap { l in ScreenCatalog.displayID(uuid: l.display).map { (bounds: CGDisplayBounds($0), label: l.label) } }
+        identifyOverlay.show(items)
     }
 
     private func rememberArrangement() {

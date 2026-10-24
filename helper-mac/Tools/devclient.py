@@ -30,6 +30,8 @@ Steps (run in order; incoming messages are printed as they arrive):
   sleep SECONDS              wait (still printing incoming messages)
   displays                   LIST_DISPLAYS, wait for DISPLAYS (every screen: UUID, slot, main, name, bounds); also print
                              the online display ids (CoreGraphics)
+  identify                   LIST_DISPLAYS, then IDENTIFY with A = the main display, B, C… = the other monitors (by x,
+                             then y) and 1-4 = the Office displays: big labels on every screen for 3 s
   origins SLOT X Y [SLOT X Y ..]  SET_ORIGINS: move Office displays (global points); waits for DISPLAYS (or ERROR first)
   uuid SLOT                  print the display UUID macOS uses to restore arrangement / window positions
   waitgone SLOT SECONDS      wait until the display reported for SLOT is offline; print how long it took
@@ -57,7 +59,7 @@ NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY"
          24: "LIST_DISPLAYS", 25: "SET_ORIGINS", 26: "IDENTIFY", 81: "DISPLAYS"}
 STEPS = {"create", "remove", "list", "capture", "ready", "stop", "zoomin", "zoomout", "permissions", "down", "move", "up",
          "click", "scroll", "exittyping", "apps", "icons", "open", "work", "workmon", "capturemon", "sleep",
-         "uuid", "displays", "origins", "waitgone", "badtoken"}
+         "uuid", "displays", "identify", "origins", "waitgone", "badtoken"}
 MAIN_PICTURE = {"w": 1920, "h": 1080}  # slot 0 (Mirror): the picture size x / y belong to
 CODES = {v: k for k, v in NAMES.items()}
 
@@ -277,6 +279,14 @@ def main(argv):
             c.send("LIST_DISPLAYS"); i += 1
             c.wait_for("DISPLAYS", 5)
             print(f"   online displays: {online_displays()}", flush=True)
+        elif step == "identify":
+            c.send("LIST_DISPLAYS"); i += 1
+            screens = (c.wait_for("DISPLAYS", 5) or {}).get("displays", [])
+            monitors = sorted((d for d in screens if d["slot"] == 0 and not d["main"]), key=lambda d: (d["x"], d["y"]))
+            labels = [{"display": d["id"], "label": "A"} for d in screens if d["main"]]
+            labels += [{"display": d["id"], "label": chr(ord("B") + n)} for n, d in enumerate(monitors[:15])]
+            labels += [{"display": d["id"], "label": str(d["slot"])} for d in screens if d["slot"] > 0]
+            c.send("IDENTIFY", {"labels": labels[:16]})
         elif step == "origins":
             i += 1
             origins = []

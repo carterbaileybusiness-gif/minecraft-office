@@ -124,3 +124,18 @@ enum MonitorNames {
         return String(first.prefix(maxLength))
     }
 }
+
+/// Identify (3 s, like Windows): a dark rounded square with the screen's label, centred on each screen, its side 28 % of
+/// the screen's shorter side (rounded down). The mod draws the in-world label at the same 28 % of the hologram's
+/// shorter side, so a captured overlay sits under it.
+enum IdentifyLayout {
+    static let percent = 28
+
+    /// Global points, top-left origin; integer maths, so the result never depends on floating-point rounding.
+    static func square(in bounds: CGRect) -> CGRect {
+        let w = Int(bounds.width), h = Int(bounds.height)
+        let side = min(w, h) * percent / 100
+        let x = Int(bounds.minX) + (w - side) / 2, y = Int(bounds.minY) + (h - side) / 2
+        return CGRect(x: x, y: y, width: side, height: side)
+    }
+}
