@@ -186,8 +186,11 @@ public final class CastService {
 
 	/** {@code spell}'s cost at the player's rank: mana × the rank's {@code MANA} knob, cooldown × its {@code COOLDOWN} knob (rounded). */
 	public static SpellCost cost(MagicData d, Spell spell) {
-		SpellCost base = spell.cost();
-		SpellRank r = rank(d, spell);
+		return cost(spell.cost(), rank(d, spell));
+	}
+
+	/** {@code base} at rank {@code r} (the Skill tree previews ranks not bought yet with it). */
+	public static SpellCost cost(SpellCost base, SpellRank r) {
 		if (r.rank() == 0) return base;
 		return new SpellCost(Math.max(1, Math.round(base.mana() * r.mul(Knob.MANA))), Math.round(base.cooldownTicks() * r.mul(Knob.COOLDOWN)),
 				base.xp(), base.xpLevels());

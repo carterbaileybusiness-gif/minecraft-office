@@ -290,7 +290,7 @@ public final class SpellWheelHud {
 		int base = locked ? TEXT_DIM : id.equals(selected) ? UiKit.mix(colour, UiKit.WHITE, 0.45f) : TEXT;
 		int col = UiKit.mix(base, locked ? 0xFFB4AEBE : UiKit.mix(colour, UiKit.WHITE, 0.7f), h);
 		float a = (locked ? 0.7f : 0.88f) + 0.12f * h;
-		Component name = UiKit.spellName(id);
+		Component name = UiKit.rankedName(d, id);
 		Align align = l.aligns().get(slot);
 		int maxLines = align == Align.CENTRE ? 1 : 2;
 		float ts = UiKit.wrap(font, name, r.w(), UiKit.crisp(l.scale()), maxLines, lines);

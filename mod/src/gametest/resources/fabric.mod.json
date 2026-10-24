@@ -35,7 +35,8 @@
 			"local.carter.office.gametest.OfficeClientGameTest",
 			"local.carter.office.client.HologramClientGameTests",
 			"local.carter.office.client.MagicClientGameTests",
-			"local.carter.office.client.MagicFxClientGameTests"
+			"local.carter.office.client.MagicFxClientGameTests",
+			"local.carter.office.client.SkillTreeClientGameTests"
 		]
 	}
 }

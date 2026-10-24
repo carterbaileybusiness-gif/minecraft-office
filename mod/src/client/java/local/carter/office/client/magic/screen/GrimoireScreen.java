@@ -4,12 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import org.jspecify.annotations.Nullable;
-
 import com.mojang.blaze3d.platform.InputConstants;
+import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.magic.MagicClient;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.LevelCurve;
 import local.carter.office.magic.core.Slots;
@@ -19,6 +19,7 @@ import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.net.MagicPayloads.SelectSpell;
 import local.carter.office.magic.spell.SpellCost;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.SpellRegistry;
 
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
@@ -35,9 +36,10 @@ import net.minecraft.util.Util;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 /**
- * Reading your grimoire (main-hand use while bound). Index tabs on the book's left edge switch between Spells, Friends and How
- * to cast (click them, or Left / Right step through them); the Friends tab is {@link FriendsPage} (Travel to a friend), How to
- * cast is two pages of handbook text. Spells tab: left page: your element's sigil, the grimoire level, xp to the next
+ * Reading your grimoire (main-hand use while bound). Index tabs on the book's left edge switch between Spells, Friends, How
+ * to cast and Skill tree (click them, or Left / Right step through them); the Friends tab is {@link FriendsPage} (Travel to a
+ * friend), How to cast is two pages of handbook text, Skill tree is {@link TreePage} (ranks and forks; there the arrows move
+ * between nodes, and Left past the first column turns back a tab). Spells tab: left page: your element's sigil, the grimoire level, xp to the next
  * level and your Recall home. Right page: the six spells of your wheel (icon, name, mana, cooldown; locked ones greyed with a
  * padlock and the level that unlocks them); clicking an unlocked one (or Enter / 1–6) selects it, marked by a ribbon in your
  * element's colour. Footer: how to cast from the off hand. Nothing scrolls; not a pause screen.
@@ -68,7 +70,8 @@ public final class GrimoireScreen extends Screen {
 	private long tabAt = openedAt - 1000;
 	private final float[] tabHover = new float[GrimoireLayout.TABS];
 	private final FriendsPage friends = new FriendsPage(this);
-	public static final int TAB_SPELLS = 0, TAB_FRIENDS = 1, TAB_HOWTO = 2;
+	private final TreePage tree = new TreePage(this);
+	public static final int TAB_SPELLS = 0, TAB_FRIENDS = 1, TAB_HOWTO = 2, TAB_TREE = 3;
 
 	public GrimoireScreen() {
 		super(Component.translatable("item.office.grimoire"));
@@ -86,6 +89,10 @@ public final class GrimoireScreen extends Screen {
 		return friends;
 	}
 
+	public TreePage treePage() {
+		return tree;
+	}
+
 	/** Shows tab {@code t} (0 to {@link GrimoireLayout#TABS} - 1). */
 	public void setTab(int t) {
 		if (t == tab || t < 0 || t >= GrimoireLayout.TABS) return;
@@ -93,6 +100,7 @@ public final class GrimoireScreen extends Screen {
 		tabAt = Util.getMillis();
 		focus = -1;
 		if (t == TAB_FRIENDS) friends.shown();
+		else if (t == TAB_TREE) tree.shown();
 		else rowsFrom = tabAt - ROW_DELAY_MS;
 		play(SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 1.0f, 0.8f));
 	}
@@ -150,6 +158,7 @@ public final class GrimoireScreen extends Screen {
 			return true;
 		}
 		if (tab == TAB_FRIENDS) return friends.click(l, event.x(), event.y()) || super.mouseClicked(event, doubleClick);
+		if (tab == TAB_TREE) return tree.click(l, event.x(), event.y()) || super.mouseClicked(event, doubleClick);
 		if (tab != TAB_SPELLS) return super.mouseClicked(event, doubleClick);
 		int row = l.rowAt(event.x(), event.y());
 		if (row >= 0) {
@@ -161,6 +170,8 @@ public final class GrimoireScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
+		// The tree's own arrows first: they move between its nodes (Left past the first column falls through to the tabs).
+		if (tab == TAB_TREE && tree.key(event)) return true;
 		if (event.isLeft() || event.isRight()) {
 			setTab(Math.clamp(tab + (event.isLeft() ? -1 : 1), 0, GrimoireLayout.TABS - 1));
 			return true;
@@ -263,6 +274,7 @@ public final class GrimoireScreen extends Screen {
 				}
 				case TAB_FRIENDS -> friends.draw(g, font, l, e, mouseX, mouseY, now, dt, content);
 				case TAB_HOWTO -> howToPages(g, l, content);
+				case TAB_TREE -> tree.draw(g, font, l, d, e, mouseX, mouseY, now, dt, content);
 				default -> throw new IllegalStateException("no page for tab " + tab);
 			}
 		}
@@ -396,6 +408,21 @@ public final class GrimoireScreen extends Screen {
 				UiKit.centred(g, font, q, cx, cy - 4.5f * qs, qs, UiKit.alpha(active ? UiKit.INK : 0xFFE9DCB8, ik), false);
 				break;
 			}
+			case TAB_TREE: {
+				// A little tree: a trunk with three nodes on it, the top one lit in the element's colour.
+				int ink = active ? UiKit.INK : 0xFFE9DCB8;
+				float nr = Math.max(1.5f, icon * 0.13f);
+				float top = cy - icon * 0.36f, bottom = cy + icon * 0.36f;
+				int th = Math.max(1, Math.round(icon * 0.06f));
+				g.fill(Math.round(cx) - th, Math.round(top), Math.round(cx) + th, Math.round(bottom), UiKit.alpha(ink, 0.7f * ik));
+				Disc.fill(g, cx, bottom, nr, UiKit.alpha(ink, ik));
+				Disc.fill(g, cx - icon * 0.22f, cy, nr * 0.85f, UiKit.alpha(ink, ik));
+				Disc.fill(g, cx + icon * 0.22f, cy, nr * 0.85f, UiKit.alpha(ink, ik));
+				g.fill(Math.round(cx - icon * 0.22f), Math.round(cy) - th / 2 - 1, Math.round(cx + icon * 0.22f), Math.round(cy) + th / 2,
+						UiKit.alpha(ink, 0.7f * ik));
+				Disc.fill(g, cx, top, nr, UiKit.alpha(e.argb(), ik));
+				break;
+			}
 			case TAB_FRIENDS: {
 				float fs = Math.round(icon * 0.78f);
 				java.util.UUID a = others.size() > 0 ? others.get(0) : null, b = others.size() > 1 ? others.get(1) : null;
@@ -454,7 +481,7 @@ public final class GrimoireScreen extends Screen {
 		Rect r0 = l.rows().get(0);
 		float icon = iconSize(r0, u);
 		int widest = 0;
-		for (int slot = 0; slot < GrimoireLayout.ROWS; slot++) widest = Math.max(widest, font.width(UiKit.spellName(SpellIds.at(e, slot))));
+		for (int slot = 0; slot < GrimoireLayout.ROWS; slot++) widest = Math.max(widest, font.width(UiKit.rankedName(d, SpellIds.at(e, slot))));
 		float nameRoom = r0.w() - icon - 6 * u;
 		float ns = UiKit.fit(widest, nameRoom, u);
 		float ss = ns;
@@ -471,7 +498,8 @@ public final class GrimoireScreen extends Screen {
 			Identifier id = SpellIds.at(e, slot);
 			boolean locked = d.level() < Slots.unlockLevel(slot);
 			boolean selected = slot == sel;
-			SpellCost cost = SpellCost.forSlot(slot);
+			// What a cast costs at the spell's skill-tree rank.
+			SpellCost cost = SpellRegistry.get(id).map(sp -> CastService.cost(d, sp)).orElse(SpellCost.forSlot(slot));
 
 			g.pose().pushMatrix();
 			g.pose().translate(dx, 0);
@@ -503,7 +531,7 @@ public final class GrimoireScreen extends Screen {
 			}
 
 			float tx = r.x() + 2 * u + icon + 4 * u;
-			Component name = UiKit.spellName(id);
+			Component name = UiKit.rankedName(d, id);
 			int nameCol = locked ? UiKit.alpha(UiKit.INK_SOFT, 0.75f) : (slot == Slots.ULTIMATE ? UiKit.inkOf(e.argb()) : UiKit.INK);
 			float nameY = twoLines ? iconCy - (9 * ns + 9 * ss + 1) / 2f : iconCy - 9 * ns / 2f;
 			if (!twoLines) nameY = r.y() + 1;
@@ -580,6 +608,7 @@ public final class GrimoireScreen extends Screen {
 		Component hint = Component.translatable(switch (tab) {
 			case TAB_SPELLS, TAB_HOWTO -> "magic.office.hint";
 			case TAB_FRIENDS -> "magic.office.friends_hint";
+			case TAB_TREE -> "magic.office.tree_hint";
 			default -> throw new IllegalStateException("no footer for tab " + tab);
 		});
 		float s = UiKit.wrap(font, hint, f.w(), l.unit(), 2, lines);

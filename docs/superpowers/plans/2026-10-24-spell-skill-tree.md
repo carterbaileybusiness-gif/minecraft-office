@@ -122,7 +122,7 @@ session (e.g. Earth: 27 diamonds, 14 ancient debris; Shadow: 12 echo shards).
 - **Hook:** `CastContext.rank()` (`SpellRank`), `FxEvent.rank` (packed), `Hurt.damage` riders, `CastService` mana /
   cooldown knobs. Spells use `ctx.rank()` for their size knob and fork checks; nothing else changes shape.
 
-## 5. Screen (Skill tree tab, third index tab)
+## 5. Screen (Skill tree tab, the fourth index tab after Spells, Friends, How to cast)
 
 ```
  ┌ book spread ──────────────────────────────────────────────────────────────┐
@@ -144,8 +144,12 @@ session (e.g. Earth: 27 diamonds, 14 ancient debris; Shadow: 12 echo shards).
 - Right page (fixed place): rank name, before → after stat lines ("Damage 6 → 6.9"), fork cards side by side (name, one
   line, before → after), the cost list with item icons and have/need (red when short), one primary button ("Rank up" /
   "Choose Scatter") disabled with the reason ("Need 2 more blaze rods", "Need 3 more levels").
-- Keyboard: arrows move between nodes (left/right across forks), Enter ranks up / chooses, Tab switches fork card, Esc
-  closes. Feedback: node burst + ring in the element colour, the line animates up, enchant/level-up sound pitched per
+- Mouse: clicking a node selects it (the panel shows the selected node, so the button always acts on what it describes);
+  hovering a node shows a tip (rank, fork name, what is short). Keyboard: arrows move between nodes (Left/Right step across
+  a split node's two options, Left past the first column turns back a tab), Enter or Space presses the button, Esc closes.
+- Text is drawn at the book's text unit and never below 1 (the vanilla size): where the narrowest panel (427 × 240 GUI) has
+  no room, a fork's line is cut to one line with "…" rather than shrunk; spell names live in the panel title and the icons'
+  tips (a 20-unit column cannot hold a name at the vanilla size), the columns show the icon and the Roman rank. Feedback: node burst + ring in the element colour, the line animates up, enchant/level-up sound pitched per
   element; fork choice plays a heavier anvil-like chime and dims the other option. First open: a one-line coach hint over
   the first available node (stored once per player in the client config). With a Seal in the inventory: "Re-pick forks"
   toggle with the warning (ranks kept, forks re-pickable 60 s, uses 1 Seal, materials not refunded).

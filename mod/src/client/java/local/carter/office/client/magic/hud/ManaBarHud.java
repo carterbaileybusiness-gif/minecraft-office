@@ -226,7 +226,7 @@ public final class ManaBarHud {
 		int colour = SpellRegistry.get(mc.player.getUUID(), id).map(s -> s.element() == null ? Element.RECALL_ARGB : s.element().argb())
 				.orElse(e != null && !id.getPath().equals("recall") ? e.argb() : Element.RECALL_ARGB);
 		ManaBarLayout.Layout l = ManaBarLayout.layout(g.guiWidth(), g.guiHeight());
-		Component name = UiKit.spellName(id);
+		Component name = UiKit.rankedName(MagicAttachments.get(mc.player), id);
 		int tw = mc.font.width(name);
 		int icon = 9;
 		int total = icon + 3 + tw;
