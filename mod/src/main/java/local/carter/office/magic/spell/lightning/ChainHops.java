@@ -4,16 +4,18 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.IntPredicate;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Pure hop selection for lightning that leaps between targets (Chain Lightning, and Spark's single arc), on points only: no world
+ * Pure hop selection for lightning that leaps between targets (Chain Lightning, and Spark's arcs), on points only: no world
  * access, so the server and a unit test run the same rules. A chain starts at one point and each hop goes to the nearest point not
  * yet hit within {@code range} of the last one hit (centre to centre), if the {@link Link} allows it (the server's line of sight).
  * Ties go to the lower index, so a chain is the same on every run. It stops when no point qualifies, and never revisits a point.
  */
 public final class ChainHops {
-	/** Chain Lightning: the most hops at charge 0 ({@code 4 + round(2 × charge)} in all), each at most 6 from the last target. */
+	/** Chain Lightning: the most hops at charge 0 ({@code round(4 × ChargeMath.size(charge))} in all), each at most 6 from the last target. */
 	public static final int BASE_HOPS = 4;
 	public static final double HOP_RANGE = 6;
 	/** Chain Lightning: damage {@code 6 × P × 0.8^hop}, hop 0 being the first target. */
@@ -28,10 +30,9 @@ public final class ChainHops {
 
 	private ChainHops() {}
 
-	/** Chain Lightning's hop count after the first target: {@code 4 + round(2 × charge)} (4 at a tap, 6 at full charge). */
+	/** Chain Lightning's hop count after the first target: {@code round(4 × (1 + charge))} (4 at a tap, 8 at full charge). */
 	public static int hops(float charge) {
-		float c = Math.clamp(charge, 0F, 1F);
-		return BASE_HOPS + Math.round(2 * c);
+		return Math.round(BASE_HOPS * ChargeMath.size(charge));
 	}
 
 	/** Chain Lightning's damage to the target at {@code hop} (0 = the first target): {@code 6 × power × 0.8^hop}. */

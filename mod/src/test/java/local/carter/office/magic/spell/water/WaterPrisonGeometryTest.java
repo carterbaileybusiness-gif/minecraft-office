@@ -18,9 +18,11 @@ class WaterPrisonGeometryTest {
 	@Test
 	void durationGrowsWithCharge() {
 		assertEquals(100, WaterPrisonGeometry.duration(0));
-		assertEquals(120, WaterPrisonGeometry.duration(0.5F));
-		assertEquals(140, WaterPrisonGeometry.duration(1));
-		assertEquals(140, WaterPrisonGeometry.duration(3), "clamped");
+		assertEquals(150, WaterPrisonGeometry.duration(0.5F));
+		assertEquals(200, WaterPrisonGeometry.duration(1));
+		assertEquals(200, WaterPrisonGeometry.duration(3), "clamped");
+		assertEquals(2, WaterPrisonGeometry.radius(0), 1e-9);
+		assertEquals(3.5, WaterPrisonGeometry.radius(1), 1e-9);
 	}
 
 	@Test

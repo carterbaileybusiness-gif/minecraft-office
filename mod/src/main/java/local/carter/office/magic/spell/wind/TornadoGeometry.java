@@ -1,5 +1,7 @@
 package local.carter.office.magic.spell.wind;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -7,7 +9,7 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>The whirlwind starts at {@code origin} (on the ground) and travels along the level direction {@code dir} at
  * {@link #SPEED} blocks a tick for {@link #life} ticks: {@code at(t) = origin + dir × SPEED × t}. Its reach is a column of
- * radius {@link #RADIUS} round that point, from {@link #BELOW} under it to {@link #HEIGHT} over it. Anything caught gets the
+ * radius {@link #radius} ({@link #RADIUS} at a tap, twice that at full charge) round that point, from {@link #BELOW} under it to {@link #HEIGHT} over it. Anything caught gets the
  * velocity {@link #push}: {@link #TANGENTIAL} round the axis, {@link #INWARD} toward it, {@link #UP} up, plus the tornado's own
  * travel. It turns anticlockwise seen from above ({@link #tangent}).
  */
@@ -16,7 +18,7 @@ public record TornadoGeometry(Vec3 origin, Vec3 dir, int life) {
 	public static final double RANGE = 20;
 	public static final double SPEED = 0.15;
 	public static final int LIFE = 120;
-	public static final int LIFE_PER_CHARGE = 40;
+	public static final int LIFE_PER_CHARGE = 60;
 	public static final double RADIUS = 4;
 	public static final double HEIGHT = 9;
 	public static final double BELOW = 1;
@@ -32,7 +34,7 @@ public record TornadoGeometry(Vec3 origin, Vec3 dir, int life) {
 		dir = flatUnit(dir);
 	}
 
-	/** Ticks the tornado lasts at {@code charge}: {@code 120 + 40 × charge}. */
+	/** Ticks the tornado lasts at {@code charge}: {@code 120 + 60 × charge}. */
 	public static int life(float charge) {
 		return LIFE + Math.round(LIFE_PER_CHARGE * Math.max(0F, Math.min(1F, charge)));
 	}
@@ -43,13 +45,23 @@ public record TornadoGeometry(Vec3 origin, Vec3 dir, int life) {
 		return origin.add(dir.scale(SPEED * s));
 	}
 
-	/** Whether {@code p} is inside the tornado whose base is at {@code base}. */
+	/** The reach's radius at {@code charge}: {@code RADIUS × ChargeMath.size(charge)}, 4 at a tap and 8 at full charge. */
+	public static double radius(float charge) {
+		return RADIUS * ChargeMath.size(charge);
+	}
+
+	/** Whether {@code p} is inside a tap's tornado whose base is at {@code base}. */
 	public static boolean inReach(Vec3 base, Vec3 p) {
+		return inReach(base, p, RADIUS);
+	}
+
+	/** Whether {@code p} is inside the tornado of reach {@code radius} whose base is at {@code base}. */
+	public static boolean inReach(Vec3 base, Vec3 p, double radius) {
 		double dy = p.y - base.y;
 		if (dy < -BELOW || dy > HEIGHT) return false;
 		double dx = p.x - base.x;
 		double dz = p.z - base.z;
-		return dx * dx + dz * dz <= RADIUS * RADIUS;
+		return dx * dx + dz * dz <= radius * radius;
 	}
 
 	/** The unit tangent of the spin at level offset {@code (dx, dz)} from the axis (anticlockwise seen from above). */

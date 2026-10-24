@@ -43,7 +43,7 @@ public final class GustFx implements SpellFx {
 		Vec3 dir = f.forward();
 		Vec3 hand = e.origin().add(dir.scale(1.7)).add(0, -0.15, 0);
 
-		kit.circle(hand, dir.reverse(), 0xFF000000 | WIND, 0.35F + 0.25F * c, 2 + Math.round(2 * c), 7);
+		kit.circle(hand, dir.reverse(), 0xFF000000 | WIND, 0.35F * (1F + c), 2 + Math.round(2 * c), 7);
 		level.playLocalSound(hand.x, hand.y, hand.z, SoundEvents.WIND_CHARGE_BURST.value(), SoundSource.PLAYERS, 0.9F,
 				1.15F - 0.25F * c + level.getRandom().nextFloat() * 0.1F, false);
 		level.playLocalSound(hand.x, hand.y, hand.z, SoundEvents.BREEZE_SHOOT, SoundSource.PLAYERS, 0.5F, 1.3F, false);

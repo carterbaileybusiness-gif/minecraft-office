@@ -38,20 +38,22 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Tidal Push (Water, slot 1, medium, lingering): a wave that shoves everything in front of you.
  *
- * <p>At the cast, everything pushable in the cone ({@link TidalWaveGeometry#range} = 8 + 4 × charge, half-angle 35°) is
+ * <p>At the cast, everything pushable in the cone ({@link TidalWaveGeometry#range} = 8 × (1 + charge), half-angle 35°) is
  * knocked {@link #KNOCK} × P horizontally plus {@link #KNOCK_UP} up if the caster can see it; anything burning in sight in the cone (friends included: it only
  * douses) is extinguished; fire blocks in the cone that the caster can see are removed, one MEDIUM batch per 6-block cube
  * ({@link TidalWaveGeometry#fireSegment}).
  *
- * <p>Then the wave ({@link TidalWaveGeometry}) rolls out from the caster's feet, 5 wide, a block every 2 ticks for 8 blocks,
+ * <p>Then the wave ({@link TidalWaveGeometry}) rolls out from the caster's feet, 5 wide, a block every 2 ticks as far as the cone
+ * reaches (8 blocks at a tap, 16 at full charge),
  * following the ground column by column ({@link TidalWaveGeometry#step}: it climbs steps, pours down drops, breaks on walls):
  * whatever it reaches is carried once more ({@link #CARRY}) and doused, and fire in its cells is removed through one MEDIUM
  * batch per 4-block segment. Nothing behind a wall is touched. <b>No water is placed</b> (the temp-block ruling: never a temporary liquid); the water you see
  * is the client's, drawn from the same geometry: ghost blocks that live {@link TidalWaveGeometry#CELL_LIFE} ticks in air cells
  * only, spray and foam.
  *
- * <p>Fx: {@code target} = the wave's start (bottom centre of the caster's feet cell), {@code duration} =
- * {@link TidalWaveGeometry#DURATION}, {@code entities} = what the cone shoved (first 32), {@code data[0]} = the cone's range.
+ * <p>Fx: {@code target} = the wave's start (bottom centre of the caster's feet cell), {@code duration} = the wave's
+ * {@link TidalWaveGeometry#duration()}, {@code entities} = what the cone shoved (first 32), {@code data[0]} = the cone's range
+ * (the client rebuilds the wave's length from it, {@link TidalWaveGeometry#length(double)}).
  */
 public final class TidalPush implements Spell {
 	public static final double KNOCK = 1.6;
@@ -82,7 +84,7 @@ public final class TidalPush implements Spell {
 		Vec3 look = ctx.look().normalize();
 		double range = TidalWaveGeometry.range(ctx.charge());
 		Vec3 start = Vec3.atBottomCenterOf(ctx.caster().blockPosition());
-		TidalWaveGeometry wave = new TidalWaveGeometry(start, look);
+		TidalWaveGeometry wave = new TidalWaveGeometry(start, look, TidalWaveGeometry.length(range));
 		Wave effect = new Wave(ctx, wave);
 		if (!ActiveEffects.add(ctx, effect)) return CastOutcome.fizzle("magic.office.busy");
 
@@ -118,7 +120,7 @@ public final class TidalPush implements Spell {
 		}
 
 		int[] ids = shoved.stream().mapToInt(Integer::intValue).toArray();
-		return CastOutcome.cast(ctx.fx().withTarget(start).withDuration(TidalWaveGeometry.DURATION).withEntities(ids)
+		return CastOutcome.cast(ctx.fx().withTarget(start).withDuration(wave.duration()).withEntities(ids)
 				.withData((float) range));
 	}
 
@@ -146,7 +148,7 @@ public final class TidalPush implements Spell {
 
 		@Override
 		public boolean tick(ServerLevel level, int age) {
-			if (!TidalWaveGeometry.frontActive(age)) return false;
+			if (!wave.active(age)) return false;
 			// Unloaded cells count as walls: the wave never loads a chunk.
 			wave.step(age, colY, broken, p -> level.isLoaded(p) && level.getBlockState(p).getCollisionShape(level, p).isEmpty());
 			Vec3 c = wave.frontCentre(age);
@@ -158,7 +160,7 @@ public final class TidalPush implements Spell {
 					Hurt.knock(e, wave.dir(), CARRY * ctx.power(), CARRY_UP);
 				}
 			}
-			int seg = TidalWaveGeometry.segment(TidalWaveGeometry.distance(age));
+			int seg = wave.segmentOf(wave.at(age));
 			for (BlockPos cell : wave.front(age, colY, broken)) {
 				if (!level.getBlockState(cell).is(BlockTags.FIRE)) continue;
 				EditBatch b = batch(seg);
@@ -167,7 +169,7 @@ public final class TidalPush implements Spell {
 			// A segment the front has left is done.
 			EditBatch before = seg > 0 ? batches.remove(seg - 1) : null;
 			if (before != null) before.close();
-			return age < TidalWaveGeometry.FRONT_TICKS;
+			return age < wave.frontTicks();
 		}
 
 		private @Nullable EditBatch batch(int seg) {

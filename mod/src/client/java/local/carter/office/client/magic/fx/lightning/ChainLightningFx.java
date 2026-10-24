@@ -38,7 +38,7 @@ public final class ChainLightningFx implements SpellFx {
 
 		int before = kit.budget().particlesLeft();
 		Allowance opening = Allowance.unlimited();
-		kit.circle(hand, dir.reverse(), Element.LIGHTNING.argb(), 0.45F + 0.2F * c, 3 + Math.round(2 * c), 12 + Math.round(6 * c));
+		kit.circle(hand, dir.reverse(), Element.LIGHTNING.argb(), 0.45F * (1F + c), 3 + Math.round(2 * c), 12 + Math.round(6 * c));
 		kit.motes(hand, LightningLook.CORE, LightningLook.handMotes(c), 0.12, dir.scale(0.1), 0.08, GlowMote.Drift.FLICKER, 0.09F, 7);
 		Volts.channel(kit, level, opening, hand, first, seed, LightningLook.FIRST, LightningLook.FIRST_STRAND);
 		// The crackle runs over the next ticks: its whole cost is set aside now, before the hops share out the rest.

@@ -57,6 +57,8 @@ public final class MagicCircleRenderer {
 	/** The line texture's visible band is this share of its square (line.png: 24 of 32 px). */
 	private static final float BAND = 0.75F;
 	private static final int RUNES = 8;
+	/** How much a full {@link Frame#glow} adds to the backdrop's light. */
+	private static final float GLOW = 0.35F;
 
 	/**
 	 * The caster's own circle in first person, when it stands in their face: alpha × {@link #FIRST_PERSON_ALPHA}, no flare, and
@@ -172,6 +174,8 @@ public final class MagicCircleRenderer {
 		public float clear;
 		/** 0..1: a pulse of the outer frame only (the first-person full-charge cue). */
 		public float rimPulse;
+		/** 0..1: the light a charge builds up behind the circle (its backdrop brightens with it; 0 = none). */
+		public float glow;
 	}
 
 	// While drawing a frame.
@@ -273,7 +277,10 @@ public final class MagicCircleRenderer {
 			open += ringAlpha(f.ringAge[i]);
 		}
 		float reach = ringRadius(rings) * s;
-		if (clear <= 0) piece(soft, 0, 0, 0, reach * 1.1F, light(f.alpha * (0.16F + 0.06F * open / MAX_RINGS + 0.12F * f.flare), rgb));
+		if (clear <= 0) {
+			float back = 0.16F + 0.06F * open / MAX_RINGS + 0.12F * f.flare + GLOW * f.glow;
+			piece(soft, 0, 0, 0, reach * 1.1F, light(f.alpha * back, rgb));
+		}
 
 		for (int i = 0; i < rings; i++) {
 			float shown = ringAlpha(f.ringAge[i]);

@@ -7,6 +7,7 @@ import java.util.function.Function;
 import org.jspecify.annotations.Nullable;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -60,14 +61,17 @@ public final class EarthWallGeometry {
 		return new EarthWallGeometry(origin, axis[0], axis[1], width(charge), height(charge));
 	}
 
-	/** 5 columns, 7 from charge 0.5. */
+	/**
+	 * {@code 5 + 2 × round(3 × charge)} columns (always odd): 5 at a tap, 7 from charge 1/6, 9 from 1/2, 11 from 5/6. A full charge's
+	 * wall is 2.2× a tap's; 11 keeps its end columns within the medium radius (6) of the centre cell, 4 high on level ground.
+	 */
 	public static int width(float charge) {
-		return charge >= 0.5F ? 7 : 5;
+		return 5 + 2 * Math.round(3 * Mth.clamp(charge, 0F, 1F));
 	}
 
-	/** 3 cells high, 4 at full charge. */
+	/** 3 cells high, 4 from half charge. */
 	public static int height(float charge) {
-		return charge >= 0.999F ? 4 : 3;
+		return 3 + Math.round(Mth.clamp(charge, 0F, 1F));
 	}
 
 	/** The block axis the wall runs along for a look {@code forward}: across its dominant horizontal axis. */

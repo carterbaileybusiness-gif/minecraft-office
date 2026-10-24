@@ -52,11 +52,11 @@ public final class TornadoFx implements SpellFx {
 		TornadoGeometry geo = new TornadoGeometry(e.target(), e.dir(), life);
 		Vec3 start = geo.origin();
 
-		kit.circle(start.add(0, 0.06, 0), new Vec3(0, 1, 0), 0xFF000000 | WIND, 1.3F + 0.4F * c, 3 + Math.round(2 * c), 14);
+		kit.circle(start.add(0, 0.06, 0), new Vec3(0, 1, 0), 0xFF000000 | WIND, 1.3F * (1F + c), 3 + Math.round(2 * c), 14);
 		level.playLocalSound(start.x, start.y, start.z, SoundEvents.WIND_CHARGE_BURST.value(), SoundSource.PLAYERS, 1.0F, 0.75F, false);
 		level.playLocalSound(start.x, start.y, start.z, SoundEvents.BREEZE_INHALE, SoundSource.PLAYERS, 1.0F, 0.6F, false);
 		kit.shake(0.15F, 6);
-		AirStepFx.StepRing ring = new AirStepFx.StepRing(level, start.add(0, 0.15, 0), 3.5, 10, 0, 0.22F);
+		AirStepFx.StepRing ring = new AirStepFx.StepRing(level, start.add(0, 0.15, 0), 3.5 * (1 + c), 10, 0, 0.22F);
 		if (kit.budget().particles(ring.cost()) >= ring.cost()) Minecraft.getInstance().particleEngine.add(ring);
 		kit.motes(start.add(0, 0.4, 0), PALE, 20, 0.8, new Vec3(0, 0.12, 0), 0.12, GlowMote.Drift.SWIRL, 0.12F, 14);
 
@@ -84,7 +84,7 @@ public final class TornadoFx implements SpellFx {
 				int n = Math.min(left[0], 2);
 				for (int i = 0; i < n && dust != null; i++) {
 					double a = r.nextDouble() * Mth.TWO_PI;
-					double rad = 1.2 + r.nextDouble() * 2.4;
+					double rad = (1.2 + r.nextDouble() * 2.4) * funnel.widen();
 					Vec3 off = new Vec3(Math.sin(a) * rad, 0.1 + r.nextDouble() * 0.5, Math.cos(a) * rad);
 					Vec3 tan = TornadoGeometry.tangent(off.x, off.z).scale(0.35);
 					Vec3 p = base.add(off);
@@ -144,6 +144,8 @@ public final class TornadoFx implements SpellFx {
 		private static final int RINGS = 8;
 
 		private final TornadoGeometry geo;
+		/** How much wider than a tap's the funnel is: the server's reach, {@link TornadoGeometry#radius}, over a tap's. */
+		private final double widen;
 		private final int strands;
 		private final double[] phase;
 		private final double[] offset;
@@ -166,6 +168,7 @@ public final class TornadoFx implements SpellFx {
 		Funnel(ClientLevel level, TornadoGeometry geo, float charge, long seed) {
 			super(level, geo.origin().x, geo.origin().y, geo.origin().z, MagicCircleRenderer.sprite("line"));
 			this.geo = geo;
+			this.widen = TornadoGeometry.radius(charge) / TornadoGeometry.RADIUS;
 			this.base = geo.origin();
 			this.prevBase = base;
 			this.strands = BASE_STRANDS + 14 + Math.round(4 * charge);
@@ -205,6 +208,10 @@ public final class TornadoFx implements SpellFx {
 
 		Vec3 base() {
 			return base;
+		}
+
+		double widen() {
+			return widen;
 		}
 
 		@Override
@@ -262,9 +269,9 @@ public final class TornadoFx implements SpellFx {
 			}
 		}
 
-		/** The funnel's radius at height {@code h} above its base. */
-		private static double radius(double h) {
-			return R0 + (R_TOP - R0) * Math.pow(Mth.clamp(h / TornadoGeometry.HEIGHT, 0, 1), 1.4);
+		/** The funnel's radius at height {@code h} above its base (wider, by {@link #widen}, for a charged cast). */
+		private double radius(double h) {
+			return (R0 + (R_TOP - R0) * Math.pow(Mth.clamp(h / TornadoGeometry.HEIGHT, 0, 1), 1.4)) * widen;
 		}
 
 		/** The axis's sway at height {@code h} (none at the foot, most at the top). */
@@ -347,7 +354,7 @@ public final class TornadoFx implements SpellFx {
 
 		@Override
 		public double reach() {
-			return TornadoGeometry.HEIGHT / 2 + R_TOP + 2;
+			return TornadoGeometry.HEIGHT / 2 + R_TOP * widen + 2;
 		}
 	}
 }

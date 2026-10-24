@@ -39,7 +39,7 @@ public final class DefaultFx implements SpellFx {
 		// Far enough out that the caster sees the whole circle open, not a wall of light in their face.
 		Vec3 at = e.origin().add(dir.scale(1.7)).add(0, -0.15, 0);
 		int rings = 2 + Math.round(c * 3);
-		kit.circle(at, dir.reverse(), 0xFF000000 | rgb, 0.55F + 0.3F * c, rings, 16 + Math.round(8 * c));
+		kit.circle(at, dir.reverse(), 0xFF000000 | rgb, 0.55F * (1F + c), rings, 16 + Math.round(8 * c));
 		Vec3 front = at.add(dir.scale(0.3));
 		kit.burst(front, particle(element), 6 + Math.round(10 * c), 0.07 + 0.08 * c);
 		kit.motes(front, MagicCircleRenderer.lighter(rgb, 0.3F), 12 + Math.round(14 * c), 0.25, dir.scale(0.16 + 0.14 * c), 0.09,

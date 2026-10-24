@@ -55,13 +55,14 @@ public final class ShadowBoltFx implements SpellFx {
 		// The muzzle: a quick circle facing the caster and a puff of violet motes off it (vanilla particles stay out of the
 		// caster's face: up close they are big pixel squares).
 		Vec3 muzzle = origin.add(dir.scale(1.7)).add(0, -0.15, 0);
-		kit.circle(muzzle, dir.reverse(), ShadowFx.ARGB, 0.42F + 0.3F * c, 2 + Math.round(2 * c), 9 + Math.round(4 * c));
+		kit.circle(muzzle, dir.reverse(), ShadowFx.ARGB, 0.42F * (1F + c), 2 + Math.round(2 * c), 9 + Math.round(4 * c));
 		kit.motes(muzzle, ShadowFx.VIOLET, 8 + Math.round(6 * c), 0.25, dir.scale(0.08), 0.06, GlowMote.Drift.SINK, 0.1F, 10);
 		kit.motes(muzzle.add(dir.scale(0.3)), ShadowFx.PALE, 4, 0.1, dir.scale(0.12), 0.05, GlowMote.Drift.COAST, 0.07F, 7);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.ILLUSIONER_CAST_SPELL, SoundSource.PLAYERS, 0.55F, 0.65F + 0.15F * (1 - c), false);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.WITHER_SHOOT, SoundSource.PLAYERS, 0.18F + 0.1F * c, 1.7F - 0.3F * c, false);
 
-		float size = 0.3F + 0.12F * c;
+		// As big as the server's bolt (ShadowBolt.radius): twice a tap's at full charge.
+		float size = 0.3F * (1F + c);
 		Head head = new Head(level, origin, dir, speed, (float) Math.min(ShadowBolt.MAX_TICKS, stop / speed), size);
 		if (kit.budget().particles(Head.cost()) >= Head.cost()) Minecraft.getInstance().particleEngine.add(head);
 

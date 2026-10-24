@@ -22,7 +22,6 @@ import net.minecraft.world.effect.MobEffectUtil;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
@@ -32,11 +31,11 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Water Prison (Water, slot 3, medium, lingering): trap a foe in a sphere of water.
  *
- * <p>The cast looks along the caster's view for the first hostile mob ({@link Enemy}, the lanes' ruling: control effects take
- * only foes, never livestock, golems, allays or a boss) within {@link WaterPrisonGeometry#RANGE}, in sight (the ray stops at the first
- * solid block). A sphere of {@link WaterPrisonGeometry#RADIUS} forms about its middle for {@link WaterPrisonGeometry#duration}
- * ticks (100 + 40 × charge). If the ray finds no foe, the sphere forms where the ray ends (backed off a wall by its radius) and
- * takes the first foe that comes inside.
+ * <p>The cast looks along the caster's view for the first creature a control effect may take ({@link #takes}: hostile mobs and
+ * animals, never golems, pets, villagers, named mobs or a boss) within {@link WaterPrisonGeometry#RANGE}, in sight (the ray stops
+ * at the first solid block). A sphere of {@link WaterPrisonGeometry#radius} (2 at a tap, 3.5 at full charge) forms about its
+ * middle for {@link WaterPrisonGeometry#duration} ticks (100 + 100 × charge). If the ray finds no foe, the sphere forms where the ray ends (backed off a wall by its radius) and
+ * takes the first creature that comes inside.
  *
  * <p>While its prisoner is inside ({@link WaterPrisonGeometry#inside}), every tick it gets Slowness III, is pulled to the
  * centre ({@link WaterPrisonGeometry#pull}: it hangs in the water), stops burning and loses air as if under water
@@ -78,29 +77,30 @@ public final class WaterPrison implements Spell {
 				ClipContext.Fluid.NONE, ctx.caster()));
 		Vec3 end = wall.getType() == HitResult.Type.MISS ? eye.add(look.scale(WaterPrisonGeometry.RANGE)) : wall.getLocation();
 		LivingEntity target = foeOnRay(ctx, eye, end).orElse(null);
+		double radius = WaterPrisonGeometry.radius(ctx.charge());
 		Vec3 centre;
 		if (target != null) {
 			centre = target.getBoundingBox().getCenter();
 		} else {
-			double back = wall.getType() == HitResult.Type.MISS ? 0 : Math.min(WaterPrisonGeometry.RADIUS, end.distanceTo(eye));
+			double back = wall.getType() == HitResult.Type.MISS ? 0 : Math.min(radius, end.distanceTo(eye));
 			centre = end.subtract(look.scale(back));
 		}
 		int life = WaterPrisonGeometry.duration(ctx.charge());
-		Prison prison = new Prison(ctx, centre, life, target);
+		Prison prison = new Prison(ctx, centre, radius, life, target);
 		if (!ActiveEffects.add(ctx, prison)) return CastOutcome.fizzle("magic.office.busy");
 		int[] held = target == null ? new int[0] : new int[] {target.getId()};
-		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withEntities(held).withData((float) WaterPrisonGeometry.RADIUS));
+		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withEntities(held).withData((float) radius));
 	}
 
 	/**
-	 * Whether the prison may take {@code e}: a foe the caster's spells may touch, never a boss (it roots and pulls, a control
+	 * Whether the prison may take {@code e}: a creature the caster's spells may touch, never a boss (it roots and pulls, a control
 	 * effect: {@link TargetFilter#controllable}).
 	 */
 	public static boolean takes(ServerPlayer caster, Entity e) {
 		return e instanceof LivingEntity && TargetFilter.controllable(caster, e);
 	}
 
-	/** The nearest foe whose hitbox (inflated by {@link WaterPrisonGeometry#FORGIVENESS}) the ray {@code eye → end} passes through. */
+	/** The nearest creature it may take whose hitbox (inflated by {@link WaterPrisonGeometry#FORGIVENESS}) the ray {@code eye → end} passes through. */
 	private static Optional<LivingEntity> foeOnRay(CastContext ctx, Vec3 eye, Vec3 end) {
 		AABB sweep = new AABB(eye, end).inflate(WaterPrisonGeometry.FORGIVENESS + 1);
 		LivingEntity best = null;
@@ -127,14 +127,16 @@ public final class WaterPrison implements Spell {
 	static final class Prison implements LingeringEffect {
 		private final CastContext ctx;
 		private final Vec3 centre;
+		private final double radius;
 		private final int life;
 		private @Nullable LivingEntity held;
 		/** The prisoner's air as the prison keeps it (vanilla would refill it each tick out of water). */
 		private int air;
 
-		Prison(CastContext ctx, Vec3 centre, int life, @Nullable LivingEntity target) {
+		Prison(CastContext ctx, Vec3 centre, double radius, int life, @Nullable LivingEntity target) {
 			this.ctx = ctx;
 			this.centre = centre;
+			this.radius = radius;
 			this.life = life;
 			hold(target);
 		}
@@ -152,7 +154,7 @@ public final class WaterPrison implements Spell {
 				return false; // the prisoner died or left: the water falls away
 			}
 			LivingEntity e = held;
-			if (e != null && WaterPrisonGeometry.inside(centre, e.getBoundingBox().getCenter())) {
+			if (e != null && WaterPrisonGeometry.inside(centre, e.getBoundingBox().getCenter(), radius)) {
 				e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, SLOWNESS_TICKS, SLOWNESS_AMPLIFIER, false, false, true), ctx.caster());
 				e.setDeltaMovement(WaterPrisonGeometry.pull(centre, e.getBoundingBox().getCenter()));
 				e.syncVelocity = true;
@@ -173,14 +175,14 @@ public final class WaterPrison implements Spell {
 			if (drowns) e.hurtServer(level, level.damageSources().drown(), WaterPrisonGeometry.DROWN_DAMAGE);
 		}
 
-		/** An empty prison takes the nearest foe that comes inside. */
+		/** An empty prison takes the nearest creature that comes inside. */
 		private @Nullable LivingEntity waiting(ServerLevel level) {
-			double r = WaterPrisonGeometry.RADIUS + WaterPrisonGeometry.HOLD;
+			double r = radius + WaterPrisonGeometry.HOLD;
 			LivingEntity best = null;
 			double bestDist = Double.MAX_VALUE;
 			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(centre, centre).inflate(r + 2), e -> takes(ctx.caster(), e))) {
 				Vec3 m = e.getBoundingBox().getCenter();
-				if (!WaterPrisonGeometry.inside(centre, m)) continue;
+				if (!WaterPrisonGeometry.inside(centre, m, radius)) continue;
 				double d = m.distanceToSqr(centre);
 				if (d < bestDist) {
 					bestDist = d;

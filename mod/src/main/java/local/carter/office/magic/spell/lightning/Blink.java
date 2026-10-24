@@ -3,6 +3,7 @@ package local.carter.office.magic.spell.lightning;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.net.FxEvent;
@@ -18,14 +19,13 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
-import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Blink (Lightning, slot 2, small): the caster flashes forward along the look, up to {@code 10 + 4 × charge} blocks, in an
- * instant. The way is walked first ({@link BlinkPath}: it slides along ground it is aimed into, steps over a one-block bump, and
+ * Blink (Lightning, slot 2, small): the caster flashes forward along the look, up to {@link #range} = {@code 10 × (1 + charge)} blocks (10 at a
+ * tap, 20 at full charge), in an instant. The way is walked first ({@link BlinkPath}: it slides along ground it is aimed into, steps over a one-block bump, and
  * stops at the last place the caster's body fits before anything solid, lava or fire), then {@link Motion#teleportSafe} puts
  * them there, so a blink never passes through a wall or ends inside a block. Velocity is zeroed and there is no fall damage for
  * {@link #NO_FALL_TICKS} ticks. No block changes, nothing hurt. A blink that
@@ -36,7 +36,6 @@ import net.minecraft.world.phys.Vec3;
  */
 public final class Blink implements Spell {
 	public static final double BASE_RANGE = 10;
-	public static final double CHARGE_RANGE = 4;
 	public static final int NO_FALL_TICKS = 20;
 	/** A blink that would travel less than this fizzles at no cost, with {@link #BLOCKED_KEY} ("The spell failed"). */
 	public static final double MIN_TRAVEL = 0.5;
@@ -57,9 +56,9 @@ public final class Blink implements Spell {
 		return Slots.SMALL_B;
 	}
 
-	/** How far a blink goes at {@code charge}: {@code 10 + 4 × charge}. */
+	/** How far a blink goes at {@code charge}: {@code 10 × ChargeMath.size(charge)}, 10 at a tap and 20 at full charge. */
 	public static double range(float charge) {
-		return BASE_RANGE + CHARGE_RANGE * Mth.clamp(charge, 0F, 1F);
+		return BASE_RANGE * ChargeMath.size(charge);
 	}
 
 	@Override

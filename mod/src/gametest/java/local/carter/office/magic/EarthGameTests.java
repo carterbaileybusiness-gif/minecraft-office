@@ -351,19 +351,19 @@ public class EarthGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 40)
-	public void earthWallFullChargeIsSevenByFour(GameTestHelper h) {
+	public void earthWallFullChargeIsElevenByFour(GameTestHelper h) {
 		ServerPlayer p = wallCaster(h);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		int before = stoneAndTuff(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.EARTH_WALL, 1f), Result.CAST, "result");
 		float[] d = rec.fx(p).get(0).data();
-		h.assertTrue(d.length == 4 && d[0] == 1 && d[1] == 0 && d[2] == 7 && d[3] == 4, "fx data {1, 0, 7, 4}");
+		h.assertTrue(d.length == 4 && d[0] == 1 && d[1] == 0 && d[2] == 11 && d[3] == 4, "fx data {1, 0, 11, 4}");
 		h.runAfterDelay(10, () -> {
-			for (int x = 13; x <= 19; x++) {
+			for (int x = 11; x <= 21; x++) {
 				for (int y = 4; y <= 7; y++) assertWall(h, cell(x, y), Blocks.STONE);
 				h.assertBlockPresent(Blocks.AIR, cell(x, 8));
 			}
-			h.assertValueEqual(stoneAndTuff(h), before + 28, "28 cells");
+			h.assertValueEqual(stoneAndTuff(h), before + 44, "44 cells");
 			h.succeed();
 		});
 	}

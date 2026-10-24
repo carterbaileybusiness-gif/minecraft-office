@@ -1065,7 +1065,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 
 	/**
 	 * Hold right-click 40 ticks: no mana is spent while held, and the circle (seen from behind the caster) changes at least 20 % of
-	 * the pixels inside its projection (the ellipse in its projected rect) against the same frame before charging. The release casts at full charge (8 × 1.5 = 12).
+	 * the pixels inside its projection (the ellipse in its projected rect) against the same frame before charging. The release casts at full charge (8 × 2 = 16).
 	 */
 	private static void chargeCircleGrowsWhileHeld(ClientGameTestContext context, TestSingleplayerContext sp) {
 		refill(context, sp, TAP_PROBE);
@@ -1109,15 +1109,15 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		}
 		waitCast(sp, TAP_PROBE);
 		int left = mana(sp);
-		if (left != FEEL_MANA - 12) throw new AssertionError("a full charge costs 8 × 1.5 = 12: mana " + FEEL_MANA + " -> " + left);
+		if (left != FEEL_MANA - 16) throw new AssertionError("a full charge costs 8 × 2 = 16: mana " + FEEL_MANA + " -> " + left);
 		context.runOnClient(mc -> mc.options.setCameraType(CameraType.FIRST_PERSON));
 		context.waitTicks(2);
 	}
 
 	/**
-	 * The full-charge circle's rect on screen, in pixels {x0, y0, x1, y1} (clamped to the screen): its rim (radius of 5 rings,
-	 * {@link ChargeCircles#AHEAD} ahead of the eye and {@link ChargeCircles#BELOW} below it, facing along the look) projected
-	 * through the camera.
+	 * The full-charge circle's rect on screen, in pixels {x0, y0, x1, y1} (clamped to the screen): its rim (radius of 5 rings
+	 * grown by {@link ChargeCircles#scale} at full charge, {@link ChargeCircles#AHEAD} ahead of the eye, facing along the look)
+	 * projected through the camera.
 	 */
 	private static int[] circleRect(Minecraft mc) {
 		Camera cam = mc.gameRenderer.mainCamera();
@@ -1127,7 +1127,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		Vec3 centre = mc.player.getEyePosition(1F).add(look.scale(ChargeCircles.AHEAD));
 		Vec3 right = look.cross(new Vec3(0, 1, 0)).normalize();
 		Vec3 up = right.cross(look).normalize();
-		double radius = MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS);
+		double radius = MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS) * ChargeCircles.scale(1F);
 		int w = mc.getWindow().getWidth(), h = mc.getWindow().getHeight();
 		double x0 = w, y0 = h, x1 = 0, y1 = 0;
 		for (int i = 0; i < 32; i++) {

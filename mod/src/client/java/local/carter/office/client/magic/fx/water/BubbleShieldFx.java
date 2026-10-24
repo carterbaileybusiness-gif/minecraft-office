@@ -48,7 +48,7 @@ public final class BubbleShieldFx implements SpellFx {
 		int rimTotal = step * (life / 10 + 1);
 
 		Vec3 feet = caster != null ? caster.position() : fallback.subtract(0, 0.9, 0);
-		kit.circle(feet.add(0, 0.06, 0), new Vec3(0, 1, 0), WaterFx.ARGB, 1.2F, 3, 16);
+		kit.circle(feet.add(0, 0.06, 0), new Vec3(0, 1, 0), WaterFx.ARGB, 1.2F * radius / (float) BubbleShieldGeometry.RADIUS, 3, 16);
 		kit.ring(feet.add(0, 0.1, 0), radius * 0.9, ParticleTypes.SPLASH, 14);
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.BUCKET_EMPTY, SoundSource.PLAYERS, 0.7F, 1.35F, false);
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.BUBBLE_COLUMN_UPWARDS_AMBIENT, SoundSource.PLAYERS, 0.8F, 1.2F, false);
@@ -78,7 +78,7 @@ public final class BubbleShieldFx implements SpellFx {
 			// stopped it before this client saw it cross, where it was last seen heading in.
 			for (Projectile p : level.getEntitiesOfClass(Projectile.class, new AABB(c, c).inflate(radius + BubbleShieldGeometry.SEARCH),
 					p -> p.getOwner() != caster && !splashed.contains(p.getId()) && BubbleShield.stops(p))) {
-				Vec3 hit = BubbleShieldGeometry.entry(c, p.position(), p.getDeltaMovement());
+				Vec3 hit = BubbleShieldGeometry.entry(c, p.position(), p.getDeltaMovement(), radius);
 				if (hit != null) {
 					splashed.add(p.getId());
 					splash(kit, level, bubble, c, hit, spare, r);

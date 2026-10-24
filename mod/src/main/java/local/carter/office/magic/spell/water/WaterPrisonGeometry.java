@@ -11,13 +11,18 @@ import net.minecraft.world.phys.Vec3;
  * Water Prison's pure geometry (no world access), shared by the server spell and the client fx: the sphere, who is inside
  * it, the pull to its centre, and the air a prisoner loses.
  *
- * <p>The sphere has radius {@link #RADIUS} about its centre (the target's middle at the cast). A creature whose middle is
- * within {@link #RADIUS} + {@link #HOLD} is inside. Each tick it is pulled to the centre with a velocity of {@link #PULL}
+ * <p>The sphere has radius {@link #radius} about its centre (the target's middle at the cast): {@link #RADIUS} at a tap,
+ * {@link #FULL_SCALE} times that at full charge. A creature whose middle is within that + {@link #HOLD} is inside. Each tick it is pulled to the centre with a velocity of {@link #PULL}
  * × the gap, at most {@link #MAX_PULL}. It loses {@link #AIR_PER_TICK} air a tick (vanilla under water loses 1; three keeps the drowning within the prison's life); at
  * {@link #DROWN_AT} it takes {@link #DROWN_DAMAGE} drowning damage and its air goes back to 0, as vanilla drowning does.
  */
 public final class WaterPrisonGeometry {
 	public static final double RADIUS = 2.0;
+	/**
+	 * A full charge's sphere is this many times a tap's across (3.5 blocks): short of 2× because the client draws the water as
+	 * ghost cells, and a 4-block ball would need more than an event's {@code FxBudget.GHOST_BLOCKS}.
+	 */
+	public static final double FULL_SCALE = 1.75;
 	/** How far the cast ray reaches. */
 	public static final double RANGE = 24;
 	/** Aim assist for the ray: hitboxes are this much larger. */
@@ -33,9 +38,14 @@ public final class WaterPrisonGeometry {
 
 	private WaterPrisonGeometry() {}
 
-	/** How long the prison stands: 100 + 40 × charge ticks. */
+	/** How long the prison stands: 100 + 100 × charge ticks. */
 	public static int duration(float charge) {
-		return 100 + Math.round(40 * Mth.clamp(charge, 0F, 1F));
+		return 100 + Math.round(100 * Mth.clamp(charge, 0F, 1F));
+	}
+
+	/** The sphere's radius at {@code charge}: 2 at a tap, 3.5 at full charge. */
+	public static double radius(float charge) {
+		return RADIUS * (1 + (FULL_SCALE - 1) * Mth.clamp(charge, 0F, 1F));
 	}
 
 	/** One cell of the ball as the client draws it: {@code height} (0..1) of it is water. */
@@ -48,16 +58,22 @@ public final class WaterPrisonGeometry {
 	 * prison so the cells' corners stay inside it; the client draws the round surface over them.
 	 */
 	public static List<Cell> fill(Vec3 centre) {
+		return fill(centre, RADIUS);
+	}
+
+	/** {@link #fill(Vec3)} for a sphere of {@code radius} (its core {@link #CORE_INSET} smaller). */
+	public static List<Cell> fill(Vec3 centre, double radius) {
+		double core = radius - CORE_INSET;
 		List<Cell> out = new ArrayList<>();
-		int r = (int) Math.ceil(RADIUS) + 1;
+		int r = (int) Math.ceil(radius) + 1;
 		BlockPos c = BlockPos.containing(centre);
 		for (int dz = -r; dz <= r; dz++) {
 			for (int dx = -r; dx <= r; dx++) {
 				double x = c.getX() + dx + 0.5 - centre.x;
 				double z = c.getZ() + dz + 0.5 - centre.z;
 				double d2 = x * x + z * z;
-				if (d2 > CORE * CORE) continue;
-				double h = Math.sqrt(CORE * CORE - d2);
+				if (d2 > core * core) continue;
+				double h = Math.sqrt(core * core - d2);
 				double lo = centre.y - h;
 				double hi = centre.y + h;
 				for (int y = (int) Math.floor(lo); y <= (int) Math.floor(hi); y++) {
@@ -71,15 +87,22 @@ public final class WaterPrisonGeometry {
 		return out;
 	}
 
-	/** Radius of the water core drawn as cells (block corners then reach about the prison's radius). */
-	public static final double CORE = RADIUS - 0.7;
+	/** How much smaller than the sphere the water core drawn as cells is (block corners then reach about the prison's radius). */
+	public static final double CORE_INSET = 0.7;
+	/** A tap's core radius. */
+	public static final double CORE = RADIUS - CORE_INSET;
 
 	/** The thinnest top cell drawn. */
 	public static final float MIN_FILL = 0.15F;
 
-	/** Whether a creature whose middle is at {@code middle} is held by the sphere at {@code centre}. */
+	/** Whether a creature whose middle is at {@code middle} is held by a tap's sphere at {@code centre}. */
 	public static boolean inside(Vec3 centre, Vec3 middle) {
-		double r = RADIUS + HOLD;
+		return inside(centre, middle, RADIUS);
+	}
+
+	/** Whether a creature whose middle is at {@code middle} is held by the sphere of {@code radius} at {@code centre}. */
+	public static boolean inside(Vec3 centre, Vec3 middle, double radius) {
+		double r = radius + HOLD;
 		return middle.distanceToSqr(centre) <= r * r;
 	}
 

@@ -47,7 +47,8 @@ public final class FlameDashFx implements SpellFx {
 				.getParticleMaterial(Blocks.FIRE.defaultBlockState()).sprite();
 
 		// The launch: a seal under the start and a blast of flame behind.
-		kit.circle(start.add(0, 0.05, 0), UP, 0xFF000000 | FireBoltFx.FIRE, 1.15F, 3, 14);
+		float c = Mth.clamp(e.charge(), 0F, 1F);
+		kit.circle(start.add(0, 0.05, 0), UP, 0xFF000000 | FireBoltFx.FIRE, 1.15F * (1F + c), 3 + Math.round(2 * c), 14);
 		Vec3 back = start.add(0, 0.6, 0).subtract(dir.scale(0.4));
 		for (int i = 0; i < 18; i++) {
 			Vec3 v = dir.scale(-0.12 - 0.12 * r.nextDouble()).add(FireBoltFx.jitter(r, 0.07), 0.02 + 0.06 * r.nextDouble(), FireBoltFx.jitter(r, 0.07));

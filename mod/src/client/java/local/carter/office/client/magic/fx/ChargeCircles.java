@@ -27,11 +27,13 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
  * grimoire, local and remote (their use state is synced): a vertical circle {@link #AHEAD} blocks in front of the eye and
  * {@link #BELOW} below it, facing them along their look. It has {@code ChargeMath.rings(useTicks)} rings, each fading in over 3
  * ticks as the charge reaches it, turning opposite ways, runes on rings 2 and 4; radius {@code 0.55 + 0.15 × rings}, alpha
- * {@link #ALPHA}, in the grimoire's element colour. At full charge it pulses, and a local {@code BEACON_POWER_SELECT} (pitch 1.6)
+ * {@link #ALPHA}, in the grimoire's element colour. As it charges it also grows ({@link #scale}: a quarter bigger at full charge,
+ * on top of the rings it gains) and the light behind it builds up (the frame's {@code glow}), so a full charge reads as a much
+ * bigger, brighter circle than a tap's one ring. At full charge it pulses, and a local {@code BEACON_POWER_SELECT} (pitch 1.6)
  * plays once. The local player charging Recall gets a gold circle at their feet instead (other players' selections are not synced).
  * Seen by the caster in first person it is dimmed to {@link #FIRST_PERSON_ALPHA} with no flare, and nothing is drawn within
  * {@link #FIRST_PERSON_CLEAR} of its middle (no backdrop, glyph or centre glow; lines clipped), so aiming stays clear; full charge
- * there is the sound plus a gentle pulse of the outer frame.
+ * there is the sound plus a gentle pulse of the outer frame (and no growth: it already fills the view).
  * Letting go fades it out in a few ticks.
  */
 public final class ChargeCircles {
@@ -40,6 +42,8 @@ public final class ChargeCircles {
 	public static final double AHEAD = 1.5;
 	public static final double BELOW = 0.25;
 	public static final float ALPHA = 0.55F;
+	/** How much bigger than scale 1 the held circle is at full charge (seen by anyone but its caster in first person). */
+	public static final float GROW = 0.25F;
 	/** The caster's own circle in first person: dimmer, and empty in the middle so the crosshair and its target stay clear. */
 	public static final float FIRST_PERSON_ALPHA = MagicCircleRenderer.FIRST_PERSON_ALPHA;
 	public static final float FIRST_PERSON_CLEAR = MagicCircleRenderer.FIRST_PERSON_CLEAR * MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS);
@@ -61,6 +65,14 @@ public final class ChargeCircles {
 	public static int ringAppears(int k) {
 		if (k <= 0) return 0;
 		return ChargeMath.TAP_TICKS + Mth.ceil(k * (ChargeMath.FULL_TICKS - ChargeMath.TAP_TICKS) / 4F);
+	}
+
+	/**
+	 * The held circle's size multiplier at {@code charge} (seen by anyone but its caster in first person): {@code 1 + GROW × charge}.
+	 * Its rim at full charge is {@code ringRadius(MAX_RINGS) × scale(1)} (the client game test projects that).
+	 */
+	public static float scale(float charge) {
+		return 1F + GROW * Mth.clamp(charge, 0F, 1F);
 	}
 
 	/** Circles showing (the game tests read it). */
@@ -158,19 +170,22 @@ public final class ChargeCircles {
 			f.z = at.z;
 			float now = age + partial;
 			boolean full = fullAt >= 0;
+			float charge = ChargeMath.charge((int) t);
 			if (!feet && ownFirstPerson()) {
 				f.flare = 0F;
 				f.scale = 1F;
 				f.clear = FIRST_PERSON_CLEAR;
 				f.rimPulse = full ? 0.5F + 0.5F * Mth.sin(now * 0.45F) : 0F;
+				f.glow = 0F;
 				f.alpha = FIRST_PERSON_ALPHA * leaving(partial);
 			} else {
-				// At full charge: a swell as it lands, then a steady pulse.
+				// It grows and brightens with the charge; at full charge, a swell as it lands, then a steady pulse.
 				float swell = full ? Math.max(0F, 1F - (now - fullAt) / 6F) : 0F;
 				f.flare = full ? Math.max(swell, 0.5F + 0.5F * Mth.sin(now * 0.45F)) : 0F;
-				f.scale = 1F + 0.08F * swell;
+				f.scale = ChargeCircles.scale(charge) * (1F + 0.08F * swell);
 				f.clear = 0F;
 				f.rimPulse = 0F;
+				f.glow = charge;
 				f.alpha = ALPHA * leaving(partial);
 			}
 			f.time = now;

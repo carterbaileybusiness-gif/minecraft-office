@@ -6,6 +6,8 @@ import java.util.List;
 import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.command.MagicCommand;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.ManaMath;
+import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.Motion;
 import local.carter.office.magic.spell.SpellIds;
@@ -114,7 +116,7 @@ public class WindGameTests {
 	public void gustBlowsItemsAndReachesFurtherCharged(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 1);
 		ItemEntity item = MagicTestKit.item(h, new BlockPos(16, 4, 8));
-		// 7.5 ahead: outside the tap's 6, inside the full charge's 8.
+		// 7.5 ahead: outside the tap's 6, inside the full charge's 12.
 		Zombie far = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 12));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.GUST, 0f), Result.CAST, "tap");
@@ -125,7 +127,7 @@ public class WindGameTests {
 			h.assertValueEqual(MagicTestKit.cast(p, SpellIds.GUST, 1f), Result.CAST, "full charge");
 			h.assertTrue(far.getHealth() <= 19f, "far zombie hit by the full charge " + far.getHealth());
 			h.assertTrue(far.getDeltaMovement().dot(ahead(h)) > 2.0, "full charge throws harder " + far.getDeltaMovement());
-			h.assertValueEqual(rec.fx(p).getLast().data()[0], 8f, "range at full charge");
+			h.assertValueEqual(rec.fx(p).getLast().data()[0], 12f, "range at full charge (twice a tap's)");
 			h.succeed();
 		});
 	}
@@ -152,7 +154,7 @@ public class WindGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA)
-	public void bladeWindFansFiveWhenChargedAndStopsAtWalls(GameTestHelper h) {
+	public void bladeWindFansSevenWhenChargedAndStopsAtWalls(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 2);
 		MagicTestKit.fill(h, new BlockPos(10, 4, 12), new BlockPos(22, 8, 12), Blocks.STONE);
 		Zombie behind = MagicTestKit.dummy(h, new BlockPos(16, 4, 14));
@@ -160,9 +162,9 @@ public class WindGameTests {
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.BLADE_WIND, 1f), Result.CAST, "result");
 		float[] data = rec.fx(p).getFirst().data();
-		h.assertValueEqual(data[0], 5f, "five blades at full charge");
-		// The wall's face is 7.5 ahead of the eye and blades start 0.5 out: the middle one flies 7 / 2 = 3.5 ticks.
-		h.assertTrue(Math.abs(data[3] - 3.5f) < 0.01f, "middle blade stops at the wall: " + data[3]);
+		h.assertValueEqual(data[0], 7f, "seven blades at full charge");
+		// The wall's face is 7.5 ahead of the eye and blades start 0.5 out: the middle one (the 4th) flies 7 / 2 = 3.5 ticks.
+		h.assertTrue(Math.abs(data[4] - 3.5f) < 0.01f, "middle blade stops at the wall: " + data[4]);
 		h.runAfterDelay(16, () -> {
 			h.assertValueEqual(behind.getHealth(), 20f, "zombie behind the wall");
 			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "stone is never cut");
@@ -254,10 +256,12 @@ public class WindGameTests {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 3);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.AIR_STEP, 1f), Result.CAST, "result");
 		Vec3 v = p.getDeltaMovement();
-		h.assertTrue(Math.abs(v.y - 1.1) < 1.0E-6, "full charge: 1.1 up " + v);
-		h.assertTrue(Math.abs(v.horizontalDistance() - 0.4) < 1.0E-6, "level push 0.4 " + v);
-		h.runAfterDelay(62, () -> {
-			// The window is 60 ticks: afterwards a landing hurts the caster too.
+		// Twice a tap's height (AirStep.apex: about 10 blocks against 5) and twice its level push.
+		h.assertTrue(Math.abs(v.y - 1.33) < 1.0E-6, "full charge: 1.33 up " + v);
+		h.assertTrue(Math.abs(v.horizontalDistance() - 0.8) < 1.0E-6, "level push 0.8 " + v);
+		h.assertTrue(AirStep.apex(v.y) >= 1.9 * AirStep.apex(AirStep.UP), "climbs about twice a tap's height: " + AirStep.apex(v.y));
+		h.runAfterDelay(AirStep.NO_FALL_TICKS + 2, () -> {
+			// The window is 80 ticks (a full charge's rise and fall): afterwards a landing hurts the caster too.
 			h.assertFalse(Motion.noFall(p), "no-fall window closed");
 			p.causeFallDamage(10, 1f, p.damageSources().fall());
 			h.assertTrue(p.getHealth() < p.getMaxHealth(), "landing after the window hurts " + p.getHealth());
@@ -301,7 +305,7 @@ public class WindGameTests {
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.TORNADO, 1f), Result.CAST, "result");
 		FxEvent fx = rec.fx(p).getFirst();
-		h.assertValueEqual(fx.duration(), 160, "life at full charge");
+		h.assertValueEqual(fx.duration(), 180, "life at full charge");
 		TornadoGeometry g = new TornadoGeometry(fx.target(), fx.dir(), fx.duration());
 		// An item 30 ticks down the path, dropped there 20 ticks in: the tornado reaches it and carries it up and along.
 		// (All scheduled up front: GameTest can't take a new schedule from inside a scheduled callback.)
@@ -325,13 +329,19 @@ public class WindGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 100)
-	public void tornadoSparesLivestockAndPlayers(GameTestHelper h) {
+	public void tornadoLiftsCowsButSparesNamedOnesAndPlayers(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 5);
 		MagicTestKit.aim(p, new BlockPos(16, 3, 12));
 		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(17, 4, 12));
+		// Animals are fair game (Carter's ruling, 2026-10-24); a named one is a friend's.
 		Cow cow = h.spawn(EntityTypes.COW, new BlockPos(15, 4, 12));
 		cow.removeAllGoals(g -> true);
 		cow.setPersistenceRequired();
+		Cow named = h.spawn(EntityTypes.COW, new BlockPos(16, 4, 11));
+		named.removeAllGoals(g -> true);
+		named.setPersistenceRequired();
+		named.setCustomName(net.minecraft.network.chat.Component.literal("Daisy"));
+		double[] namedPeak = peak(h, named);
 		ServerPlayer other = MagicTestKit.otherPlayer(h, new BlockPos(16, 4, 13));
 		Vec3 otherV = other.getDeltaMovement();
 		Vec3 otherAt = other.position();
@@ -340,10 +350,13 @@ public class WindGameTests {
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.TORNADO, 0f), Result.CAST, "result");
 		h.runAfterDelay(40, () -> {
 			h.assertTrue(zombiePeak[0] >= 2, "the zombie beside them is lifted (positive control), peak " + zombiePeak[0]);
-			h.assertTrue(cowPeak[0] < 0.5, "cow not lifted, peak " + cowPeak[0]);
-			h.assertValueEqual(cow.getHealth(), cow.getMaxHealth(), "cow health");
-			h.assertValueEqual(other.getDeltaMovement(), otherV, "player velocity");
-			h.assertTrue(other.position().distanceTo(otherAt) < 1.0E-6, "player moved to " + other.position());
+			h.assertTrue(cowPeak[0] >= 2, "the cow is lifted too, peak " + cowPeak[0]);
+			h.assertTrue(namedPeak[0] < 0.5, "the named cow is not lifted, peak " + namedPeak[0]);
+			h.assertValueEqual(named.getHealth(), named.getMaxHealth(), "named cow health");
+			// Never lifted or carried; a cow whirling past may bump them sideways (entity collision, not the wind).
+			h.assertTrue(other.getDeltaMovement().y <= otherV.y + 1.0E-6, "player velocity " + other.getDeltaMovement());
+			h.assertTrue(Math.abs(other.getY() - otherAt.y) < 1.0E-6, "player lifted to " + other.position());
+			h.assertTrue(other.position().distanceTo(otherAt) < 0.5, "player carried to " + other.position());
 			h.assertValueEqual(other.getHealth(), other.getMaxHealth(), "player health");
 			h.succeed();
 		});
@@ -577,7 +590,7 @@ public class WindGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
-	public void windSphereBlastSparesLivestock(GameTestHelper h) {
+	public void windSphereBlastTakesAnimalsButSparesNamedOnes(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 7);
 		MagicTestKit.fill(h, new BlockPos(9, 4, 10), new BlockPos(23, 10, 14), Blocks.STONE);
 		// Beside the path, within the blast of the wall hit, out of the sphere's touch.
@@ -585,14 +598,20 @@ public class WindGameTests {
 		Cow cow = h.spawn(EntityTypes.COW, new BlockPos(19, 4, 9));
 		cow.setNoAi(true);
 		cow.setPersistenceRequired();
+		// A name tag makes it a friend's: never hurt or thrown (Carter's ruling, 2026-10-24: animals are fair game, named ones not).
+		Cow named = h.spawn(EntityTypes.COW, new BlockPos(18, 4, 9));
+		named.setNoAi(true);
+		named.setPersistenceRequired();
+		named.setCustomName(net.minecraft.network.chat.Component.literal("Daisy"));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		drive(h, p);
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WIND_SPHERE), Result.CAST, "result");
 		h.assertValueEqual(rec.fx(p).getFirst().data()[2], (float) WindSphere.Kind.BLOCK.ordinal(), "hits the wall");
 		h.runAfterDelay(30, () -> {
 			h.assertTrue(z.getHealth() < 20f, "the zombie in the blast is hurt (positive control) " + z.getHealth());
-			h.assertValueEqual(cow.getHealth(), cow.getMaxHealth(), "cow health");
-			h.assertValueEqual(cow.getDeltaMovement().horizontalDistance(), 0.0, "cow not thrown");
+			h.assertTrue(cow.isDeadOrDying() || cow.getHealth() < cow.getMaxHealth(), "the cow in the blast is hurt " + cow.getHealth());
+			h.assertValueEqual(named.getHealth(), named.getMaxHealth(), "named cow health");
+			h.assertValueEqual(named.getDeltaMovement().horizontalDistance(), 0.0, "named cow not thrown");
 			h.succeed();
 		});
 	}
@@ -644,6 +663,9 @@ public class WindGameTests {
 		h.onEachTick(() -> {
 			long t = h.getTick();
 			if (t > 400) return;
+			// Mana kept full: a full charge costs twice a tap (24) and ten of them in 20 s may outrun regen; this is about the
+			// cooldown and the height chain.
+			MagicAttachments.setMana(p, ManaMath.max(10));
 			Result r = MagicTestKit.cast(p, SpellIds.AIR_STEP, 1f);
 			if (r == Result.CAST) {
 				startHeights.add(y[0]);

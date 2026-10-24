@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.SpellFx;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
@@ -50,15 +51,15 @@ public final class FireBoltFx implements SpellFx {
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
-		ProjectileSpec spec = FireBolt.spec(e.origin(), e.dir());
-		Vec3 dir = spec.velocity().normalize();
 		float c = Mth.clamp(e.charge(), 0F, 1F);
+		ProjectileSpec spec = FireBolt.spec(e.origin(), e.dir(), c);
+		Vec3 dir = spec.velocity().normalize();
 		Vec3[] basis = basis(dir);
 
 		Vec3 mouth = e.origin().add(dir.scale(1.6)).add(0, -0.18, 0);
 		// The caster's own first-person view already has the charge circle; a second one there would cover the crosshair.
 		if (!ownFirstPerson(e.casterId())) {
-			kit.circle(mouth, dir.reverse(), 0xFF000000 | FIRE, 0.42F + 0.22F * c, 2 + Math.round(2 * c), 9 + Math.round(4 * c));
+			kit.circle(mouth, dir.reverse(), 0xFF000000 | FIRE, 0.42F * (1F + c), 2 + Math.round(2 * c), 9 + Math.round(4 * c));
 		}
 		kit.motes(mouth, HOT, 8 + Math.round(6 * c), 0.18, dir.scale(0.22), 0.05, GlowMote.Drift.COAST, 0.11F, 7);
 		level.playLocalSound(mouth.x, mouth.y, mouth.z, SoundEvents.FIRECHARGE_USE, SoundSource.PLAYERS, 0.7F + 0.2F * c,
@@ -66,7 +67,8 @@ public final class FireBoltFx implements SpellFx {
 		level.playLocalSound(mouth.x, mouth.y, mouth.z, SoundEvents.BLAZE_SHOOT, SoundSource.PLAYERS, 0.35F, 1.5F, false);
 
 		boolean[] done = {false};
-		float size = 1F + 0.35F * c;
+		// The bolt is drawn as big as the server's (FireBolt.radius): twice a tap's at full charge.
+		float size = ChargeMath.size(c);
 		kit.simulate(1, FireBolt.MAX_TICKS + 1, t -> {
 			if (done[0]) return;
 			Vec3 from = Projectiles.step(spec, t);

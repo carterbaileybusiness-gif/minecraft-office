@@ -7,6 +7,8 @@ import java.util.function.Predicate;
 import local.carter.office.magic.core.Shapes;
 import local.carter.office.magic.core.Shapes.Cell;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 
@@ -21,9 +23,8 @@ import net.minecraft.world.phys.Vec3;
  * tick {@code i} of the cast ({@link #burstTick}) and stands {@link #LIFE} ticks.
  */
 public final class EarthSpikesGeometry {
-	/** Spikes in the line at charge 0, and how many more full charge adds. */
+	/** Spikes in the line at charge 0 (twice as many at full charge). */
 	public static final int BASE_LENGTH = 8;
-	public static final int CHARGE_LENGTH = 4;
 	/** How far ahead of the caster's feet the first spike stands. */
 	public static final double START = 1.2;
 	/** How high a step the line climbs, and how far down it reaches for ground. */
@@ -36,9 +37,9 @@ public final class EarthSpikesGeometry {
 
 	private EarthSpikesGeometry() {}
 
-	/** 8 + 4 × charge cells (rounded). */
+	/** {@code 8 × ChargeMath.size(charge)} cells (rounded): 8 at a tap, 16 at full charge. */
 	public static int length(float charge) {
-		return BASE_LENGTH + Math.round(CHARGE_LENGTH * Math.max(0F, Math.min(1F, charge)));
+		return Math.round(BASE_LENGTH * ChargeMath.size(charge));
 	}
 
 	/** The first cell of the line for a caster whose feet are at {@code feet}, facing {@code forward} (made flat). */

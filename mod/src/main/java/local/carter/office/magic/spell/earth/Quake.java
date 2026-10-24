@@ -31,7 +31,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -43,14 +42,16 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 /**
  * Quake (Earth, slot 3, medium, lingering): the caster stamps and a shockwave ripples out through the ground.
  *
- * <p>The ring ({@link QuakeGeometry}) grows from the caster's floor block 1 block every 2 ticks to {@code 6 + 2 × charge}. As it
+ * <p>The ring ({@link QuakeGeometry}) grows from the caster's floor block 1 block every 2 ticks to {@code 6 × (1 + charge)}
+ * (6 at a tap, 12 at full charge). As it
  * passes a creature that is <b>on the ground</b> (and in line of sight of the stamp; a creature in the air when the ring passes
- * under it is spared), the creature takes {@code 5 × P}; hostile mobs ({@link Enemy}), items and XP orbs are also thrown
- * {@link #UP} up and {@link #KNOCK} outward (pushes move only enemies and items).
+ * under it is spared), the creature takes {@code 5 × P}; creatures a control effect may take (hostile mobs and animals, never a
+ * boss), items and XP orbs are also thrown
+ * {@link #UP} up and {@link #KNOCK} outward.
  *
  * <p>Minor permanent change: a quarter of the ring's columns (at most 120, seeded) crack as the ring passes them: on the ground
  * block, grass block → dirt, stone → cobblestone, dirt → coarse dirt ({@link #cracked}); nothing else is touched. MEDIUM batches:
- * one at the centre, and one per 60° arc for blocks more than 6 from it, its origin on the arc ({@link QuakeGeometry#originFor}).
+ * one at the centre, and one per 36° arc for blocks more than 6 from it, its origin on the arc ({@link QuakeGeometry#originFor}).
  * Claims, budgets and the log come with the batches.
  *
  * <p>Fx: {@code target} = top centre of the centre block, {@code duration} = ticks the ring runs, {@code data} = {radius}.
@@ -101,7 +102,7 @@ public final class Quake implements Spell {
 		return null;
 	}
 
-	/** Whether the ring throws {@code e}: hostile mobs, items and XP orbs, never a boss ({@link TargetFilter#controllable}; a boss is still hurt). */
+	/** Whether the ring throws {@code e}: hostile mobs, animals, items and XP orbs, never a boss ({@link TargetFilter#controllable}; a boss is still hurt). */
 	public static boolean pushes(ServerPlayer caster, Entity e) {
 		return TargetFilter.controllable(caster, e);
 	}

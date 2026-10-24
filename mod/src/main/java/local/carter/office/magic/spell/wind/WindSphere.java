@@ -31,7 +31,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
@@ -63,9 +62,9 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * leaves, dies or changes dimension. Running out of dash sets it off in the air at the end.
  *
  * <p><b>Detonation.</b> The creature struck takes {@code 22 × P} and is knocked {@link DrillGeometry#KNOCK} (along the look,
- * a little away, {@link #KNOCK_UP} up); hostile mobs ({@link Enemy}) within {@link DrillGeometry#BLAST} of the blast that it can
- * reach (no block collider in between) take the same. Livestock, golems, pets, villagers and players are never hurt or thrown
- * by the blast (the lane ruling for area effects). Only a <b>block</b> hit drills: one ULTIMATE batch at the drill's start (on
+ * a little away, {@link #KNOCK_UP} up); every creature within {@link DrillGeometry#BLAST} of the blast that it can reach (no
+ * block collider in between) takes the same (hostile mobs and animals: {@link TargetFilter}; golems, pets, villagers, named mobs
+ * and players never). Only a <b>block</b> hit drills: one ULTIMATE batch at the drill's start (on
  * the body's centre line) removes {@link DrillGeometry#blocks} (a cone along the look, radius 3 → 1, {@code min(12, 8 + (level −
  * 7))} long, the floor under the path kept), the first {@link DrillGeometry#LAUNCH} of the mouth's off-axis blocks
  * {@code launch}ed spinning out ({@link DrillGeometry#debris}; the core lands them only where the caster could build). A creature
@@ -301,7 +300,7 @@ public final class WindSphere implements Spell {
 			List<LivingEntity> near = Targets.radius(ctx, s.at(), DrillGeometry.BLAST);
 			for (LivingEntity e : near) {
 				if (done.size() >= Targets.MAX_ENTITIES) break; // the struck one and the blast share the per-cast budget
-				if (done.contains(e) || !(e instanceof Enemy) || !reaches(level, from, e.getBoundingBox())) continue;
+				if (done.contains(e) || !reaches(level, from, e.getBoundingBox())) continue;
 				done.add(e);
 				hit(e, s.at(), damage);
 			}

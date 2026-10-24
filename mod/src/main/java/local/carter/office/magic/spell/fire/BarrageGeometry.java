@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 
@@ -15,7 +16,8 @@ import net.minecraft.world.phys.Vec3;
  * volley from what the fx event carries: the aim point ({@code target}), the caster's flat facing ({@code dir}), the cast's
  * {@code seed}, the fireball count and, per fireball, how much of its sky drop is clear ({@code lift}).
  *
- * <p>Each fireball is aimed at the aim point plus a seeded offset of at most {@link #SPREAD} (a disc in the horizontal plane).
+ * <p>Each fireball is aimed at the aim point plus a seeded offset of at most {@link #spread} (a disc in the horizontal plane:
+ * {@link #SPREAD} for a tap's three fireballs, twice that for a full charge's six).
  * It is thrown from the sky, {@link #HEIGHT} above its aim and {@link #BEYOND} beyond it, away from the caster, so the caster sees the circle it leaves from above the spot (that offset scaled by its
  * {@code lift}, shorter under a roof), at {@link #SPEED} blocks a tick with {@link #GRAVITY}, on the low arc that passes exactly
  * through its aim. One leaves every {@link #INTERVAL} ticks, the first at the cast.
@@ -23,6 +25,8 @@ import net.minecraft.world.phys.Vec3;
 public final class BarrageGeometry {
 	/** How far the caster can point the barrage. */
 	public static final double RANGE = 40;
+	/** A tap's fireballs and how far from the aim they land. */
+	public static final int TAP_COUNT = 3;
 	public static final double SPREAD = 1.5;
 	public static final int INTERVAL = 4;
 	public static final double SPEED = 1.8;
@@ -49,18 +53,24 @@ public final class BarrageGeometry {
 		}
 	}
 
-	/** Fireballs for a cast at {@code charge}: 3, up to 5 at full charge. */
+	/** Fireballs for a cast at {@code charge}: {@code round(3 × ChargeMath.size(charge))}, 3 at a tap and 6 at full charge. */
 	public static int count(float charge) {
-		return 3 + Math.round(2 * Mth.clamp(charge, 0F, 1F));
+		return Math.round(TAP_COUNT * ChargeMath.size(charge));
 	}
 
-	/** The aim of every fireball: {@code point} plus a seeded offset within {@link #SPREAD}, the same for the same seed. */
+	/** How far from the aim point a volley of {@code count} lands: {@link #SPREAD} for a tap's 3, in step with the count after. */
+	public static double spread(int count) {
+		return SPREAD * Math.max(1, count) / TAP_COUNT;
+	}
+
+	/** The aim of every fireball: {@code point} plus a seeded offset within {@link #spread}, the same for the same seed. */
 	public static List<Vec3> aims(Vec3 point, long seed, int count) {
 		Random r = new Random(seed);
+		double spread = spread(count);
 		List<Vec3> out = new ArrayList<>(count);
 		for (int i = 0; i < count; i++) {
 			double a = r.nextDouble() * Math.PI * 2;
-			double d = SPREAD * Math.sqrt(r.nextDouble());
+			double d = spread * Math.sqrt(r.nextDouble());
 			out.add(point.add(Math.cos(a) * d, 0, Math.sin(a) * d));
 		}
 		return out;

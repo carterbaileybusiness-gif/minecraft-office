@@ -10,6 +10,7 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.LoggerFactory;
 
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Shapes.Cell;
 import local.carter.office.magic.core.Slots;
@@ -45,9 +46,9 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * Fire Wall (fire, slot 1, medium, lingering): a curtain of fire on the ground {@link FireWallGeometry#AHEAD} ahead of the caster,
- * across the aim, {@link FireWallGeometry#width} wide (5, or 7 at charge ≥ 0.5), 3 tall, for {@code 100 + 60 × charge} ticks.
- * A creature that touches it (or is thrown through it between two ticks) takes {@link #DAMAGE} and burns for {@link #FIRE_TICKS}
- * ticks at once, then again every {@link #PULSE_TICKS} ticks while it stays in. Every tick, projectiles about to enter it burn up
+ * across the aim, {@link FireWallGeometry#width} wide (5 at a tap, 10 at full charge), 3 tall (4 at full charge), for
+ * {@code 100 + 100 × charge} ticks. A creature that touches it (or is thrown through it between two ticks) takes
+ * {@code DAMAGE × (1 + charge)} and burns for {@link #FIRE_TICKS} ticks at once, then again every {@link #PULSE_TICKS} ticks while it stays in. Every tick, projectiles about to enter it burn up
  * (discarded), except thrown tridents (a player's weapon, not ammunition), arrows already stuck in the ground and rockets boosting
  * an elytra. Cast on water (its foot cell or the cell under it) it fails before doing anything.
  * Its one minor permanent change, in one MEDIUM batch at the wall's foot: snow layers in the footprint melt to air and ice to
@@ -196,7 +197,7 @@ public final class FireWall implements Spell {
 					continue;
 				}
 				nextHit.put(e.getId(), age + PULSE_TICKS);
-				Hurt.damage(ctx, e, DAMAGE);
+				Hurt.damage(ctx, e, DAMAGE * ChargeMath.size(ctx.charge()));
 				if (e.isAlive()) e.igniteForTicks(FIRE_TICKS);
 			}
 		}

@@ -38,7 +38,7 @@ public final class ShadowBindFx implements SpellFx {
 
 		// The cast: a sigil before the caster, and shadows running along the ground to the foe.
 		Vec3 muzzle = e.origin().add(dir.scale(1.6)).add(0, -0.2, 0);
-		kit.circle(muzzle, dir.reverse(), ShadowFx.ARGB, 0.45F + 0.2F * c, 2 + Math.round(2 * c), 10);
+		kit.circle(muzzle, dir.reverse(), ShadowFx.ARGB, 0.45F * (1F + c), 2 + Math.round(2 * c), 10);
 		Vec3 start = e.origin().add(dir.scale(2.2));
 		Vec3 groundFrom = new Vec3(start.x, Math.min(start.y, feet.y + 0.2), start.z);
 		kit.trail(groundFrom, feet.add(0, 0.15, 0), ParticleTypes.REVERSE_PORTAL, 10);
@@ -55,6 +55,19 @@ public final class ShadowBindFx implements SpellFx {
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.SCULK_BLOCK_SPREAD, SoundSource.PLAYERS, 1.0F, 0.6F, false);
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.CHAIN_PLACE, SoundSource.PLAYERS, 0.9F, 0.5F, false);
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.WARDEN_HEARTBEAT, SoundSource.PLAYERS, 0.8F, 0.8F, false);
+
+		// A charged bind's second foe: the shadows leap on from the first and hold it too.
+		for (int i = 1; i < e.entities().length; i++) {
+			Entity more = level.getEntity(e.entities()[i]);
+			if (more == null) continue;
+			Vec3 at = more.position();
+			kit.trail(feet.add(0, 0.15, 0), at.add(0, 0.15, 0), ParticleTypes.REVERSE_PORTAL, 8);
+			kit.circle(at.add(0, 0.05, 0), UP, ShadowFx.ARGB, 1.15F + 0.25F * c, 3, Math.max(1, e.duration()) + 4);
+			if (kit.budget().particles(cost) >= cost) {
+				Minecraft.getInstance().particleEngine.add(new Tendrils(level, more, at, Math.max(1, e.duration())));
+			}
+			kit.burst(at.add(0, 0.3, 0), ParticleTypes.REVERSE_PORTAL, 8, 0.1);
+		}
 	}
 
 	/** The tendrils: dark, tapering coils wound round the foe, lit by violet along their edge, over a pool of darkness. */

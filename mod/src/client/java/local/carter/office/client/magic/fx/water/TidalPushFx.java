@@ -50,13 +50,13 @@ public final class TidalPushFx implements SpellFx {
 		float c = Mth.clamp(e.charge(), 0F, 1F);
 		float[] data = e.data();
 		double range = data.length > 0 && data[0] > 0 ? data[0] : TidalWaveGeometry.range(c);
-		TidalWaveGeometry wave = new TidalWaveGeometry(start, look);
+		TidalWaveGeometry wave = new TidalWaveGeometry(start, look, TidalWaveGeometry.length(range));
 		RandomSource r = kit.random();
 
 		// Circles: one flat under the caster (the wave rises from it), one upright before them.
-		kit.circle(start.add(0, 0.06, 0), new Vec3(0, 1, 0), WaterFx.ARGB, 1.25F + 0.5F * c, 3 + Math.round(2 * c), 24);
+		kit.circle(start.add(0, 0.06, 0), new Vec3(0, 1, 0), WaterFx.ARGB, 1.25F * (1F + c), 3 + Math.round(2 * c), 24);
 		Vec3 front = eye.add(look.scale(1.6)).add(0, -0.3, 0);
-		kit.circle(front, look.reverse(), WaterFx.ARGB, 0.7F + 0.35F * c, 2 + Math.round(3 * c), 14);
+		kit.circle(front, look.reverse(), WaterFx.ARGB, 0.7F * (1F + c), 2 + Math.round(3 * c), 14);
 
 		// The shove: spray flung across the whole cone, out to its range.
 		kit.burst(front.add(look.scale(0.3)), ParticleTypes.SPLASH, 12 + Math.round(8 * c), 0.35);
@@ -82,7 +82,7 @@ public final class TidalPushFx implements SpellFx {
 		Minecraft mc = Minecraft.getInstance();
 		boolean own = mc.player != null && mc.player.getId() == e.casterId() && mc.options.getCameraType().isFirstPerson();
 		Roll roll = new Roll(wave, level, kit, own ? OWN_CLEAR : 0);
-		kit.simulate(1, TidalWaveGeometry.DURATION, t -> roll.step(t + 1));
+		kit.simulate(1, wave.duration(), t -> roll.step(t + 1));
 	}
 
 	/** The rolling wave's client state: the columns (moved by the shared rule) and which crest cells already showed. */
@@ -105,9 +105,9 @@ public final class TidalPushFx implements SpellFx {
 
 		/** Geometry tick {@code t} (the server's age). */
 		void step(int t) {
-			if (!TidalWaveGeometry.frontActive(t)) return;
+			if (!wave.active(t)) return;
 			int broke = wave.step(t, colY, broken, this::free);
-			double d = TidalWaveGeometry.distance(t);
+			double d = wave.at(t);
 			int h = TidalWaveGeometry.height(d);
 			Vec3 dir = wave.dir();
 			int half = TidalWaveGeometry.WIDTH / 2;
@@ -154,7 +154,7 @@ public final class TidalPushFx implements SpellFx {
 			if (t % 4 == 0) {
 				level.playLocalSound(mid.x, mid.y, mid.z, SoundEvents.BOAT_PADDLE_WATER, SoundSource.PLAYERS, 0.5F, 0.8F + 0.05F * t, false);
 			}
-			if (t == TidalWaveGeometry.FRONT_TICKS) crash(t);
+			if (t == wave.frontTicks()) crash(t);
 		}
 
 		/** The end: the front collapses in a burst of spray and foam. */

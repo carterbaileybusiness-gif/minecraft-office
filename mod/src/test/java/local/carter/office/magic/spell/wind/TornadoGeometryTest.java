@@ -39,11 +39,12 @@ class TornadoGeometryTest {
 	}
 
 	@Test
-	void lifeIs120Plus40PerCharge() {
+	void lifeIs120Plus60PerCharge() {
 		assertEquals(120, TornadoGeometry.life(0F));
-		assertEquals(140, TornadoGeometry.life(0.5F));
-		assertEquals(160, TornadoGeometry.life(1F));
-		assertEquals(160, TornadoGeometry.life(3F));
+		assertEquals(150, TornadoGeometry.life(0.5F));
+		assertEquals(180, TornadoGeometry.life(1F));
+		assertEquals(180, TornadoGeometry.life(3F));
+		assertEquals(8, TornadoGeometry.radius(1F), 1e-9, "a full charge's reach is twice a tap's");
 	}
 
 	@Test

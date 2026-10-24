@@ -1,5 +1,7 @@
 package local.carter.office.magic.spell.shadow;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
@@ -25,6 +27,8 @@ public final class BindGeometry {
 	public static final int SLOWNESS_AMPLIFIER = 5;
 	/** A move longer than this in one tick is a teleport: the root breaks. */
 	public static final double BREAK_DISTANCE = 4;
+	/** How near the first foe a full charge's second foe must stand (centre to centre). */
+	public static final double SPREAD = 4;
 	public static final int TENDRILS = 6;
 	/** Ticks a tendril takes to rise (and to sink at the end). */
 	public static final int GROW = 6;
@@ -34,6 +38,11 @@ public final class BindGeometry {
 	/** Ticks the root lasts at charge 0..1: 60 + 40 × charge. */
 	public static int life(float charge) {
 		return BASE_LIFE + Math.round(LIFE_PER_CHARGE * Mth.clamp(charge, 0F, 1F));
+	}
+
+	/** Foes one cast binds at {@code charge}: {@code round(ChargeMath.size(charge))}, 1 at a tap and 2 from half charge. */
+	public static int foes(float charge) {
+		return Math.round(ChargeMath.size(charge));
 	}
 
 	/** Whether a bound foe that was at {@code last} and is now at {@code now} was teleported (and so breaks free). */

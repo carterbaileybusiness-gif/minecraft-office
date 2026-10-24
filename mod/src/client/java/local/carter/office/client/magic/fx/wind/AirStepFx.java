@@ -39,7 +39,7 @@ public final class AirStepFx implements SpellFx {
 		Vec3 feet = e.target();
 		Vec3 h = AirStep.lookH(e.dir(), 0F);
 
-		kit.circle(feet.add(0, 0.05, 0), new Vec3(0, 1, 0), 0xFF000000 | WIND, 0.9F + 0.3F * c, 3 + Math.round(2 * c), 10);
+		kit.circle(feet.add(0, 0.05, 0), new Vec3(0, 1, 0), 0xFF000000 | WIND, 0.9F * (1F + c), 3 + Math.round(2 * c), 10);
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.WIND_CHARGE_BURST.value(), SoundSource.PLAYERS, 0.7F,
 				1.45F - 0.2F * c + level.getRandom().nextFloat() * 0.1F, false);
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.BREEZE_JUMP, SoundSource.PLAYERS, 0.8F, 1.2F, false);
@@ -47,7 +47,7 @@ public final class AirStepFx implements SpellFx {
 
 		// Two level rings bursting out from the feet, the second a little later and wider.
 		for (int k = 0; k < 2; k++) {
-			StepRing ring = new StepRing(level, feet.add(0, 0.1 + 0.2 * k, 0), 2.0 + 0.8 * c + 0.8 * k, 8 + 2 * k, k * 2, 0.3F + 0.08F * c);
+			StepRing ring = new StepRing(level, feet.add(0, 0.1 + 0.2 * k, 0), (2.0 + 0.8 * k) * (1 + c), 8 + 2 * k, k * 2, 0.3F + 0.08F * c);
 			if (kit.budget().particles(ring.cost()) < ring.cost()) break;
 			Minecraft.getInstance().particleEngine.add(ring);
 		}

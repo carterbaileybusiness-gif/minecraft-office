@@ -53,7 +53,7 @@ public final class QuakeFx implements SpellFx {
 		BlockState floor = under.isAir() ? EarthFx.COBBLE : under;
 
 		// The stamp.
-		kit.circle(stamp.add(0, 0.06, 0), new Vec3(0, 1, 0), EarthFx.ARGB, 1.6F + 0.4F * c, 3 + Math.round(2 * c), 16);
+		kit.circle(stamp.add(0, 0.06, 0), new Vec3(0, 1, 0), EarthFx.ARGB, 1.6F * (1F + c), 3 + Math.round(2 * c), 16);
 		kit.ring(stamp.add(0, 0.05, 0), 0.9, new BlockParticleOption(ParticleTypes.DUST_PILLAR, floor), 12);
 		kit.burst(stamp.add(0, 0.2, 0), EarthFx.crumbs(floor), 14, 0.2);
 		kit.burst(stamp.add(0, 0.3, 0), EarthFx.DUST, 6, 0.06);

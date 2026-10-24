@@ -44,8 +44,8 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Blade Wind (Wind, slot 1, medium, lingering): crescent blades fly out in a fan ({@link BladeWindGeometry}: 3 over ±15°, 5
- * over ±25° at charge ≥ 0.5), speed 2.0, radius 0.6, piercing, for at most 14 ticks. Each foe a blade passes takes
+ * Blade Wind (Wind, slot 1, medium, lingering): crescent blades fly out in a fan ({@link BladeWindGeometry}: 3 over ±15° at a
+ * tap, up to 7 over ±30° at full charge), speed 2.0, radius 0.6, piercing, for at most 14 ticks. Each foe a blade passes takes
  * {@code 5 × P} (once per cast, however many blades cross it). Blades slice through foliage and stop at the first other solid
  * block. Minor permanent change: the foliage in a blade's swath ({@link #cuttable}; the swath reaches from just above the blade
  * down to the caster's feet, so ground grass and flowers go too) is cut, in one MEDIUM batch per blade per 6-block stretch

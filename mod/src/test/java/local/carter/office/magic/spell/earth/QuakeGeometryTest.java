@@ -18,8 +18,8 @@ class QuakeGeometryTest {
 	void ringRadiusAtTickTIsHalfT() {
 		for (int t = 0; t <= 16; t++) assertEquals(t / 2.0, QuakeGeometry.ringAt(t), 1e-12, "tick " + t);
 		assertEquals(6, QuakeGeometry.radius(0F), 1e-9);
-		assertEquals(7, QuakeGeometry.radius(0.5F), 1e-9);
-		assertEquals(8, QuakeGeometry.radius(1F), 1e-9);
+		assertEquals(9, QuakeGeometry.radius(0.5F), 1e-9);
+		assertEquals(12, QuakeGeometry.radius(1F), 1e-9); // a full charge's ring is twice a tap's
 		assertEquals(12, QuakeGeometry.duration(6));
 		assertEquals(16, QuakeGeometry.duration(8));
 	}
@@ -56,10 +56,10 @@ class QuakeGeometryTest {
 				double d = Math.sqrt(p.distSqr(o));
 				assertTrue(d <= QuakeGeometry.EDIT_RADIUS, p + " is " + d + " from its origin " + o);
 				if (!o.equals(centre)) {
-					// An arc origin lies on its arc, beyond 6 from the centre's column.
+					// An arc origin lies on its arc, beyond 6 from the centre's column (9 out, give or take its rounding to a cell).
 					assertEquals(o.getY(), centre.getY());
 					double r = Math.sqrt(Math.pow(o.getX() - centre.getX(), 2) + Math.pow(o.getZ() - centre.getZ(), 2));
-					assertTrue(r > 6 && r < 8, "arc origin " + o + " at " + r);
+					assertTrue(r > 8 && r < 10, "arc origin " + o + " at " + r);
 				}
 			}
 		}
@@ -68,9 +68,9 @@ class QuakeGeometryTest {
 	@Test
 	void arcsAreSixtyDegrees() {
 		assertEquals(0, QuakeGeometry.arc(1, 0.1));
-		assertEquals(1, QuakeGeometry.arc(0, 1));
-		assertEquals(3, QuakeGeometry.arc(-1, -0.01));
-		assertEquals(5, QuakeGeometry.arc(1, -0.1));
+		assertEquals(2, QuakeGeometry.arc(0, 1));
+		assertEquals(5, QuakeGeometry.arc(-1, -0.01));
+		assertEquals(9, QuakeGeometry.arc(1, -0.1));
 		for (int k = 0; k < QuakeGeometry.ARCS; k++) {
 			BlockPos o = QuakeGeometry.arcOrigin(BlockPos.ZERO, k);
 			assertEquals(k, QuakeGeometry.arc(o.getX(), o.getZ()), "origin of arc " + k + " lies in it");

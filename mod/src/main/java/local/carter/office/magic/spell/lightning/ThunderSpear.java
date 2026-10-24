@@ -7,6 +7,7 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Shapes;
 import local.carter.office.magic.core.Shapes.Cell;
@@ -19,6 +20,7 @@ import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
@@ -29,7 +31,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -40,11 +41,12 @@ import net.minecraft.world.phys.Vec3;
  * {@link #SPEED}, gravity {@link #GRAVITY}, radius {@link #RADIUS}, at most {@link #MAX_TICKS} ticks), stopping at the first
  * creature or block. At the impact:
  * <ul>
- * <li>every creature within {@link #BLAST} that the blast reaches (nothing solid between; the one it struck always) takes
- * {@code 10 × P}; the one it struck, and hostile mobs, are slowed (Slowness II, {@link #SLOW_TICKS} ticks);</li>
+ * <li>every creature within {@link #blast} (2.5 at a tap, 5 at full charge) that the blast reaches (nothing solid between; the
+ * one it struck always) takes {@code 10 × P}; the one it struck, and every creature a control effect may take (never a boss),
+ * are slowed (Slowness II, {@link #SLOW_TICKS} ticks);</li>
  * <li>minor permanent change, one MEDIUM batch whose origin is the block struck (for a creature, the ground under it if within
- * {@link #GROUND_DEPTH}, else none): a bowl of radius {@link #BOWL} is blasted out, and sand or red sand within {@link #GLASS} of
- * the origin fuses to glass.</li>
+ * {@link #GROUND_DEPTH}, else none): a bowl of radius {@link #bowl} (2 → 4) is blasted out, and sand or red sand within
+ * {@link #glass} (3 → 6, the medium cap) of the origin fuses to glass.</li>
  * </ul>
  * A spear that runs out of time ends in the air with nothing.
  *
@@ -67,6 +69,21 @@ public final class ThunderSpear implements Spell {
 	public static final double GLASS = 3;
 	/** How far below a struck creature's feet the crater's ground may be. */
 	public static final int GROUND_DEPTH = 2;
+
+	/** The blast's reach at {@code charge}: 2.5, 5 at full charge. */
+	public static double blast(float charge) {
+		return BLAST * ChargeMath.size(charge);
+	}
+
+	/** The crater's radius at {@code charge}: 2, 4 at full charge. */
+	public static double bowl(float charge) {
+		return BOWL * ChargeMath.size(charge);
+	}
+
+	/** How far sand fuses to glass at {@code charge}: 3, 6 (the medium radius cap) at full charge. */
+	public static double glass(float charge) {
+		return GLASS * ChargeMath.size(charge);
+	}
 
 	@Override
 	public Identifier id() {
@@ -107,10 +124,10 @@ public final class ThunderSpear implements Spell {
 
 		Vec3 from = at.subtract(dir.scale(0.3));
 		float damage = DAMAGE * ctx.power();
-		for (LivingEntity e : Targets.radius(ctx, at, BLAST)) {
+		for (LivingEntity e : Targets.radius(ctx, at, blast(ctx.charge()))) {
 			if (e != direct && !Arcs.reaches(ctx, from, e.getBoundingBox())) continue;
 			Hurt.damage(ctx, e, damage);
-			if (e.isAlive() && (e == direct || e instanceof Enemy)) {
+			if (e.isAlive() && (e == direct || TargetFilter.controllable(ctx.caster(), e))) {
 				e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, SLOW_TICKS, SLOW_AMPLIFIER), ctx.caster());
 			}
 		}
@@ -121,11 +138,11 @@ public final class ThunderSpear implements Spell {
 	/** The bowl and the glass, in one MEDIUM batch round {@code origin}. */
 	private static void crater(CastContext ctx, BlockPos origin) {
 		ServerLevel level = ctx.level();
-		List<Cell> bowl = Shapes.bowl(BOWL, BOWL_DEPTH);
+		List<Cell> bowl = Shapes.bowl(bowl(ctx.charge()), BOWL_DEPTH);
 		Set<Cell> blasted = new HashSet<>(bowl);
 		try (EditBatch b = ctx.kit().terrain().begin(ctx, origin, EditTier.MEDIUM)) {
 			for (Cell c : bowl) b.remove(origin.offset(c.x(), c.y(), c.z()));
-			for (Cell c : Shapes.sphere(GLASS)) {
+			for (Cell c : Shapes.sphere(glass(ctx.charge()))) {
 				if (blasted.contains(c)) continue;
 				BlockPos pos = origin.offset(c.x(), c.y(), c.z());
 				if (sand(level.getBlockState(pos))) b.set(pos, Blocks.GLASS.defaultBlockState());

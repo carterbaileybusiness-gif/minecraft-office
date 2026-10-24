@@ -7,6 +7,7 @@ import java.util.List;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.net.FxEvent;
@@ -28,7 +29,6 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -41,17 +41,18 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * Tornado (Wind, slot 3, medium, lingering): a whirlwind that wanders forward, lifting what it catches.
  *
  * <p>It starts on the ground under the ray point ({@link Targets#point} within {@link TornadoGeometry#RANGE}, stepped back off
- * the face it hit) and travels along the caster's level look at 0.15 blocks a tick for {@code 120 + 40 × charge} ticks
+ * the face it hit) and travels along the caster's level look at 0.15 blocks a tick for {@code 120 + 60 × charge} ticks
  * ({@link TornadoGeometry}). Its base hugs the ground as it goes ({@link #follow}: up a step of at most {@link #STEP_UP}, down
  * at most {@link #DROP}; across water it rides the surface). Every tick, everything it {@link #lifts} within its reach (radius
- * 4, from 1 below the base to 9 above) that the axis can see (no block collider between the axis and its middle: wind never
+ * {@link TornadoGeometry#radius}: 4 at a tap, 8 at full charge; from 1 below the base to 9 above) that the axis can see (no block collider between the axis and its middle: wind never
  * blows through walls) gets {@link TornadoGeometry#push} as its velocity: 0.35 round the axis, 0.15 in, 0.25 up, plus the
  * tornado's travel, scaled by knockback resistance. Things carried over the top are flung out and fall. Every 10 ticks,
- * hostile mobs it holds take 1 damage; a boss in reach takes that damage too but is never lifted. At most {@link Targets#MAX_ENTITIES} things and {@link #MAX_CLIPS} sight checks a tick.
+ * the creatures it holds take {@code 1 × (1 + charge)}; a boss in reach takes that damage too but is never lifted. At most {@link Targets#MAX_ENTITIES} things and {@link #MAX_CLIPS} sight checks a tick.
  * No block changes.
  *
  * <p>Fx: {@code target} = the start (on the ground), {@code dir} = the level travel direction, {@code duration} = the life in
- * ticks. The client rebuilds the path with {@code new TornadoGeometry(target, dir, duration)} and {@link #follow}.
+ * ticks. The client rebuilds the path with {@code new TornadoGeometry(target, dir, duration)} and {@link #follow}, and the
+ * funnel's width from {@code charge} ({@link TornadoGeometry#radius}).
  */
 public final class Tornado implements Spell {
 	/** Highest step the base climbs in a tick, and deepest drop it follows. */
@@ -126,16 +127,16 @@ public final class Tornado implements Spell {
 	}
 
 	/**
-	 * What the tornado lifts: {@link TargetFilter#controllable}, so items, XP orbs and hostile mobs (the lane ruling: livestock,
-	 * golems, allays, pets, villagers and players are never lifted or hurt), never a boss.
+	 * What the tornado lifts: {@link TargetFilter#controllable}, so items, XP orbs, hostile mobs and animals (never golems, allays,
+	 * pets, villagers, named mobs or players), never a boss.
 	 */
 	static boolean lifts(CastContext ctx, Entity e) {
 		return TargetFilter.controllable(ctx.caster(), e);
 	}
 
-	/** What the tornado catches: what it {@link #lifts}, plus hostile bosses, which it hurts but never lifts. */
+	/** What the tornado catches: what it {@link #lifts}, plus bosses, which it hurts but never lifts. */
 	static boolean catches(CastContext ctx, Entity e) {
-		return lifts(ctx, e) || e instanceof Enemy && TargetFilter.isBoss(e) && TargetFilter.affects(ctx.caster(), e);
+		return lifts(ctx, e) || TargetFilter.isBoss(e) && TargetFilter.affects(ctx.caster(), e);
 	}
 
 	/** True when no block collider stands between {@code a} and {@code b}. */
@@ -167,10 +168,10 @@ public final class Tornado implements Spell {
 			if (!level.isLoaded(BlockPos.containing(flat.x, y, flat.z))) return false;
 			y = follow(level, flat.x, flat.z, y);
 			Vec3 base = new Vec3(flat.x, y, flat.z);
-			double r = TornadoGeometry.RADIUS;
+			double r = TornadoGeometry.radius(ctx.charge());
 			AABB reach = new AABB(base.x - r, base.y - TornadoGeometry.BELOW, base.z - r, base.x + r, base.y + TornadoGeometry.HEIGHT, base.z + r);
 			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, reach,
-					e -> catches(ctx, e) && TornadoGeometry.inReach(base, e.position())));
+					e -> catches(ctx, e) && TornadoGeometry.inReach(base, e.position(), r)));
 			caught.sort(Comparator.comparingDouble(e -> e.position().distanceToSqr(base)));
 			boolean hurt = age % TornadoGeometry.HURT_EVERY == 0;
 			boolean sync = age % SYNC_EVERY == 0;
@@ -192,7 +193,7 @@ public final class Tornado implements Spell {
 						e.needsSync = true;
 					}
 				}
-				if (hurt && e instanceof LivingEntity l && l instanceof Enemy && hurtBudget.admit(l)) Hurt.damage(ctx, l, TornadoGeometry.HURT);
+				if (hurt && e instanceof LivingEntity l && hurtBudget.admit(l)) Hurt.damage(ctx, l, TornadoGeometry.HURT * ChargeMath.size(ctx.charge()));
 			}
 			return age < geo.life();
 		}

@@ -3,6 +3,7 @@ package local.carter.office.magic.spell.fire;
 import java.util.ArrayList;
 import java.util.List;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Shapes.Cell;
 
 import net.minecraft.util.Mth;
@@ -14,21 +15,19 @@ import net.minecraft.world.phys.Vec3;
  * same three numbers the fx event carries: {@code base} (the wall's foot on the ground, at the middle of its width; the event's
  * {@code target}), {@code forward} (the caster's flat facing; the event's {@code dir}) and the cast's {@code charge}.
  *
- * <p>The wall is an upright slab across the aim line: {@link #width} wide along {@link #side}, {@link #THICKNESS} deep along
- * {@link #forward}, {@link #HEIGHT} tall from {@code base.y}.
+ * <p>The wall is an upright slab across the aim line: {@link #width} wide along {@link #side} (5 at a tap, 10 at full charge),
+ * {@link #THICKNESS} deep along {@link #forward}, {@link #height} tall from {@code base.y} (3, 4 at full charge).
  */
 public record FireWallGeometry(Vec3 base, Vec3 forward, Vec3 side, double width, double height, int duration) {
 	/** How far ahead of the caster's feet the wall stands. */
 	public static final double AHEAD = 4;
+	/** A tap's width (twice that at full charge) and height (one more at full charge). */
 	public static final double WIDTH = 5;
-	public static final double WIDE_WIDTH = 7;
-	/** Charge at which the wall is {@link #WIDE_WIDTH} wide. */
-	public static final float WIDE_AT = 0.5F;
 	public static final double HEIGHT = 3;
 	/** Depth of the burning zone along the aim line. */
 	public static final double THICKNESS = 1.0;
 	public static final int BASE_TICKS = 100;
-	public static final int CHARGE_TICKS = 60;
+	public static final int CHARGE_TICKS = 100;
 	/**
 	 * Longest move in one tick that still counts as passing through the wall ({@link #sweeps}). Anything that went farther in a
 	 * single tick was teleported (ender pearl, chorus fruit, an enderman, a spell), not thrown, and never crossed the fire.
@@ -47,8 +46,14 @@ public record FireWallGeometry(Vec3 base, Vec3 forward, Vec3 side, double width,
 		return feet.add(f.scale(AHEAD));
 	}
 
+	/** {@code 5 × ChargeMath.size(charge)}: 5 at a tap, 10 at full charge. */
 	public static double width(float charge) {
-		return charge >= WIDE_AT ? WIDE_WIDTH : WIDTH;
+		return WIDTH * ChargeMath.size(charge);
+	}
+
+	/** {@code 3 + charge}: 3 at a tap, 4 at full charge. */
+	public static double height(float charge) {
+		return HEIGHT + Mth.clamp(charge, 0F, 1F);
 	}
 
 	public static int duration(float charge) {
@@ -59,7 +64,7 @@ public record FireWallGeometry(Vec3 base, Vec3 forward, Vec3 side, double width,
 	public static FireWallGeometry of(Vec3 base, Vec3 forward, float charge) {
 		Vec3 f = flat(forward);
 		Vec3 side = new Vec3(-f.z, 0, f.x);
-		return new FireWallGeometry(base, f, side, width(charge), HEIGHT, duration(charge));
+		return new FireWallGeometry(base, f, side, width(charge), height(charge), duration(charge));
 	}
 
 	/** The point {@code s} along the wall's width (−width/2..width/2, from its middle) and {@code h} up from its foot. */

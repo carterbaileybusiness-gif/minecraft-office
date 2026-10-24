@@ -8,6 +8,8 @@ import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.core.BlockPos;
 
 /**
@@ -15,19 +17,18 @@ import net.minecraft.core.BlockPos;
  * the server effect and the client fx run the same rule).
  *
  * <p>The ring starts at the caster's floor block ({@code centre}) and grows {@link #SPEED} blocks a tick ({@link #ringAt}: radius
- * {@code t / 2} at tick {@code t}) to {@link #radius} ({@code 6 + 2 × charge}). Its cells are the columns of the disc
+ * {@code t / 2} at tick {@code t}) to {@link #radius} ({@code 6 × (1 + charge)}: 6 at a tap, 12 at full charge). Its cells are the columns of the disc
  * ({@link #disc}), each reached on {@link #tickOf} its distance. A column's ground is its top solid block within
  * {@link #REACH} of the centre's level that has an open cell over it ({@link #surface}).
  *
  * <p>Cracks: {@link #CRACK_SHARE} of the disc's columns, at most {@link #MAX_CRACKS}, picked from the cast's seed ({@link #cracks}).
  * Each edit belongs to a MEDIUM batch whose origin keeps it within {@link #EDIT_RADIUS}: the centre batch for blocks within 6 of
- * the centre, else the batch of its 60° arc ({@link #arc}), whose origin lies on the arc {@link #ARC_RADIUS} out
- * ({@link #originFor}).
+ * the centre, else the batch of its 36° arc ({@link #arc}), whose origin lies on the arc {@link #ARC_RADIUS} out
+ * ({@link #originFor}). Ten arcs 9 out keep every edit of a full charge's 12-block ring within 5.2 of its origin.
  */
 public final class QuakeGeometry {
-	/** Radius at charge 0 and what full charge adds. */
+	/** Radius at charge 0 (twice that at full charge). */
 	public static final double BASE_RADIUS = 6;
-	public static final double CHARGE_RADIUS = 2;
 	/** Blocks the ring grows each tick (1 block per 2 ticks). */
 	public static final double SPEED = 0.5;
 	/** How far above or below the centre's level a column's ground may be. */
@@ -37,15 +38,15 @@ public final class QuakeGeometry {
 	public static final int MAX_CRACKS = 120;
 	/** A medium edit's radius cap: no edit is farther than this from its batch origin. */
 	public static final double EDIT_RADIUS = 6;
-	/** Arc batches: this many arcs (60° each), with their origins this far out on the arc's middle. */
-	public static final int ARCS = 6;
-	public static final double ARC_RADIUS = 7;
+	/** Arc batches: this many arcs (36° each), with their origins this far out on the arc's middle. */
+	public static final int ARCS = 10;
+	public static final double ARC_RADIUS = 9;
 
 	private QuakeGeometry() {}
 
-	/** The ring's final radius: 6 + 2 × charge. */
+	/** The ring's final radius: {@code 6 × ChargeMath.size(charge)}, 6 at a tap and 12 at full charge. */
 	public static double radius(float charge) {
-		return BASE_RADIUS + CHARGE_RADIUS * Math.max(0F, Math.min(1F, charge));
+		return BASE_RADIUS * ChargeMath.size(charge);
 	}
 
 	/** The ring's radius at tick {@code t} of the cast: {@code t / 2}. */
@@ -107,7 +108,7 @@ public final class QuakeGeometry {
 		return out;
 	}
 
-	/** The 60° arc (0..5) the offset {@code (dx, dz)} lies in. */
+	/** The 36° arc (0..9) the offset {@code (dx, dz)} lies in. */
 	public static int arc(double dx, double dz) {
 		double a = Math.atan2(dz, dx);
 		if (a < 0) a += 2 * Math.PI;

@@ -25,8 +25,9 @@ import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Chain Lightning (Lightning, slot 1, medium): the first target along the look (range 20, 1.5 of aim forgiveness, stopping at
- * solid blocks), then {@code 4 + round(2 × charge)} hops, each to the nearest hostile mob not yet struck within 6 of the last one and in
- * its sight (the first target may be any foe the look strikes) ({@link ChainHops}, {@link Arcs}). The target at hop {@code k} (the first is hop 0) takes {@code 6 × P × 0.8^k}.
+ * solid blocks), then {@link ChainHops#hops} hops (4 at a tap, 8 at full charge), each to the nearest creature not yet struck within 6 of the
+ * last one and in its sight (a hop is a control effect: hostile mobs and animals, never a boss; the first target may be any
+ * creature the look strikes) ({@link ChainHops}, {@link Arcs}). The target at hop {@code k} (the first is hop 0) takes {@code 6 × P × 0.8^k}.
  * Minor permanent change: sand (or red sand) right under each struck target fuses to glass, one MEDIUM batch per target with the
  * sand as its origin. With nothing to strike it still casts: the bolt grounds where the look meets a block (no block change).
  *

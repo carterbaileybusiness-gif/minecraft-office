@@ -23,12 +23,13 @@ class ChainHopsTest {
 
 	@Test
 	void hopsAndDamageFollowTheBrief() {
+		// round(4 × (1 + charge)): a full charge hops twice as often as a tap.
 		assertEquals(4, ChainHops.hops(0F));
-		assertEquals(4, ChainHops.hops(0.24F));
-		assertEquals(5, ChainHops.hops(0.25F));
-		assertEquals(5, ChainHops.hops(0.5F));
-		assertEquals(6, ChainHops.hops(1F));
-		assertEquals(6, ChainHops.hops(3F), "charge is clamped");
+		assertEquals(4, ChainHops.hops(0.12F));
+		assertEquals(5, ChainHops.hops(0.125F));
+		assertEquals(6, ChainHops.hops(0.5F));
+		assertEquals(8, ChainHops.hops(1F));
+		assertEquals(8, ChainHops.hops(3F), "charge is clamped");
 		assertEquals(6F, ChainHops.damage(0, 1F), 1e-6);
 		assertEquals(4.8F, ChainHops.damage(1, 1F), 1e-5);
 		assertEquals(3.84F, ChainHops.damage(2, 1F), 1e-5);
@@ -60,7 +61,7 @@ class ChainHopsTest {
 	void stopsAtTheHopLimit() {
 		List<Vec3> pts = line(0, 3, 6, 9, 12, 15, 18, 21, 24);
 		assertArrayEquals(new int[] {0, 1, 2, 3, 4}, ChainHops.select(pts, 0, ChainHops.hops(0F), 6), "a tap: first + 4");
-		assertArrayEquals(new int[] {0, 1, 2, 3, 4, 5, 6}, ChainHops.select(pts, 0, ChainHops.hops(1F), 6), "full charge: first + 6");
+		assertArrayEquals(new int[] {0, 1, 2, 3, 4, 5, 6, 7, 8}, ChainHops.select(pts, 0, ChainHops.hops(1F), 6), "full charge: first + 8");
 		assertArrayEquals(new int[] {4}, ChainHops.select(pts, 4, 0, 6), "no hops: the first target alone");
 		assertArrayEquals(new int[] {4, 3}, ChainHops.select(pts, 4, 1, 6), "one arc (Spark): the nearest, ties to the lower index");
 	}

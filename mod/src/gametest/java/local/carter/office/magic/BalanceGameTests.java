@@ -78,8 +78,8 @@ public class BalanceGameTests {
 	static final int LEVEL = 10;
 	/** Zombies in a crowd: more than {@link Targets#MAX_ENTITIES}. */
 	static final int CROWD = 66;
-	/** Ticks from the cast to the checks: every spell (Tornado, 160 at full charge, is the longest) has run out by then. */
-	static final int SETTLE = 220;
+	/** Ticks from the cast to the checks: every spell (Bubble Shield, 240 at full charge, is the longest) has run out by then. */
+	static final int SETTLE = 260;
 
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 
