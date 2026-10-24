@@ -185,6 +185,22 @@ final class HelperServer {
         writer.async { [weak self] in _ = self?.write([bytes]) }
     }
 
+    private var slots = LatestSlots()
+
+    /// Sends a state message whose newest value is all that matters (CURSOR, WALK), from any thread without waiting:
+    /// while one is still queued behind a slow write, a newer one replaces it (the older is dropped).
+    func sendLatest(_ message: Message) {
+        guard let bytes = try? message.encode() else { log("could not encode \(message.type)"); return }
+        let key = "\(message.type.rawValue)"
+        lock.lock(); let enqueue = slots.put(key, bytes); lock.unlock()
+        guard enqueue else { return }
+        writer.async { [weak self] in
+            guard let self else { return }
+            self.lock.lock(); let data = self.slots.take(key); self.lock.unlock()
+            if let data { _ = self.write([data]) }
+        }
+    }
+
     /// Sends WELCOME (the handshake reply, or again later when a permission changed) and remembers it.
     func sendWelcome(_ payload: WelcomePayload) {
         lock.lock(); sentWelcome = payload; lock.unlock()

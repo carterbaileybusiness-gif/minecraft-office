@@ -253,6 +253,136 @@ enum CursorLocator {
     }
 }
 
+/// Walk while dragging (round 3, Carter's ruling; pure). In work mode, while the real mouse button is held (a drag), the
+/// movement keys — W A S D, Space, Shift — move the player in Minecraft and are NOT delivered to the app; with the button
+/// up they go to the app as usual (typing is untouched). A key is decided when it goes down: one taken from the app stays
+/// taken until its key-up (its repeats and its up never reach the app, which never saw it go down), and one already
+/// down in the app stays the app's. Releasing the button stops all movement at once, even with a key still held.
+/// The keys are physical positions (ANSI key codes): AZERTY's Z Q S D, and Minecraft's own key bindings don't matter.
+/// Missed events can't leave anything stuck: `resync` sets the state from the hardware (on a re-enabled tap and 30 times
+/// a second), Shift is read from the device flag bits, and a password field (secure input) suspends walking.
+struct WalkKeys {
+    enum Move: String, CaseIterable, Comparable {
+        case forward, back, left, right, jump, sneak
+        static func < (a: Move, b: Move) -> Bool { a.rawValue < b.rawValue }
+    }
+
+    /// The movement key for a virtual key code (ANSI positions: W A S D, Space, left / right Shift), else nil.
+    static func move(forKeyCode code: UInt16) -> Move? {
+        switch code {
+        case 13: return .forward
+        case 1: return .back
+        case 0: return .left
+        case 2: return .right
+        case 49: return .jump
+        case 56, 60: return .sneak
+        default: return nil
+        }
+    }
+
+    static let shiftCodes: Set<UInt16> = [56, 60]
+    /// Device-dependent flag bits of left / right Shift in an event's flags (NX_DEVICELSHIFTKEYMASK / ...RSHIFT...).
+    static let leftShiftBit: UInt64 = 0x2
+    static let rightShiftBit: UInt64 = 0x4
+
+    private(set) var buttonHeld = false
+    /// A password field has the keyboard (secure input): no walking, the keys are the field's.
+    private(set) var suspended = false
+    /// Keys whose down the app never saw: Minecraft's until their up.
+    private(set) var taken: [UInt16: Move] = [:]
+    /// Movement keys down in the app.
+    private var appDown: Set<UInt16> = []
+
+    /// What Minecraft should be doing now.
+    var moves: Set<Move> { buttonHeld && !suspended ? Set(taken.values) : [] }
+
+    /// A movement key (or Shift) went down / up / repeated. `swallow`: keep it from the app. `moves`: the new set when
+    /// it changed (send it), else nil.
+    mutating func key(code: UInt16, down: Bool) -> (swallow: Bool, moves: Set<Move>?) {
+        guard let move = Self.move(forKeyCode: code) else { return (false, nil) }
+        let before = moves
+        if down {
+            if taken[code] != nil { return (true, nil) } // a repeat of a taken key
+            if appDown.contains(code) { return (false, nil) } // the app's (down before the button)
+            if buttonHeld && !suspended {
+                taken[code] = move
+                return (true, moves != before ? moves : nil)
+            }
+            appDown.insert(code)
+            return (false, nil)
+        }
+        if taken.removeValue(forKey: code) != nil { return (true, moves != before ? moves : nil) }
+        appDown.remove(code)
+        return (false, nil)
+    }
+
+    /// Shift has no key-down / key-up of its own (flagsChanged): whether left (56) or right (60) Shift is down comes from
+    /// the event's device flag bits, never from toggling (a missed change can't invert it).
+    mutating func modifier(code: UInt16, flags: UInt64) -> (swallow: Bool, moves: Set<Move>?) {
+        guard Self.shiftCodes.contains(code) else { return (false, nil) }
+        let bit = code == 56 ? Self.leftShiftBit : Self.rightShiftBit
+        return key(code: code, down: flags & bit != 0)
+    }
+
+    /// Shift is taken (held for Minecraft): events the app still gets must not carry it.
+    var shiftTaken: Bool { taken.keys.contains { Self.shiftCodes.contains($0) } }
+
+    /// The physical mouse button went down / up. Returns the new moves when they changed.
+    mutating func button(held: Bool) -> Set<Move>? {
+        let before = moves
+        buttonHeld = held
+        return moves != before ? moves : nil
+    }
+
+    /// From the hardware (a re-enabled tap, the 30 Hz tick): the button state, and every key not physically down any more
+    /// is forgotten (an up that was missed). Returns the new moves when they changed.
+    mutating func resync(buttonHeld held: Bool, isKeyDown: (UInt16) -> Bool) -> Set<Move>? {
+        let before = moves
+        buttonHeld = held
+        taken = taken.filter { isKeyDown($0.key) }
+        appDown = appDown.filter(isKeyDown)
+        return moves != before ? moves : nil
+    }
+
+    /// Secure input on (a password field: its keys must reach it) or off. Returns the new moves when they changed.
+    mutating func setSuspended(_ on: Bool) -> Set<Move>? {
+        let before = moves
+        suspended = on
+        return moves != before ? moves : nil
+    }
+
+    /// Work mode ended: nothing moves, nothing is taken any more. Returns the new (empty) moves when they changed.
+    mutating func reset() -> Set<Move>? {
+        let before = moves
+        taken = [:]
+        appDown = []
+        buttonHeld = false
+        suspended = false
+        return before.isEmpty ? nil : []
+    }
+
+    static func names(_ moves: Set<Move>) -> [String] { moves.sorted().map(\.rawValue) }
+}
+
+/// Sending a stream of state (the cursor, the walk keys) from an event tap: only the newest one per key waits to be
+/// written, so a writer backed up by a big frame never makes the tap wait or a queue grow (pure).
+struct LatestSlots {
+    private var latest: [String: Data] = [:]
+    private var queued: Set<String> = []
+
+    /// Stores `data` as the newest for `key`. True = no write is queued for `key` yet: queue one.
+    mutating func put(_ key: String, _ data: Data) -> Bool {
+        latest[key] = data
+        return queued.insert(key).inserted
+    }
+
+    /// The queued write runs: the newest data for `key` (older ones were dropped).
+    mutating func take(_ key: String) -> Data? {
+        queued.remove(key)
+        return latest.removeValue(forKey: key)
+    }
+}
+
 /// Where the other monitors were just before Office displays were created (pure). macOS shoves a monitor aside to fit a
 /// new display in; the arranges that follow put it back where it was. The mod sends every CREATE_DISPLAY at once on each
 /// (re)connect, so the record stays until the arrange of the last create still pending has run — each new display may

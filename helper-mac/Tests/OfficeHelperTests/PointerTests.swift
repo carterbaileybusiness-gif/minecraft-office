@@ -298,6 +298,86 @@ enum PointerTests {
             expectEqual(back.first?.to, CGPoint(x: 0, y: 900), "back where the user had it")
         }
 
+        run("walk while dragging: WASD / Space / Shift go to Minecraft only while the button is held; nothing sticks") {
+            var w = WalkKeys()
+            // no button: typing as usual
+            expectEqual(w.key(code: 13, down: true).swallow, false, "W types into the app")
+            expectEqual(w.key(code: 13, down: false).swallow, false)
+            expectEqual(w.key(code: 12, down: true).swallow, false, "Q is never a movement key")
+            // button held: W moves, the app gets nothing (down, repeats, up)
+            expectEqual(w.button(held: true), nil as Set<WalkKeys.Move>?, "no key yet: nothing changes")
+            let down = w.key(code: 13, down: true)
+            expectEqual(down.swallow, true, "taken from the app")
+            expectEqual(down.moves, [.forward])
+            expectEqual(w.key(code: 13, down: true).swallow, true, "its repeats too")
+            expectEqual(w.key(code: 49, down: true).moves, [.forward, .jump], "Space: jump")
+            expectEqual(WalkKeys.names(w.moves), ["forward", "jump"], "sorted names for WALK")
+            expectEqual(w.key(code: 49, down: false).moves, [.forward])
+            expectEqual(w.key(code: 12, down: true).swallow, false, "other keys still reach the app while dragging")
+            // release the button with W still held: movement stops at once; W stays Minecraft's until it comes up
+            expectEqual(w.button(held: false), [] as Set<WalkKeys.Move>?, "stops at once")
+            expectEqual(w.key(code: 13, down: true).swallow, true, "a repeat after the release doesn't type 'w'")
+            let up = w.key(code: 13, down: false)
+            expectEqual(up.swallow, true, "nor its up (the app never saw it go down)")
+            expectEqual(up.moves, nil as Set<WalkKeys.Move>?, "nothing was moving any more")
+            expectEqual(w.key(code: 13, down: true).swallow, false, "button up: W types again")
+            // a key already down in the app when the button goes down stays the app's
+            _ = w.button(held: true)
+            expectEqual(w.key(code: 13, down: true).swallow, false, "W was down in the app before: its repeat goes there")
+            expectEqual(w.key(code: 13, down: false).swallow, false, "and its up")
+            expectEqual(w.moves, [] as Set<WalkKeys.Move>)
+            // Shift (flagsChanged): read from the device bits (left 0x2, right 0x4), never toggled; stripped while taken
+            let shiftDown = w.modifier(code: 56, flags: 0x20102) // shift mask + left device bit
+            expectEqual(shiftDown.swallow, true)
+            expectEqual(shiftDown.moves, [.sneak])
+            expectEqual(w.shiftTaken, true)
+            expectEqual(w.modifier(code: 56, flags: 0x20102).moves, nil as Set<WalkKeys.Move>?, "the same state again: no toggle")
+            expectEqual(w.modifier(code: 60, flags: 0x20106).moves, nil as Set<WalkKeys.Move>?, "right Shift too: still sneaking")
+            expectEqual(w.modifier(code: 56, flags: 0x20104).moves, nil as Set<WalkKeys.Move>?, "left up, right still down")
+            expectEqual(w.modifier(code: 60, flags: 0x100).moves, [] as Set<WalkKeys.Move>?, "both up")
+            expectEqual(w.shiftTaken, false)
+            expectEqual(w.modifier(code: 56, flags: 0x100).swallow, false, "an up for a Shift never seen down: the app's, no toggle")
+            // held again, then work ends: nothing moves, nothing taken
+            _ = w.key(code: 0, down: true)
+            expectEqual(w.moves, [.left])
+            expectEqual(w.reset(), [] as Set<WalkKeys.Move>?)
+            expectEqual(w.key(code: 0, down: false).swallow, false, "after work ends nothing is swallowed")
+            expectEqual(try Message.decode(type: .walk, payload: Data(#"{"keys":[]}"#.utf8)), .walk(WalkPayload(keys: [])))
+        }
+
+        run("walk resyncs with the hardware: missed ups, the button, secure input; latest-only sending") {
+            var w = WalkKeys()
+            _ = w.button(held: true)
+            _ = w.key(code: 13, down: true)
+            _ = w.key(code: 0, down: true)
+            expectEqual(w.moves, [.forward, .left])
+            // the tap missed A's up (disabled by timeout): the hardware says only W is down
+            expectEqual(w.resync(buttonHeld: true, isKeyDown: { $0 == 13 }), [.forward] as Set<WalkKeys.Move>?, "A forgotten")
+            expectEqual(w.resync(buttonHeld: true, isKeyDown: { $0 == 13 }), nil as Set<WalkKeys.Move>?, "nothing new")
+            // the button's up was missed: the hardware says it's up
+            expectEqual(w.resync(buttonHeld: false, isKeyDown: { $0 == 13 }), [] as Set<WalkKeys.Move>?, "stops")
+            expectEqual(w.key(code: 13, down: false).swallow, true, "W stays Minecraft's until its up")
+            // a key the app had, released while the tap was off: forgotten, so the next W after a press is taken
+            _ = w.resync(buttonHeld: false, isKeyDown: { _ in false })
+            _ = w.key(code: 1, down: true) // S into the app
+            _ = w.resync(buttonHeld: true, isKeyDown: { _ in false }) // its up was missed, the button went down
+            let s = w.key(code: 1, down: true)
+            expectEqual(s.swallow, true, "S is free again: taken for walking")
+            expectEqual(s.moves, [.back])
+            // secure input (a password field): no walking, the keys go to the field
+            expectEqual(w.setSuspended(true), [] as Set<WalkKeys.Move>?, "WALK [] at once")
+            expectEqual(w.key(code: 2, down: true).swallow, false, "D types into the password field")
+            expectEqual(w.setSuspended(false), [.back] as Set<WalkKeys.Move>?, "off again: S (still held) walks")
+            // latest-only sending: one queued write per key, carrying the newest data
+            var slots = LatestSlots()
+            expectEqual(slots.put("79", Data([1])), true, "queue a write")
+            expectEqual(slots.put("79", Data([2])), false, "already queued: replaced, not queued again")
+            expectEqual(slots.put("80", Data([9])), true, "another key: its own write")
+            expectEqual(slots.take("79"), Data([2]), "the newest")
+            expectEqual(slots.take("79"), nil as Data?)
+            expectEqual(slots.put("79", Data([3])), true, "taken: the next one queues again")
+        }
+
         run("secure input: each change is reported once, a new typing session starts from off") {
             var w = SecureInputWatch()
             expectEqual(w.sample(false), nil as Bool?, "off at the start: nothing to say")
