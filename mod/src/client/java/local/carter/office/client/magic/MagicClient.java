@@ -3,6 +3,15 @@ package local.carter.office.client.magic;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import local.carter.office.client.magic.fx.FxClient;
+import local.carter.office.client.magic.fx.RecallFx;
+import local.carter.office.client.magic.fx.SpellFxRegistry;
+import local.carter.office.client.magic.fx.earth.EarthFx;
+import local.carter.office.client.magic.fx.fire.FireFx;
+import local.carter.office.client.magic.fx.lightning.LightningFx;
+import local.carter.office.client.magic.fx.shadow.ShadowFx;
+import local.carter.office.client.magic.fx.water.WaterFx;
+import local.carter.office.client.magic.fx.wind.WindFx;
 import local.carter.office.client.magic.hud.ManaBarHud;
 import local.carter.office.client.magic.screen.ElementChoiceScreen;
 import local.carter.office.client.magic.screen.GrimoireScreen;
@@ -13,6 +22,7 @@ import local.carter.office.client.zoom.ZoomController;
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
 import local.carter.office.magic.net.MagicPayloads.SignAnswer;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
+import local.carter.office.magic.spell.SpellIds;
 
 import net.minecraft.client.Minecraft;
 
@@ -31,6 +41,16 @@ public final class MagicClient {
 		ClientPlayNetworking.registerGlobalReceiver(SignChallenge.TYPE, (payload, ctx) -> onChallenge(ctx.client(), payload));
 		ClientPlayNetworking.registerGlobalReceiver(OpenGrimoire.TYPE, (payload, ctx) -> onOpenGrimoire(ctx.client(), payload));
 		ManaBarHud.register();
+
+		// Spell visuals (Task 10): the fx core, Recall, and each element lane's fx.
+		FxClient.register();
+		SpellFxRegistry.register(SpellIds.RECALL, new RecallFx());
+		FireFx.register();
+		WaterFx.register();
+		WindFx.register();
+		LightningFx.register();
+		EarthFx.register();
+		ShadowFx.register();
 	}
 
 	/**
