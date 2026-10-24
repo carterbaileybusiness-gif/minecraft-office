@@ -234,6 +234,37 @@ public class MagicCoreGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA)
+	public void rebindToTheSameElementSpendsNothing(GameTestHelper h) {
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 5);
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL, 2));
+		use(h, p, InteractionHand.MAIN_HAND);
+		h.assertFalse(MagicServer.chooseElement(p, Element.FIRE), "choosing the current element is refused");
+		h.assertValueEqual(p.getMainHandItem().getCount(), 2, "no seal spent");
+		h.assertTrue(rec.titles().isEmpty(), "no title");
+		h.assertTrue(ElementChoice.rebindPending(p), "the rebind stays open");
+		h.assertTrue(MagicServer.chooseElement(p, Element.SHADOW), "another element still binds");
+		h.assertValueEqual(p.getMainHandItem().getCount(), 1, "one seal spent");
+		h.assertValueEqual(MagicAttachments.get(p).element(), Optional.of(Element.SHADOW), "shadow");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void deathCancelsAPendingRebind(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 5);
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL));
+		use(h, p, InteractionHand.MAIN_HAND);
+		h.assertTrue(ElementChoice.rebindPending(p), "pending before death");
+		ServerPlayer respawned = MagicTestKit.respawn(h, p);
+		h.assertFalse(ElementChoice.rebindPending(respawned), "death drops the pending rebind");
+		respawned.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL));
+		h.assertFalse(MagicServer.chooseElement(respawned, Element.WATER), "a late choice after death is refused");
+		h.assertValueEqual(respawned.getMainHandItem().getCount(), 1, "seal kept");
+		h.assertValueEqual(MagicAttachments.get(respawned).element(), Optional.of(Element.FIRE), "still fire");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
 	public void unboundPlayerCannotUseASeal(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.otherPlayer(h, MagicTestKit.STAND);
 		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL));

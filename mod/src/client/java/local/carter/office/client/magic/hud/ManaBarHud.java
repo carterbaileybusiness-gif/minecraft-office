@@ -204,7 +204,7 @@ public final class ManaBarHud {
 	/** The XP level at the bar's right end (vanilla green, outlined). */
 	private static void xpLevel(GuiGraphicsExtractor g, DeltaTracker dt) {
 		Minecraft mc = Minecraft.getInstance();
-		if (mc.player == null) return;
+		if (mc.player == null || mc.player.experienceLevel <= 0) return; // like vanilla: no "0"
 		ManaBarLayout.Layout l = ManaBarLayout.layout(g.guiWidth(), g.guiHeight());
 		Component s = Component.literal(Integer.toString(mc.player.experienceLevel));
 		boolean offhandRight = mc.player.getMainArm() == net.minecraft.world.entity.HumanoidArm.LEFT;

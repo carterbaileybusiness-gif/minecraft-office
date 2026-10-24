@@ -56,17 +56,19 @@ public final class ElementChoice {
 		return true;
 	}
 
-	/** Drops a pending rebind (disconnect). */
+	/** Drops a pending rebind (death, disconnect). */
 	public static void forget(ServerPlayer p) {
 		PENDING.remove(p.getUUID());
 	}
 
 	/**
-	 * Rebinds to {@code e} if a seal opened the choice and a seal is still in either hand: consumes exactly one seal, then
-	 * binds (level, xp, home and cooldowns stay). Returns false, spending nothing, otherwise.
+	 * Rebinds to {@code e} if a seal opened the choice, a seal is still in either hand and {@code e} is not the current
+	 * element: consumes exactly one seal, then binds (level, xp, home and cooldowns stay). Returns false, spending nothing,
+	 * otherwise (the rebind stays pending).
 	 */
 	public static boolean rebind(ServerPlayer p, Element e) {
 		if (!rebindPending(p)) return false;
+		if (MagicAttachments.get(p).element().equals(Optional.of(e))) return false;
 		for (InteractionHand hand : InteractionHand.values()) {
 			if (p.getItemInHand(hand).is(MagicItems.REBINDING_SEAL)) {
 				p.getItemInHand(hand).consume(1, p);

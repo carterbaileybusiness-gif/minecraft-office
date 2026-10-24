@@ -80,6 +80,7 @@ public final class MagicMod {
 			if (entity instanceof ServerPlayer p) {
 				discardPending(p);
 				RecallSpell.interrupt(p, true);
+				ElementChoice.forget(p);
 			}
 		});
 		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, from, to) -> {
