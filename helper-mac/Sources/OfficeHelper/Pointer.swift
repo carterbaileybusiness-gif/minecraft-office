@@ -256,7 +256,8 @@ enum CursorLocator {
 /// Where the Office displays sit in the display arrangement (pure): in slot order in a row along the main display's top
 /// edge, starting at its right edge — so moving the cursor off the Mirror's right edge carries it onto display 1, like a
 /// laptop and its monitors. If another display (a real monitor) already touches the main display's right edge, the row
-/// goes to its left instead (display 1 next to the main display's left edge).
+/// goes to its left instead: next to the main display's left edge, or, when a monitor sits there too, past the
+/// leftmost display in that band (so nothing overlaps).
 enum DisplayArrangement {
     static func origins(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)]) -> [Int: CGPoint] {
         let sorted = ours.sorted { $0.slot < $1.slot }
@@ -269,7 +270,9 @@ enum DisplayArrangement {
             var x = main.maxX
             for d in sorted { out[d.slot] = CGPoint(x: x, y: main.minY); x += d.size.width }
         } else {
-            var x = main.minX
+            let leftBand = CGRect(x: main.minX - max(totalWidth, 1), y: main.minY, width: max(totalWidth, 1), height: max(height, 1))
+            let inTheWay = others.filter { $0.intersects(leftBand) || ($0.maxX == main.minX && $0.maxY > main.minY && $0.minY < main.maxY) }
+            var x = min(main.minX, inTheWay.map(\.minX).min() ?? main.minX)
             for d in sorted { x -= d.size.width; out[d.slot] = CGPoint(x: x, y: main.minY) }
         }
         return out

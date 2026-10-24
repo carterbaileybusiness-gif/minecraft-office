@@ -106,16 +106,43 @@ extension Probe {
         check("E0 helper WELCOME: Accessibility granted to the signed helper", w.accessibility, "screen recording \(w.screenRecording)")
         helperPid = NSRunningApplication.runningApplications(withBundleIdentifier: "local.carter.office-helper").first?.processIdentifier
 
+        // PROBE_MONITOR=1: a "real monitor" (a probe-owned virtual display) at the main display's right edge before the
+        // Office displays exist — they must go to the left (W6), and the cursor on it is shown (W5).
+        if ProcessInfo.processInfo.environment["PROBE_MONITOR"] != nil {
+            let main = CGDisplayBounds(CGMainDisplayID())
+            var placed = CGRect.zero
+            if let id = makeProbeMonitor() {
+                _ = await VirtualDisplays.waitOnline(id)
+                placeDisplay(id, at: CGPoint(x: main.maxX, y: main.minY))
+                await sleep(1.0)
+                placed = CGDisplayBounds(id)
+                if placed.minX == main.maxX { probeMonitorID = id }
+            }
+            check("W6 setup: a probe monitor sits at the main display's right edge", probeMonitorID != nil, "main \(main), monitor \(placed)")
+        }
         var ids: [Int: CGDirectDisplayID] = [:]
+        var sides: [Int: String] = [:]
         for slot in [1, 2] {
             client.send(.createDisplay(CreateDisplayPayload(slot: slot, w: 1920, h: 1080)))
-            if case .display(let d)? = await waitFor(5, { if case .display(let d) = $0 { return d.slot == slot }; return false }) { ids[slot] = d.displayId }
+            if case .display(let d)? = await waitFor(5, { if case .display(let d) = $0 { return d.slot == slot }; return false }) {
+                ids[slot] = d.displayId
+                sides[slot] = d.side
+            }
         }
         guard let idA = ids[1], let idB = ids[2] else { check("E0 helper created displays 1 and 2", false); return }
         await sleep(1.0)
         let boundsA = CGDisplayBounds(idA), boundsB = CGDisplayBounds(idB)
         let mainBounds = CGDisplayBounds(CGMainDisplayID())
         check("E0 helper created displays 1 and 2", true, "1: \(boundsA), 2: \(boundsB), main \(mainBounds)")
+        if probeMonitorID != nil {
+            check("W6 with a monitor at the main display's right edge the Office displays go to its left, in slot order, and DISPLAY says \"left\"",
+                  boundsA.maxX == mainBounds.minX && boundsB.maxX == boundsA.minX && boundsA.minY == mainBounds.minY
+                    && sides[1] == "left" && sides[2] == "left",
+                  "main \(mainBounds), 1: \(boundsA), 2: \(boundsB), sides \(sides)")
+        } else {
+            check("E0 DISPLAY says which side of the main display the display is on (right here)", sides[1] == "right" && sides[2] == "right",
+                  "sides \(sides)")
+        }
         /// The hologram's picture size the mod sends for a Mirror (slot 0): its 16:9 shape's pixels.
         let pictureW = 1920, pictureH = 1080
         /// A global point → (slot, pixel) the way the mod sends it: display pixels of a 1920×1080 Office display, or — with
@@ -566,6 +593,30 @@ extension Probe {
                 && reportedAt.map { abs($0.x - real.x) <= 1 && abs($0.y - real.y) <= 1 } == true,
               "real \(real), \(reports.count) reports, last \(last.map { "\($0)" } ?? "none")")
 
+        // W5 (PROBE_MONITOR): the cursor on a real monitor — no hologram shows it — is the system cursor, shown; back on
+        // the Mirror it is hidden again.
+        if let mid = probeMonitorID {
+            let mb = CGDisplayBounds(mid)
+            showProbeMonitorWindow(mid)
+            await sleep(0.3)
+            clearInbox()
+            let onMonitor = CGPoint(x: mb.midX, y: mb.midY)
+            hand(.mouseMoved, to: onMonitor, from: cursorNow)
+            await sleep(0.5)
+            let there = inbox().compactMap { m -> CursorPayload? in if case .cursor(let c) = m { return c }; return nil }.last
+            let shown = cursorDrawn(at: cursorNow)
+            check("W5 the cursor onto a real monitor: CURSOR slot -1 and the system cursor is shown there",
+                  there?.slot == -1 && shown && mb.contains(cursorNow), "cursor \(cursorNow), last \(there.map { "\($0)" } ?? "none"), drawn \(shown)")
+            clearInbox()
+            hand(.mouseMoved, to: real, from: cursorNow)
+            await sleep(0.5)
+            let back = inbox().compactMap { m -> CursorPayload? in if case .cursor(let c) = m { return c }; return nil }.last
+            let hiddenAgain = !cursorDrawn(at: cursorNow)
+            check("W5 back onto the Mirror: CURSOR slot 0 and the system cursor hidden again",
+                  back?.slot == 0 && hiddenAgain, "cursor \(cursorNow), last \(back.map { "\($0)" } ?? "none"), hidden \(hiddenAgain)")
+            probeMonitorWindow?.orderOut(nil)
+        }
+
         // W4 (before W3, so W3 starts from a press): Esc ends work mode; the cursor shows again, reports stop.
         key(53)
         let exit = await waitFor(2) { if case .typingExit = $0 { return true }; return false }
@@ -624,6 +675,58 @@ extension Probe {
     }
 
     var helperRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: "local.carter.office-helper").isEmpty }
+}
+
+// MARK: A "real monitor" for W5 / W6: a probe-owned virtual display (not one of the helper's Office displays)
+
+@MainActor var probeMonitor: CGVirtualDisplay?
+@MainActor var probeMonitorID: CGDirectDisplayID?
+@MainActor var probeMonitorWindow: NSWindow?
+
+@MainActor func makeProbeMonitor() -> CGDirectDisplayID? {
+    let d = CGVirtualDisplayDescriptor()
+    d.queue = DispatchQueue.main
+    d.name = "Probe Monitor"
+    d.maxPixelsWide = 1920
+    d.maxPixelsHigh = 1080
+    d.sizeInMillimeters = CGSize(width: 443, height: 249)
+    d.serialNum = 0x5052_0001 // not an Office display's "MO" serial
+    d.productID = 0x0002
+    d.vendorID = 0x5052
+    d.redPrimary = CGPoint(x: 0.64, y: 0.33)
+    d.greenPrimary = CGPoint(x: 0.30, y: 0.60)
+    d.bluePrimary = CGPoint(x: 0.15, y: 0.06)
+    d.whitePoint = CGPoint(x: 0.3127, y: 0.3290)
+    d.terminationHandler = { _, _ in }
+    guard let display = CGVirtualDisplay(descriptor: d) else { return nil }
+    let settings = CGVirtualDisplaySettings()
+    settings.hiDPI = 0
+    settings.modes = [CGVirtualDisplayMode(width: 1920, height: 1080, refreshRate: 60)]
+    guard display.apply(settings) else { return nil }
+    probeMonitor = display
+    return display.displayID
+}
+
+@MainActor func placeDisplay(_ id: CGDirectDisplayID, at origin: CGPoint) {
+    var config: CGDisplayConfigRef?
+    guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+    CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y))
+    _ = CGCompleteDisplayConfiguration(config, .forSession)
+}
+
+/// A plain window over the probe monitor, so the cursor check there has a flat background.
+@MainActor func showProbeMonitorWindow(_ id: CGDirectDisplayID) {
+    guard let screen = NSScreen.screens.first(where: {
+        ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id
+    }) else { return }
+    let w = probeMonitorWindow ?? NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    w.isReleasedWhenClosed = false
+    w.level = .floating
+    w.backgroundColor = NSColor(calibratedWhite: 0.45, alpha: 1)
+    w.ignoresMouseEvents = true
+    w.setFrame(screen.frame, display: true)
+    w.orderFrontRegardless()
+    probeMonitorWindow = w
 }
 
 /// Is a cursor drawn on screen around `p`? `screencapture -C` (with the cursor) of a 48-pt square there over the plain

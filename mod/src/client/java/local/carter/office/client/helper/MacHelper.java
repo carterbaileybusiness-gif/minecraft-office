@@ -119,6 +119,13 @@ public final class MacHelper implements HelperConnection.Listener {
 	private final Set<String> iconsAsked = ConcurrentHashMap.newKeySet();
 	private final List<Consumer<AppResult>> appResultListeners = new CopyOnWriteArrayList<>();
 	private final List<Consumer<Boolean>> secureInputListeners = new CopyOnWriteArrayList<>();
+	/** Which edge of the laptop screen leads to the Office displays ("left" / "right"), from DISPLAY; null until known. */
+	private volatile @Nullable String displaySide;
+
+	public @Nullable String displaySide() {
+		return displaySide;
+	}
+
 	/** The real cursor while working (CURSOR), the newest one; null when none arrived since work mode began. */
 	private volatile HelperProtocol.@Nullable Cursor cursor;
 	/** Icon size asked of the helper (pixels): crisp on a big hologram. */
@@ -569,6 +576,9 @@ public final class MacHelper implements HelperConnection.Listener {
 			case Display d -> {
 				synchronized (this) {
 					online.put(d.slot(), new Size(d.w(), d.h()));
+				}
+				if (d.side() != null) {
+					displaySide = d.side();
 				}
 				for (MacHelperSource s : attached) {
 					s.displayOnline(d.slot(), d.w(), d.h());

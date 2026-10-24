@@ -176,7 +176,9 @@ func stopDragTap() { if let dragTap { CGEvent.tapEnable(tap: dragTap, enable: fa
             return e
         }
         Task { @MainActor in
-            if let i = CommandLine.arguments.firstIndex(of: "--latency"), i + 1 < CommandLine.arguments.count {
+            if let i = CommandLine.arguments.firstIndex(of: "--cpu"), i + 1 < CommandLine.arguments.count {
+                await self.runCPU(app: CommandLine.arguments[i + 1])
+            } else if let i = CommandLine.arguments.firstIndex(of: "--latency"), i + 1 < CommandLine.arguments.count {
                 await self.runLatency(app: CommandLine.arguments[i + 1])
             } else if let i = CommandLine.arguments.firstIndex(of: "--helper"), i + 1 < CommandLine.arguments.count {
                 await self.runHelper(app: CommandLine.arguments[i + 1])

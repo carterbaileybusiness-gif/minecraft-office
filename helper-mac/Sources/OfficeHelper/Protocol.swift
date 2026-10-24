@@ -61,6 +61,8 @@ enum MessageType: UInt8, CaseIterable {
     case listApps = 19, appIcons = 20, openApp = 21
     /// Work mode (spec 5.10, round 2): the real cursor goes to this point, the real mouse drives it until Esc.
     case workBegin = 22
+    /// A live capture's frame rate changes (no stream rebuild): own screens at 60 fps only where the cursor is.
+    case rate = 23
     // Helper → mod
     case welcome = 64, windows = 65, display = 66, frame = 67, patch = 68, ended = 69, exitZoom = 70, error = 71
     case typingExit = 72, dragDelta = 73, dragEnded = 74
@@ -171,7 +173,14 @@ struct DeltaPayload: Codable, Equatable { var dx: Int; var dy: Int }
 
 struct WelcomePayload: Codable, Equatable { var version: Int; var screenRecording: Bool; var accessibility: Bool }
 struct WindowInfo: Codable, Equatable { var windowKey: String; var app: String; var title: String; var w: Int; var h: Int }
-struct DisplayPayload: Codable, Equatable { var slot: Int; var displayId: UInt32; var w: Int; var h: Int }
+/// `x`, `y`: the display's origin in the arrangement (global points); `side`: "left" or "right" of the main display —
+/// which edge of the laptop screen the cursor crosses to get there (the mod places Extend holograms to match).
+struct DisplayPayload: Codable, Equatable {
+    var slot: Int; var displayId: UInt32; var w: Int; var h: Int
+    var x: Int? = nil; var y: Int? = nil; var side: String? = nil
+}
+/// A live capture's new frame rate (1...60).
+struct RatePayload: Codable, Equatable { var surface: Int; var fps: Int }
 struct EndedPayload: Codable, Equatable { var surface: Int; var reason: String }
 struct ErrorPayload: Codable, Equatable { var code: String; var message: String }
 
@@ -244,6 +253,7 @@ enum Message: Equatable {
     case secureInput(SecureInputPayload)
     case workBegin(PointerPayload)
     case cursor(CursorPayload)
+    case rate(RatePayload)
 
     var type: MessageType {
         switch self {
@@ -283,6 +293,7 @@ enum Message: Equatable {
         case .secureInput: return .secureInput
         case .workBegin: return .workBegin
         case .cursor: return .cursor
+        case .rate: return .rate
         }
     }
 
@@ -303,6 +314,7 @@ enum Message: Equatable {
         case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .listApps: return try Self.json(Empty())
         case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p), .workBegin(let p): return try Self.json(p)
         case .cursor(let p): return try Self.json(p)
+        case .rate(let p): return try Self.json(p)
         case .scroll(let p): return try Self.json(p)
         case .appIcons(let p): return try Self.json(p)
         case .openApp(let p): return try Self.json(p)
@@ -408,6 +420,10 @@ enum Message: Equatable {
             default: return .click(p)
             }
         case .cursor: return .cursor(try decodeJSON(CursorPayload.self, payload))
+        case .rate:
+            let p = try decodeJSON(RatePayload.self, payload)
+            guard (1...60).contains(p.fps) else { throw ProtocolError.badPayload("RATE fps must be 1...60") }
+            return .rate(p)
         case .pointerMove:
             let p = try decodeJSON(PointerPayload.self, payload)
             try checkMainPicture(slot: p.slot, w: p.w, h: p.h)

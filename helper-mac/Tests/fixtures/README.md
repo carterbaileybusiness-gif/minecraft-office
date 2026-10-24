@@ -48,9 +48,11 @@ Swift change alters them without the fixtures being committed.
 | `open_app.bin` | OPEN_APP = 21 | `{"bottom":96,"bundle":"com.apple.Notes","slot":2}` (`bottom`: the Dock's band, display pixels) |
 | `open_app_url.bin` | OPEN_APP = 21 | `{"slot":1,"url":"https://www.youtube.com"}` |
 | `work_begin.bin` | WORK_BEGIN = 22 | `{"button":"left","h":1080,"slot":0,"w":1920,"x":960,"y":540}` |
+| `rate.bin` | RATE = 23 | `{"fps":60,"surface":7}` (a live capture's new rate, 1…60; no stream rebuild) |
 | `welcome.bin` | WELCOME = 64 | `{"accessibility":false,"screenRecording":true,"version":1}` |
 | `windows.bin` | WINDOWS = 65 | `[{"app":"Notes","h":600,"title":"Groceries — List","w":800,"windowKey":"com.apple.Notes\|4321"},{"app":"Safari","h":900,"title":"","w":1200,"windowKey":"com.apple.Safari\|99"}]` (the dash is U+2014, bytes `e2 80 94`) |
 | `display.bin` | DISPLAY = 66 | `{"displayId":5,"h":1080,"slot":1,"w":1920}` |
+| `display_side.bin` | DISPLAY = 66 | `{"displayId":5,"h":1080,"side":"left","slot":1,"w":1920,"x":-1920,"y":0}` (origin in the arrangement, and which side of the main display) |
 | `frame.bin` | FRAME = 67 | surface 7, generation 3, 2 × 2; RGBA row 0: `ff 00 00 ff`, `00 ff 00 ff`; row 1: `00 00 ff ff`, `ff ff ff 80` |
 | `patch.bin` | PATCH = 68 | surface 7, generation 3, 4 × 2, count 2: rect (0,0,1,1) pixels `0a 14 1e ff`; rect (2,1,2,1) pixels `28 32 3c ff`, `46 50 5a ff` |
 | `ended.bin` | ENDED = 69 | `{"reason":"window closed","surface":8}` |
@@ -126,12 +128,21 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   the app there forward, then posts only a **down** if the physical button is still held (the hand finishes the press:
   real drags, the real release) or a **click** if it is already up. From then on the real mouse drives the real cursor;
   the helper reports where it is about 120 times a second while it moves: `CURSOR {slot, x, y, w, h}` (slot 0 = the main
-  display in points, 1–4 = an Office display in its pixels, -1 = another monitor). Esc (the tap) or Minecraft becoming
-  active end it (`TYPING_EXIT esc|minecraft`), other apps coming forward do not; EXIT_TYPING ends it from the mod. The
-  cursor shows again when it ends (and by itself if the helper dies). SECURE_INPUT is reported as for typing.
+  display in points, 1–4 = an Office display in its pixels, -1 = another monitor). On another monitor (slot -1: no
+  hologram shows it) the system cursor is shown, and hidden again when it comes back. Esc (the tap) or Minecraft
+  becoming active end it (`TYPING_EXIT esc|minecraft`), other apps coming forward do not; EXIT_TYPING ends it from the
+  mod (it also waits a moment before taking clicks again). The cursor shows again when it ends (and by itself if the
+  helper dies) and is put back over Minecraft's window, so its mouse grab starts there. SECURE_INPUT is reported as
+  for typing. The cursor hide uses private CGS calls looked up at run time (`dlsym`); without them the cursor just
+  stays visible.
 - The Office displays are placed next to the main display (session-only display configuration): in slot order along its
-  top edge from its right edge, or from its left edge when a real monitor already touches its right edge, so the cursor
-  moves off the main display straight onto display 1. Display and Mirror captures leave the cursor out (the mod draws it).
+  top edge from its right edge, or from its left edge when a real monitor already touches its right edge (past any
+  monitor already on the left; a monitor macOS shoved aside to fit a new display in is put back where it was), so the
+  cursor moves off the main display straight onto display 1. DISPLAY then carries the display's origin (`x`, `y`) and
+  `side` (`left` / `right` of the main display); the mod puts the new Extend hologram on that side of the Mirror. The
+  arrangement is redone when a display is removed. Display and Mirror captures leave the cursor out (the mod draws it).
+- RATE `{surface, fps}` changes a running capture's frame rate in place (`SCStream.updateConfiguration`): the mod asks
+  60 fps only for the own screen the cursor is on, 30 for its other visible ones, and stops hidden ones.
 - Types 17 and 18 (WINDOWS_TO_DISPLAY / WINDOWS_BACK) are retired (spec 5.10: windows never move by themselves); they
   are unknown types now and close the connection like any other.
 - The mini Dock (spec 5.10):

@@ -76,12 +76,137 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			placedHologramVisible(context, sp);
 			cornerDragResizes(context, sp);
 			liveTextureUpdates(context, sp);
-			zoomInToWorkAndBack(context, sp);
+			if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac")) {
+				zoomInToWorkAndBack(context, sp); // zoom is Windows / Linux; a Mac works on its screens in-world (work mode)
+			}
 			inWorldPointer(context, sp);
 			scrollResizes(context, sp);
 			wallMount(context, sp);
 			offlineLook(context, sp);
+			if (Boolean.getBoolean("office.measure")) {
+				measureWork(context, sp); // opt-in, on a Mac: in-game frame rate and latency in work mode (fix round A)
+			}
 		}
+	}
+
+	/**
+	 * Opt-in measurement ({@code -Doffice.measure=true}, Mac): work mode on the own Mirror with Minecraft really inactive
+	 * (as when a Mac app has the keyboard). Logs rendered fps, Dynamic FPS's state and the in-game latency of the own
+	 * screen — picture arriving → GPU upload → on screen — with the Dynamic FPS integration on and off, and focused
+	 * outside work mode. The source is the real helper with {@code -Doffice.helperPath}, else the test pattern at the
+	 * same adaptive rate. Asserts the integration keeps the game rendering (≥ 20 fps) where Dynamic FPS is installed.
+	 */
+	private void measureWork(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac")) {
+			return;
+		}
+		boolean realHelper = System.getProperty("office.helperPath") != null;
+		boolean dynamicFps = net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("dynamic_fps");
+		FakePointer fake = new FakePointer();
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+			p.teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5); // within reach, as in inWorldPointer
+			HologramBlockEntity be = (HologramBlockEntity) p.level().getBlockEntity(emitter);
+			be.setSpec(be.spec().withMode(local.carter.office.core.Mode.MIRROR));
+		});
+		context.waitFor(mc -> clientHologram(mc) != null && clientHologram(mc).spec().mode() == local.carter.office.core.Mode.MIRROR, 100);
+		context.runOnClient(mc -> {
+			PointerClient.setPortForTesting(fake);
+			OwnScreens.useAdaptiveSourceForTesting(realHelper ? null : TestPatternSource::new);
+			OwnScreens.setEnabled(true);
+		});
+		try {
+			context.waitFor(mc -> clientHologram(mc) != null
+					&& ScreenTextureRegistry.get(clientHologram(mc).hologramId()).map(ScreenTexture::hasFrame).orElse(false), 2400);
+			HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
+			look(context, hologramCenter(spec));
+			context.waitTicks(30);
+			measurePhase(context, "focused, not working", 4_000);
+			look(context, hologramCenter(spec));
+			context.waitTicks(3);
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(5);
+			if (!context.computeOnClient(mc -> PointerClient.working())) {
+				throw new AssertionError("measurement: a click on the Mirror should start work mode, sent " + fake.calls);
+			}
+			fake.cursor = new int[] {0, 720, 450, 1440, 900}; // the real cursor on the laptop screen: the Mirror asks 60 fps
+			context.runOnClient(mc -> {
+				PointerClient.setFocusForTesting(false); // work mode sees the Mac app take the focus at once ...
+				local.carter.office.client.platform.MacPlatform.setActiveForTesting(false); // ... and the window really loses it
+			});
+			context.waitTicks(30);
+			if (!context.computeOnClient(mc -> PointerClient.working())) {
+				throw new AssertionError("measurement: work mode should be on");
+			}
+			double on = measurePhase(context, "working, Minecraft inactive, Dynamic FPS integration ON", 5_000);
+			context.runOnClient(mc -> PointerClient.setDynamicFpsAwakeOffForTesting(true));
+			double off = measurePhase(context, "working, Minecraft inactive, Dynamic FPS integration OFF", 5_000);
+			context.runOnClient(mc -> PointerClient.setDynamicFpsAwakeOffForTesting(false));
+			measurePhase(context, "working, Minecraft inactive, integration ON again", 4_000);
+			System.out.println("[measure] realHelper=" + realHelper + " dynamicFps=" + dynamicFps + " fps on=" + on + " off=" + off);
+			if (dynamicFps && on < 20) {
+				throw new AssertionError("with Dynamic FPS installed the game must keep rendering in work mode: " + on + " fps");
+			}
+		} finally {
+			fake.cursor = null;
+			context.runOnClient(mc -> {
+				PointerClient.setDynamicFpsAwakeOffForTesting(false);
+				if (PointerClient.working()) {
+					fake.typingExit.accept("esc");
+				}
+				PointerClient.setFocusForTesting(null);
+				local.carter.office.client.platform.MacPlatform.setActiveForTesting(true);
+				OwnScreens.setEnabled(false);
+				PointerClient.setPortForTesting(null);
+			});
+			context.waitTicks(5);
+		}
+	}
+
+	/** Records for {@code ms} of real time (ticking), logs one "[measure]" line and returns the rendered fps. */
+	private static double measurePhase(final ClientGameTestContext context, final String what, final long ms) {
+		context.runOnClient(mc -> local.carter.office.client.render.FrameStats.record(true));
+		long ioBefore = helperIoAllocatedBytes();
+		long start = System.currentTimeMillis();
+		long end = start + ms;
+		while (System.currentTimeMillis() < end) {
+			context.waitTick();
+		}
+		long ioBytes = helperIoAllocatedBytes() - ioBefore;
+		double ioMBps = ioBefore < 0 ? -1 : ioBytes / 1e6 / ((System.currentTimeMillis() - start) / 1000.0);
+		local.carter.office.client.render.FrameStats.Snapshot s = context.computeOnClient(mc -> local.carter.office.client.render.FrameStats.snapshot());
+		String state = context.computeOnClient(mc -> "active=" + mc.isWindowActive() + " dynamicFps=" + local.carter.office.client.render.FrameStats.dynamicFps()
+				+ " captureFps=" + (clientHologramStatic(mc) == null ? 0 : OwnScreens.fpsForTesting(clientHologramStatic(mc))));
+		context.runOnClient(mc -> local.carter.office.client.render.FrameStats.record(false));
+		System.out.println(String.format(java.util.Locale.ROOT,
+				"[measure] %s: fps=%.1f worstFrame=%.0fms arrival->upload p50=%.1f p90=%.1f ms, arrival->on screen p50=%.1f p90=%.1f ms (n=%d) %s",
+				what, s.fps(), s.worstFrameMs(), s.uploadP50(), s.uploadP90(), s.presentP50(), s.presentP90(), s.presented(), state)
+				+ String.format(java.util.Locale.ROOT, " helperIoAlloc=%.2fMB/s", ioMBps));
+		return s.fps();
+	}
+
+	/** Bytes the helper's socket thread has allocated so far (the frame path: no new pixel array per frame), or -1. */
+	private static long helperIoAllocatedBytes() {
+		if (!(java.lang.management.ManagementFactory.getThreadMXBean() instanceof com.sun.management.ThreadMXBean mx)) {
+			return -1;
+		}
+		for (Thread t : Thread.getAllStackTraces().keySet()) {
+			if ("office-helper-io".equals(t.getName())) {
+				return mx.getThreadAllocatedBytes(t.threadId());
+			}
+		}
+		return -1;
+	}
+
+	/** The id of the nearest own Mirror's hologram (measurement logging), or null. */
+	private static @org.jspecify.annotations.Nullable UUID clientHologramStatic(final Minecraft mc) {
+		for (HologramBlockEntity be : local.carter.office.client.interact.HologramTracker.loaded()) {
+			if (be.spec() != null && be.spec().mode() == local.carter.office.core.Mode.MIRROR && mc.player != null && be.isOwner(mc.player.getUUID())) {
+				return be.hologramId();
+			}
+		}
+		return null;
 	}
 
 	/** Clear a 9x6x8 box north of the player, a stone wall behind it, the player facing north. */
@@ -135,17 +260,36 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		Vec3d center = hologramCenter(HologramEmitterBlock.defaultSpec(UUID.randomUUID(), 1, 0f));
 		look(context, center);
 		context.waitTicks(10);
-		int[] before = samplePixel(context.takeScreenshot("hologram-wall-only"));
+		BufferedImage before = read(context.takeScreenshot("hologram-wall-only"));
 
 		sp.getServer().runOnServer(server -> placeHologram(server, emitter, player(server).getUUID()));
 		sp.getConnection().waitForChunksRender();
 		context.waitFor(mc -> clientHologram(mc) != null && clientHologram(mc).spec() != null && clientHologram(mc).ownerOnline());
 		context.waitTicks(10);
-		int[] after = samplePixel(context.takeScreenshot("hologram-placed"));
+		BufferedImage after = read(context.takeScreenshot("hologram-placed"));
 
-		int diff = Math.abs(before[0] - after[0]) + Math.abs(before[1] - after[1]) + Math.abs(before[2] - after[2]);
-		if (diff < 40) {
-			throw new AssertionError("hologram not visible: pixel above the crosshair went from " + rgb(before) + " to " + rgb(after));
+		// the panel (its frame, its picture or placeholder) replaces the wall in the middle of the view: count changed
+		// pixels in a box there rather than one pixel, whose colour depends on which placeholder shows (the helper's
+		// setup state settles asynchronously)
+		int w = before.getWidth() / 5;
+		int h = before.getHeight() / 5;
+		int x0 = before.getWidth() / 2 - w / 2;
+		int y0 = before.getHeight() / 2 - h;
+		int changed = 0;
+		for (int y = y0; y < y0 + h; y++) {
+			for (int x = x0; x < x0 + w; x++) {
+				int p = before.getRGB(x, y);
+				int q = after.getRGB(x, y);
+				if (Math.abs(((p >> 16) & 0xFF) - ((q >> 16) & 0xFF)) + Math.abs(((p >> 8) & 0xFF) - ((q >> 8) & 0xFF)) + Math.abs((p & 0xFF) - (q & 0xFF)) > 20) {
+					changed++; // the same view before and after: only what the panel covers differs
+				}
+			}
+		}
+		if (changed < w * h / 10) {
+			int[] b = {(before.getRGB(x0 + w / 2, y0 + h / 2) >> 16) & 0xFF, (before.getRGB(x0 + w / 2, y0 + h / 2) >> 8) & 0xFF, before.getRGB(x0 + w / 2, y0 + h / 2) & 0xFF};
+			int[] a = {(after.getRGB(x0 + w / 2, y0 + h / 2) >> 16) & 0xFF, (after.getRGB(x0 + w / 2, y0 + h / 2) >> 8) & 0xFF, after.getRGB(x0 + w / 2, y0 + h / 2) & 0xFF};
+			throw new AssertionError("hologram not visible: only " + changed + " of " + (w * h) + " pixels changed in the middle of the view (e.g. "
+					+ rgb(b) + " → " + rgb(a) + ")");
 		}
 	}
 
@@ -518,6 +662,11 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		}
 
 		@Override
+		public void activateMinecraft() {
+			calls.add("activate");
+		}
+
+		@Override
 		public void exitTyping() {
 			calls.add("exit-typing");
 		}
@@ -606,7 +755,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 					|| !PointerClient.WORK_HINT.equals(context.computeOnClient(mc -> PointerClient.typingHint()))) {
 				throw new AssertionError("work mode shows its hint screen: \"" + PointerClient.WORK_HINT + "\"");
 			}
-			// the camera is frozen: moving the mouse turns nothing
+			// the mouse alone turns nothing (until the helper reports where the real cursor is)
 			float yaw0 = context.computeOnClient(mc -> mc.player.getYRot());
 			float pitch0 = context.computeOnClient(mc -> mc.player.getXRot());
 			context.getInput().moveCursor(240, 120);
@@ -614,20 +763,39 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			float yaw1 = context.computeOnClient(mc -> mc.player.getYRot());
 			float pitch1 = context.computeOnClient(mc -> mc.player.getXRot());
 			if (yaw1 != yaw0 || pitch1 != pitch0) {
-				throw new AssertionError("the camera must not turn while working: yaw " + yaw0 + " → " + yaw1 + ", pitch " + pitch0 + " → " + pitch1);
+				throw new AssertionError("the mouse must not turn the camera while working: yaw " + yaw0 + " → " + yaw1 + ", pitch " + pitch0 + " → " + pitch1);
 			}
-			// the real cursor the helper reports is drawn where it is: on display 1 at (1440, 270) = u 0.75, v 0.25
+			// the real cursor the helper reports is drawn where it is: on display 1 at (1440, 270) = u 0.75, v 0.25 ...
 			fake.cursor = new int[] {1, 1440, 270, 1920, 1080};
 			context.waitTicks(3);
+			// ... and the view follows it: within ~100 ms the crosshair aims at that point of the hologram
+			context.waitTicks(4);
+			Frame onScreen = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), spec);
+			Vec3d cursorPoint = onScreen.center().add(onScreen.right().scale((1440.5 / 1920 - 0.5) * onScreen.w()))
+					.add(onScreen.up().scale((0.5 - 270.5 / 1080) * onScreen.h()));
+			float[] wanted = context.computeOnClient(mc -> local.carter.office.client.pointer.ViewFollow.aim(
+					new Vec3d(mc.player.getEyePosition().x, mc.player.getEyePosition().y, mc.player.getEyePosition().z), cursorPoint));
+			float[] looking = context.computeOnClient(mc -> PointerClient.look());
+			if (Math.abs(wrapDegrees(looking[0] - wanted[0])) > 0.5f
+					|| Math.abs(looking[1] - wanted[1]) > 0.5f) {
+				throw new AssertionError("the view should follow the cursor: looking " + java.util.Arrays.toString(looking) + ", cursor at "
+						+ java.util.Arrays.toString(wanted));
+			}
 			double[] drawn = context.computeOnClient(mc -> PointerClient.cursorOn(clientHologram(mc).spec()));
 			if (drawn == null || Math.abs(drawn[0] - 1440.5 / 1920) > 1e-6 || Math.abs(drawn[1] - 270.5 / 1080) > 1e-6) {
 				throw new AssertionError("the cursor should be drawn at the helper's position, was " + java.util.Arrays.toString(drawn));
 			}
 			context.takeScreenshot("pointer-work-cursor");
+			float[] before = context.computeOnClient(mc -> PointerClient.look());
 			fake.cursor = new int[] {-1, 0, 0, 0, 0}; // moved onto another monitor
-			context.waitTicks(2);
+			context.waitTicks(4);
 			if (context.computeOnClient(mc -> PointerClient.cursorOn(clientHologram(mc).spec())) != null) {
 				throw new AssertionError("a cursor on another monitor isn't drawn on the hologram");
+			}
+			float[] held = context.computeOnClient(mc -> PointerClient.look());
+			if (held[0] != before[0] || held[1] != before[1]) {
+				throw new AssertionError("with the cursor on another monitor the view holds still: " + java.util.Arrays.toString(before)
+						+ " → " + java.util.Arrays.toString(held));
 			}
 			// Esc (the helper's TYPING_EXIT): the camera turns again, Minecraft's window is normal again, no cursor
 			context.runOnClient(mc -> fake.typingExit.accept("esc"));
@@ -656,6 +824,39 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
 			context.waitTicks(3);
 			Frame f = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), spec);
+
+			// 2b. other ways out of work mode (a fake focus): another screen replacing the hint (death, a menu) ends it AND
+			// brings Minecraft back; focus coming back (⌘-Tab to Minecraft) ends it with a normal window
+			fake.calls.clear();
+			look(context, hologramCenter(spec));
+			context.waitTicks(2);
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(3);
+			context.runOnClient(mc -> PointerClient.setFocusForTesting(false)); // the Mac app has the keyboard now
+			context.waitTicks(3);
+			context.runOnClient(mc -> mc.gui.setScreen(new net.minecraft.client.gui.screens.inventory.InventoryScreen(mc.player)));
+			context.waitTicks(3);
+			if (!fake.calls.contains("exit-typing") || !fake.calls.contains("activate")) {
+				throw new AssertionError("a screen replacing the work hint must end work mode and bring Minecraft back, sent " + fake.calls);
+			}
+			context.runOnClient(mc -> mc.gui.setScreen(null));
+			context.runOnClient(mc -> PointerClient.setFocusForTesting(true));
+			context.waitTicks(3);
+			fake.calls.clear();
+			look(context, hologramCenter(spec));
+			context.waitTicks(2);
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(3);
+			context.runOnClient(mc -> PointerClient.setFocusForTesting(false));
+			context.waitTicks(3);
+			context.runOnClient(mc -> PointerClient.setFocusForTesting(true)); // ⌘-Tab back to Minecraft
+			context.waitTicks(4);
+			String afterFocus = fake.calls.stream().filter(c -> c.startsWith("layer")).reduce((a, b) -> b).orElse("");
+			if (context.computeOnClient(mc -> PointerClient.working()) || !fake.calls.contains("exit-typing") || !"layer normal".equals(afterFocus)) {
+				throw new AssertionError("focus back in Minecraft must end work mode with a normal window, sent " + fake.calls);
+			}
+			context.runOnClient(mc -> PointerClient.setFocusForTesting(null));
+			context.waitTicks(2);
 
 			// 3. the wheel scrolls the app, not the hotbar
 			look(context, hologramCenter(spec));
@@ -789,6 +990,11 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		}
 	}
 
+	private static float wrapDegrees(final float d) {
+		float w = d % 360f;
+		return w > 180f ? w - 360f : w <= -180f ? w + 360f : w;
+	}
+
 	/** Index of the first call "<prefix> x,y" with x, y within 2 of the expected pixel (float rounding of the look ray), or -1. */
 	private static int indexOfNear(final java.util.List<String> calls, final String prefix, final int x, final int y) {
 		for (int i = 0; i < calls.size(); i++) {
@@ -896,18 +1102,6 @@ public class HologramClientGameTests implements FabricClientGameTest {
 	}
 
 	/** RGB just above the crosshair (the crosshair itself would hide the hologram at the exact centre). */
-	private static int[] samplePixel(final Path screenshot) {
-		try {
-			BufferedImage img = ImageIO.read(screenshot.toFile());
-			int x = img.getWidth() / 2;
-			int y = img.getHeight() / 2 - Math.max(20, img.getHeight() / 20);
-			int c = img.getRGB(x, y);
-			return new int[] {(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF};
-		} catch (IOException e) {
-			throw new AssertionError("cannot read screenshot " + screenshot, e);
-		}
-	}
-
 	private static String rgb(final int[] c) {
 		return "(" + c[0] + "," + c[1] + "," + c[2] + ")";
 	}

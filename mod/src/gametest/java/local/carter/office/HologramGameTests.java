@@ -146,6 +146,24 @@ public class HologramGameTests {
 		h.succeed();
 	}
 
+	/** Switching a screen to Mirror (your whole screen) makes it Private; afterwards it can be made Public on purpose. */
+	@GameTest
+	public void switchingToMirrorMakesItPrivate(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		place(h, a, new BlockPos(1, 1, 1)); // the Mirror
+		HologramBlockEntity be = place(h, a, new BlockPos(3, 1, 1)); // Extend, Public
+		BlockPos abs = h.absolutePos(new BlockPos(3, 1, 1));
+		HologramSpec s = be.spec();
+		h.assertValueEqual(s.privacy(), Privacy.PUBLIC, "an Extend screen starts Public");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(abs, s.shape(), Mode.MIRROR, Privacy.PUBLIC, s.displaySlot(), null)),
+				"switch to Mirror");
+		h.assertValueEqual(be.spec().privacy(), Privacy.PRIVATE, "becoming a Mirror makes it Private");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(abs, s.shape(), Mode.MIRROR, Privacy.PUBLIC, s.displaySlot(), null)),
+				"make the Mirror Public on purpose");
+		h.assertValueEqual(be.spec().privacy(), Privacy.PUBLIC, "an existing Mirror can be made Public");
+		h.succeed();
+	}
+
 	/** The client's corner drag sends ResizeHologram then MoveHologram (fixed opposite corner); both apply in order. */
 	@GameTest
 	public void resizeThenMoveKeepsOppositeCorner(GameTestHelper h) {

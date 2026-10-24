@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.helper.HelperConnection;
+import local.carter.office.client.helper.HelperProtocol;
 import local.carter.office.client.helper.HelperProtocol.Capture;
 import local.carter.office.client.helper.HelperProtocol.CaptureKind;
 import local.carter.office.client.helper.HelperProtocol.Frame;
@@ -24,7 +25,8 @@ import local.carter.office.core.Mode;
  * so late frames of an older capture are ignored. Each FRAME / PATCH is passed to the sink and acknowledged with READY
  * (the helper keeps one frame in flight per surface).
  *
- * <p>Rate: {@link #setMaxFps} 0 stops the capture (STOP) without ending the source; a new rate re-captures. A helper
+ * <p>Rate: {@link #setMaxFps} 0 stops the capture (STOP) without ending the source; from 0 a rate re-captures, while
+ * capturing a new rate is a RATE on the live stream (no rebuild). A helper
  * that drops or restarts is not the end of the source: it re-captures after the next WELCOME (and DISPLAY). Only
  * "window closed" and capture failures end it ({@link FrameSink#ended}); "no permission" shows NEEDS_HELPER and waits
  * for a reconnect with permission.
@@ -90,12 +92,21 @@ public final class MacHelperSource implements CaptureSource {
 
 	@Override
 	public void setMaxFps(final int newFps) {
+		int rateSurface = 0;
+		int f = Math.max(0, newFps);
 		synchronized (lock) {
-			int f = Math.max(0, newFps);
 			if (!running || f == fps) {
 				return;
 			}
+			// a running capture just changes its rate (RATE: the helper updates the live stream, nothing is rebuilt)
+			if (fps > 0 && f > 0 && surface != 0) {
+				rateSurface = surface;
+			}
 			fps = f;
+		}
+		if (rateSurface != 0) {
+			helper.send(new HelperProtocol.Rate(rateSurface, Math.min(60, f)));
+			return;
 		}
 		update(true);
 	}

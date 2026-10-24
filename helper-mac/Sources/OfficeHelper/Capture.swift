@@ -191,6 +191,12 @@ enum CaptureError: Error, CustomStringConvertible {
 
     func setZoomed(_ zoomed: Bool) { setFrameRate(zoomed ? Self.zoomedFPS : requestedFPS) }
 
+    /// RATE: a new frame rate on the live stream (SCStream.updateConfiguration; the stream and surface stay).
+    func setRate(_ fps: Int) {
+        requestedFPS = max(1, min(60, fps))
+        setFrameRate(requestedFPS)
+    }
+
     private func setFrameRate(_ fps: Int) {
         guard let stream, let configuration, configuration.minimumFrameInterval.timescale != CMTimeScale(fps) else { return }
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))

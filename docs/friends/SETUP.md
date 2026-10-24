@@ -197,7 +197,12 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
    - While you work, Minecraft stays on top of your apps and lets your clicks through to them; after Esc it is a normal
      window again.
    - Your **Mirror starts Private** (only you see it: it shows your whole screen). Make it Public in its settings if
-     you want friends to see it.
+     you want friends to see it. Switching a screen to Mirror makes it Private too.
+   - Friends see your public Extend screens **without your cursor** (it's drawn only on your own client).
+   - While you work, **your view follows the cursor** around your screens, so the screen you're using stays in front of
+     you. On a real second monitor it holds still.
+   - Place a second screen and it moves next to your Mirror on the side your Mac put that display (chat says which edge
+     of the Mirror to move the cursor across).
 7. **Work on it (Windows).** **Click your hologram.** The camera zooms in until it fills your view, and your real
    mouse and keyboard now control your real computer. On a **Mirror** hologram, Minecraft is minimized and you are
    simply on your normal desktop. **Double-tap Esc**, or click back into Minecraft (taskbar), to come back. Backup:

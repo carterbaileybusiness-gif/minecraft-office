@@ -114,6 +114,12 @@ public final class PointerClient {
 	private boolean secureInput;
 	/** The real cursor while working (helper's CURSOR), or null. */
 	private int @Nullable [] cursor;
+	/** When the view last followed the cursor (System.nanoTime), for the smoothing; 0 = not following. */
+	private long followNanos;
+	/** Work mode as Dynamic FPS was last told about it. */
+	private boolean dynamicFpsWorking;
+	/** Tests: Minecraft's window focus as the mod sees it (null = the real one). */
+	private @Nullable Boolean focusOverride;
 	private boolean regrabWhenFocused;
 	private double scrollX;
 	private double scrollY;
@@ -192,7 +198,7 @@ public final class PointerClient {
 			return;
 		}
 		Minecraft mc = Minecraft.getInstance();
-		boolean focused = mc.isWindowActive();
+		boolean focused = focused(mc);
 		MirrorWindow.Layer layer = mirror.layer(now);
 		if (!layer.equals(applied) || focused != appliedFocus) {
 			applied = port.windowLayerApplied(layer.floating(), layer.clickThrough()) ? layer : null;
@@ -208,9 +214,36 @@ public final class PointerClient {
 	public static final String WORK_HINT = "Working on your Mac — Esc (or ⌘-Tab) to return";
 	public static final String PASSWORD_HINT = "Password field: press ⌘-Tab to return";
 
-	/** In work mode right now (own screens then capture faster). */
+	/** In work mode right now. */
 	public static boolean working() {
 		return INSTANCE.typing.active();
+	}
+
+	private static volatile boolean dynamicFpsAwakeOff;
+
+	/** Dynamic FPS should treat the game as focused (DynamicFpsFocusMixin): while working, unless a test turned it off. */
+	public static boolean keepsDynamicFpsAwake() {
+		return working() && !dynamicFpsAwakeOff;
+	}
+
+	/** Measurements: switch the Dynamic FPS integration off (true) to see the throttle it prevents, or on again. */
+	public static void setDynamicFpsAwakeOffForTesting(final boolean off) {
+		dynamicFpsAwakeOff = off;
+		DynamicFps.recheck();
+	}
+
+	/** Working and the real cursor is on the screen this hologram shows (that one captures at 60 fps). */
+	public static boolean cursorOnScreen(final HologramSpec spec) {
+		return cursorOn(spec) != null;
+	}
+
+	/** Tests: pretend Minecraft's window has (true) or lacks (false) the focus; null = the real focus again. */
+	public static void setFocusForTesting(final @Nullable Boolean focused) {
+		INSTANCE.focusOverride = focused;
+	}
+
+	private boolean focused(final Minecraft mc) {
+		return focusOverride != null ? focusOverride : mc.isWindowActive();
 	}
 
 	/**
@@ -227,7 +260,7 @@ public final class PointerClient {
 
 	private void bringBack() {
 		PointerPort port = port();
-		if (port != null && !Minecraft.getInstance().isWindowActive()) {
+		if (port != null && !focused(Minecraft.getInstance())) {
 			port.activateMinecraft();
 		}
 		regrabWhenFocused = true;
@@ -269,6 +302,9 @@ public final class PointerClient {
 		if (typing.active()) {
 			mc.getFramerateLimitTracker().onInputReceived(); // input goes to the computer: no AFK frame-rate drop
 			cursor = port.workCursor();
+			followCursor(mc);
+		} else {
+			followNanos = 0;
 		}
 		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
 		Aim a = typing.active() ? null : computeAim(mc, partial);
@@ -278,6 +314,60 @@ public final class PointerClient {
 		dockHologram = hover >= 0 ? a.be().hologramId() : null;
 		dockHover = hover;
 		applyWindow(now);
+	}
+
+	/**
+	 * Work mode: the view follows the real cursor (Carter's ruling, round 2 fix) — the camera turns so the crosshair sits
+	 * on the cursor's point on the own hologram that shows its screen (the nearest, if several do), smoothed by {@link
+	 * ViewFollow}. On a real monitor (slot -1) or with no report yet, the view holds still. The body doesn't move.
+	 */
+	private void followCursor(final Minecraft mc) {
+		LocalPlayer player = mc.player;
+		int[] c = cursor;
+		long now = System.nanoTime();
+		double dtMs = followNanos == 0 ? 16 : Math.min(100, (now - followNanos) / 1e6);
+		followNanos = now;
+		if (player == null || c == null || c[0] < 0) {
+			return;
+		}
+		Vec3 eye = player.getEyePosition(1f);
+		local.carter.office.core.Vec3d eyeD = new local.carter.office.core.Vec3d(eye.x, eye.y, eye.z);
+		local.carter.office.core.Vec3d target = null;
+		double best = Double.MAX_VALUE;
+		for (HologramBlockEntity be : local.carter.office.client.interact.HologramTracker.loaded()) {
+			HologramSpec spec = HologramPreview.effective(be);
+			if (spec == null || !be.isOwner(player.getUUID())) {
+				continue;
+			}
+			double[] uv = WorkCursor.on(spec, c);
+			if (uv == null) {
+				continue;
+			}
+			net.minecraft.core.BlockPos pos = be.getBlockPos();
+			local.carter.office.core.HologramGeometry.Frame f =
+					local.carter.office.client.render.HologramPlacement.frame(pos.getX(), pos.getY(), pos.getZ(), spec);
+			local.carter.office.core.Vec3d point = f.center().add(f.right().scale((uv[0] - 0.5) * f.w())).add(f.up().scale((0.5 - uv[1]) * f.h()));
+			double d = point.sub(eyeD).length();
+			if (d < best) {
+				best = d;
+				target = point;
+			}
+		}
+		if (target == null) {
+			return;
+		}
+		float[] aim = ViewFollow.aim(eyeD, target);
+		float[] next = ViewFollow.step(player.getYRot(), player.getXRot(), aim[0], aim[1], dtMs);
+		player.setYRot(next[0]);
+		player.setXRot(Math.max(-90f, Math.min(90f, next[1])));
+		player.yRotO = player.getYRot(); // our own smoothing: no extra interpolation lag
+		player.xRotO = player.getXRot();
+	}
+
+	/** Where the view is aimed while following: tests compare with {@link ViewFollow#aim}. */
+	public static float[] look() {
+		LocalPlayer player = Minecraft.getInstance().player;
+		return player == null ? new float[] {0, 0} : new float[] {player.getYRot(), player.getXRot()};
 	}
 
 	/** The Dock icon of aim {@code a}'s hologram under the crosshair, or -1 (only on a live screen: the Dock is drawn there). */
@@ -490,6 +580,8 @@ public final class PointerClient {
 		// The hint screen first: it releases the mouse (Minecraft centres the cursor and stops turning the camera), then
 		// Minecraft's window lets clicks through, then the helper puts the real cursor at the point and presses there.
 		typing.enter(Util.getMillis());
+		dynamicFpsWorking = true;
+		DynamicFps.recheck(); // Dynamic FPS: "focused" from now on, so the game keeps rendering at its normal rate
 		secureInput = false;
 		cursor = null;
 		mirror.workBegan();
@@ -511,11 +603,16 @@ public final class PointerClient {
 			return;
 		}
 		mirror.enterWorld();
-		boolean active = mc.isWindowActive();
+		if (typing.active() != dynamicFpsWorking) {
+			dynamicFpsWorking = typing.active();
+			DynamicFps.recheck(); // full frame rate while working, its own rules again after
+		}
+		boolean active = focused(mc);
 		typing.focus(active, now); // focus left → typing; came back (the player clicked Minecraft) → back to the game
 		typing.tick(now);
 		if (typing.active() && typing.state() == TypingMode.State.TYPING && screen != null && mc.gui.screen() != screen) {
 			typing.leave(); // another screen replaced the hint (death, a disconnect screen)
+			bringBack(); // the helper ends work mode without re-activating Minecraft: do it ourselves
 		}
 		if (!typing.active()) {
 			workEnded(); // every way work mode ended (Esc, focus back, timeouts, the hint replaced, the helper gone)

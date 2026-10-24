@@ -188,6 +188,8 @@ class HelperProtocolTest {
         check("secure_input", new SecureInput(true));
         checkModMessage("work_begin", new WorkBegin(0, 960, 540, PointerButton.LEFT, 1920, 1080));
         check("cursor", new Cursor(1, 100, 200, 1920, 1080));
+        checkModMessage("rate", new Rate(7, 60));
+        assertEquals(23, HelperProtocol.RATE);
         assertEquals(22, HelperProtocol.WORK_BEGIN);
         assertEquals(79, HelperProtocol.CURSOR);
         assertEquals(78, HelperProtocol.SECURE_INPUT);
@@ -247,6 +249,7 @@ class HelperProtocolTest {
     @Test
     void display() throws IOException {
         check("display", new Display(1, 5L, 1920, 1080));
+        check("display_side", new Display(1, 5L, 1920, 1080, -1920, 0, "left"));
     }
 
     @Test
@@ -310,9 +313,9 @@ class HelperProtocolTest {
     @Test
     void everyFixtureDecodesAndReencodes() throws IOException {
         List<byte[]> all = allFixtures();
-        // one per message type (36), a second and third CAPTURE (window, main), Mirror (slot 0) POINTER_DOWN / CLICK /
+        // one per message type (37), a second and third CAPTURE, a DISPLAY with its side (window, main), Mirror (slot 0) POINTER_DOWN / CLICK /
         // SCROLL, and OPEN_APP of a web page
-        assertEquals(42, all.size());
+        assertEquals(44, all.size());
         for (byte[] bytes : all) {
             FrameReader reader = FrameReader.forHelperMessages();
             reader.push(bytes, 0, bytes.length);
@@ -429,7 +432,7 @@ class HelperProtocolTest {
 
     @Test
     void unknownTypeRejected() {
-        for (int type : new int[] {0, 17, 18, 23, 63, 80, 255}) { // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK
+        for (int type : new int[] {0, 17, 18, 24, 63, 80, 255}) { // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK
             FrameReader reader = FrameReader.forHelperMessages();
             byte[] bytes = envelope(type, "{}");
             reader.push(bytes, 0, bytes.length);

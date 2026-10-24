@@ -112,6 +112,7 @@ import ScreenCaptureKit
         case .removeDisplay(let p): removeDisplay(slot: p.slot)
         case .capture(let p): capture(p)
         case .stop(let p): stopCapture(surface: p.surface)
+        case .rate(let p): captures[p.surface]?.setRate(p.fps)
         case .zoomIn(let p): zoomIn(p)
         case .zoomOut: endZoom(notifyMod: false)
         case .requestPermissions: requestPermissions()
@@ -162,7 +163,10 @@ import ScreenCaptureKit
             }
             guard self.displays.displayID(slot: spec.slot) == id else { return } // removed meanwhile
             self.displays.arrange() // next to the main display, like monitors next to a laptop
-            self.server.send(.display(DisplayPayload(slot: spec.slot, displayId: id, w: spec.width, h: spec.height)))
+            let origin = CGDisplayBounds(id).origin, main = CGDisplayBounds(CGMainDisplayID())
+            self.server.send(.display(DisplayPayload(slot: spec.slot, displayId: id, w: spec.width, h: spec.height,
+                                                     x: Int(origin.x), y: Int(origin.y),
+                                                     side: origin.x < main.minX ? "left" : "right")))
         }
     }
 
@@ -170,6 +174,7 @@ import ScreenCaptureKit
         guard (1...DisplaySpec.maxSlots).contains(slot) else { sendError("bad_slot", "slot must be 1...\(DisplaySpec.maxSlots), got \(slot)"); return }
         endCaptures(onSlot: slot, reason: "display removed")
         displays.remove(slot: slot)
+        displays.arrange() // the rest close up next to the main display
     }
 
     private func displayGone(slot: Int) { endCaptures(onSlot: slot, reason: "display removed") }

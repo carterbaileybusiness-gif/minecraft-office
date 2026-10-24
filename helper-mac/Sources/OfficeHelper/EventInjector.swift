@@ -136,8 +136,15 @@ enum EventInjector {
     }
 }
 
-@_silgen_name("_CGSDefaultConnection") private func _CGSDefaultConnection() -> Int32
-@_silgen_name("CGSSetConnectionProperty") private func CGSSetConnectionProperty(_ cid: Int32, _ target: Int32, _ key: CFString, _ value: CFTypeRef) -> Int32
+/// The window server's private calls, looked up at run time: if a macOS drops them, the cursor just isn't hidden.
+private enum CGSPrivate {
+    typealias DefaultConnection = @convention(c) () -> Int32
+    typealias SetConnectionProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+    static let defaultConnection: DefaultConnection? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_CGSDefaultConnection")
+        .map { unsafeBitCast($0, to: DefaultConnection.self) }
+    static let setConnectionProperty: SetConnectionProperty? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSSetConnectionProperty")
+        .map { unsafeBitCast($0, to: SetConnectionProperty.self) }
+}
 
 /// Hides the system cursor while the player works through a hologram (the hologram draws it instead, so no second
 /// cursor floats over Minecraft's view). A background app may only hide the cursor with the window server's
@@ -153,8 +160,12 @@ enum EventInjector {
 
     static func hide() {
         guard !hidden else { return }
-        let cid = _CGSDefaultConnection()
-        let set = CGSSetConnectionProperty(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        guard let connection = CGSPrivate.defaultConnection, let setProperty = CGSPrivate.setConnectionProperty else {
+            log("cursor not hidden: this macOS lacks the window server's background-cursor calls")
+            return
+        }
+        let cid = connection()
+        let set = setProperty(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
         hidden = true
         reassert()
         log("cursor hidden (connection \(cid), background property \(set == 0 ? "set" : "error \(set)"))")

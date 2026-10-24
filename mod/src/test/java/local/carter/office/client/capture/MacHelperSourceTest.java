@@ -252,9 +252,12 @@ class MacHelperSourceTest {
 		sent.clear();
 		s.setMaxFps(30);
 		assertTrue(sent.isEmpty(), "same rate: nothing sent");
-		s.setMaxFps(5);
-		assertEquals(new Stop(c.surface()), sent.get(0));
-		assertEquals(5, last(Capture.class).fps());
+		s.setMaxFps(60);
+		assertEquals(List.of(new local.carter.office.client.helper.HelperProtocol.Rate(c.surface(), 60)), sent,
+				"a live capture changes its rate in place: RATE, no STOP / CAPTURE (no stream rebuild entering work mode)");
+		s.setMaxFps(30);
+		assertEquals(new local.carter.office.client.helper.HelperProtocol.Rate(c.surface(), 30), sent.get(sent.size() - 1));
+		assertEquals(0, sent.stream().filter(m -> m instanceof Stop || m instanceof Capture).count());
 	}
 
 	@Test

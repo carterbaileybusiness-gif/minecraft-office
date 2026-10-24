@@ -23,6 +23,9 @@ import CoreGraphics
     }
 
     private(set) var displays: [Int: Live] = [:]
+    /// Where the other displays (real monitors) were before an Office display first came online: macOS shoves a monitor
+    /// aside to fit a new display in, and `arrange` puts it back there (and arranges around where it really is).
+    private var othersHome: [CGDirectDisplayID: CGPoint] = [:]
     /// The window server ended a display on its own (slot).
     var onTerminated: ((Int) -> Void)?
     var log: (String) -> Void = { _ in }
@@ -37,6 +40,7 @@ import CoreGraphics
             if existing.spec == spec { return existing.displayID }
             remove(slot: spec.slot)
         }
+        rememberOthers()
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.queue = DispatchQueue.main
         descriptor.name = spec.name
@@ -74,34 +78,54 @@ import CoreGraphics
     func remove(slot: Int) {
         guard let live = displays.removeValue(forKey: slot) else { return }
         log("removed \(live.spec.name) id \(live.displayID)")
+        if displays.isEmpty { othersHome = [:] }
     }
 
-    func removeAll() { for slot in Array(displays.keys) { remove(slot: slot) } }
-
-    /// Puts the Office displays next to the main display (DisplayArrangement) for this login session, when they aren't
-    /// there already. Other displays are never moved.
-    func arrange() {
-        let main = CGDisplayBounds(CGMainDisplayID())
+    /// Online displays that are neither the main display nor ours.
+    private func otherIDs() -> [CGDirectDisplayID] {
         let ourIDs = Set(displays.values.map(\.displayID))
         var count: UInt32 = 0
         CGGetOnlineDisplayList(0, nil, &count)
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         CGGetOnlineDisplayList(count, &ids, &count)
-        let others = ids.prefix(Int(count)).filter { $0 != CGMainDisplayID() && !ourIDs.contains($0) }.map { CGDisplayBounds($0) }
+        return ids.prefix(Int(count)).filter { $0 != CGMainDisplayID() && !ourIDs.contains($0) }
+    }
+
+    /// Before a display of ours appears: note where each monitor not seen yet is.
+    private func rememberOthers() {
+        for id in otherIDs() where othersHome[id] == nil { othersHome[id] = CGDisplayBounds(id).origin }
+    }
+
+    func removeAll() { for slot in Array(displays.keys) { remove(slot: slot) } }
+
+    /// Puts the Office displays next to the main display (DisplayArrangement) for this login session, when they aren't
+    /// there already. Other displays are only put back where they were before ours came online (macOS shoves a monitor
+    /// at the main display's right edge aside for a new display; that monitor's edge stays the monitor's).
+    func arrange() {
+        let main = CGDisplayBounds(CGMainDisplayID())
+        let otherIDs = otherIDs()
+        // each monitor where it was before ours came (macOS may have shoved it aside to fit ours in)
+        let home = otherIDs.map { id -> (id: CGDirectDisplayID, now: CGRect, home: CGRect) in
+            let now = CGDisplayBounds(id)
+            return (id, now, CGRect(origin: othersHome[id] ?? now.origin, size: now.size))
+        }
         let ours = displays.map { (slot: $0.key, size: CGSize(width: $0.value.spec.width, height: $0.value.spec.height)) }
-        let wanted = DisplayArrangement.origins(main: main, others: others, ours: ours)
+        let wanted = DisplayArrangement.origins(main: main, others: home.map(\.home), ours: ours)
         let moves = wanted.filter { slot, origin in
             guard let id = displays[slot]?.displayID else { return false }
             return CGDisplayBounds(id).origin != origin
         }
-        guard !moves.isEmpty else { return }
+        let restores = home.filter { $0.now.origin != $0.home.origin }
+        guard !moves.isEmpty || !restores.isEmpty else { return }
         var config: CGDisplayConfigRef?
         guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
         for (slot, origin) in moves {
             if let id = displays[slot]?.displayID { CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y)) }
         }
+        for r in restores { CGConfigureDisplayOrigin(config, r.id, Int32(r.home.minX), Int32(r.home.minY)) }
         let result = CGCompleteDisplayConfiguration(config, .forSession)
-        log("arranged \(moves.keys.sorted()) next to the main display: \(result == .success ? "ok" : "error \(result.rawValue)")")
+        log("arranged \(moves.keys.sorted()) next to the main display\(restores.isEmpty ? "" : ", \(restores.count) monitor(s) back where they were"): "
+            + (result == .success ? "ok" : "error \(result.rawValue)"))
     }
 
     static func isOnline(_ id: CGDirectDisplayID) -> Bool {

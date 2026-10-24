@@ -20,6 +20,14 @@ class CaptureRateTest {
 	}
 
 	@Test
+	void sixtyOnlyForTheVisibleScreenTheCursorIsOn() {
+		assertEquals(60, CaptureRate.fps(true, false, true), "the screen the real cursor is on");
+		assertEquals(30, CaptureRate.fps(true, false, false), "the other visible screens");
+		assertEquals(0, CaptureRate.fps(false, false, true), "not visible: nothing, even with the cursor there");
+		assertEquals(60, CaptureRate.fps(false, true, false), "zoomed in (Windows)");
+	}
+
+	@Test
 	void visibilityChangesOnlyAfterLastingOneSecond() {
 		CaptureRate.Visibility v = new CaptureRate.Visibility();
 		assertTrue(v.update(true, 0), "first look counts at once");

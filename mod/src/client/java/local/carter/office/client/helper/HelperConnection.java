@@ -292,6 +292,7 @@ public final class HelperConnection implements HelperChannel {
 				Message m;
 				while ((m = read(ch, reader, buf)) != null) {
 					listener.message(m);
+					reader.release(m); // sinks copy pixels before returning (FrameSink): reuse the payload array
 				}
 			} else if (first instanceof HelperError e && e.isBusy()) {
 				LOGGER.info("Office helper is still busy with an earlier connection; retrying");

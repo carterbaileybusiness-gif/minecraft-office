@@ -82,6 +82,7 @@ import CoreGraphics
             if typing.active { return } // already working: the real mouse is in charge
             beginWork(at: point, button: button, slot: p.slot)
         case .exitTyping:
+            clickWait += 1 // a work begin / click still waiting (click-through, activation) must not happen after this
             perform(typing.exit())
         default:
             break
@@ -205,6 +206,8 @@ import CoreGraphics
         guard let location = CGEvent(source: nil)?.location else { return }
         let here = CursorLocator.locate(location, main: mainBounds(), displays: cursorDisplays())
         if here != lastCursor {
+            // on a real monitor (none of the player's screens) the system cursor is the only one they can see
+            if here.slot < 0 { CursorVeil.show() } else if lastCursor.map({ $0.slot < 0 }) ?? true { CursorVeil.hide() }
             lastCursor = here
             send(.cursor(here))
         }
@@ -214,9 +217,22 @@ import CoreGraphics
 
     /// Work mode is over: the system cursor shows again, no more reports.
     private func stopWorkExtras() {
+        let wasWorking = cursorTimer != nil
         cursorTimer?.invalidate(); cursorTimer = nil
         lastCursor = nil
         CursorVeil.show()
+        if wasWorking { warpIntoMinecraft() }
+    }
+
+    /// Back to Minecraft: the cursor goes to the middle of its window first, so its mouse grab starts inside it (not
+    /// on an Office display, where SDL's relative mode would leave clicks to whatever is under it).
+    private func warpIntoMinecraft() {
+        guard let pid = minecraftPid() else { return }
+        let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        let frame = rows.lazy.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
+            .compactMap { EventInjector.frame($0) }.first { $0.width > 100 && $0.height > 100 }
+        let target = frame ?? mainBounds()
+        CGWarpMouseCursorPosition(CGPoint(x: target.midX, y: target.midY))
     }
 
     /// While typing: report secure input going on / off (it hides Esc from the tap), twice a second.

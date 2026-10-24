@@ -231,6 +231,10 @@ enum PointerTests {
             let monitor = CGRect(x: 1440, y: -180, width: 1920, height: 1080)
             expectEqual(DisplayArrangement.origins(main: main, others: [monitor], ours: ours),
                         [1: CGPoint(x: -1920, y: 0), 2: CGPoint(x: -3840, y: 0)], "a real monitor on the right: to the left")
+            let leftToo = CGRect(x: -1280, y: 0, width: 1280, height: 800)
+            expectEqual(DisplayArrangement.origins(main: main, others: [monitor, leftToo], ours: ours),
+                        [1: CGPoint(x: -3200, y: 0), 2: CGPoint(x: -5120, y: 0)], "monitors on both sides: past the left one")
+            expectThrows("RATE outside 1...60") { _ = try Message.decode(type: .rate, payload: Data(#"{"fps":0,"surface":1}"#.utf8)) }
             let above = CGRect(x: 0, y: -1080, width: 1920, height: 1080)
             expectEqual(DisplayArrangement.origins(main: main, others: [above], ours: ours)[1], CGPoint(x: 1440, y: 0),
                         "a monitor above doesn't block the right side")
