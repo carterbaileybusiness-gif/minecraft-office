@@ -1215,8 +1215,10 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			new Screen("O4", 4, false, null, 7200, 0, 1920, 1080)), ScreenList.Abilities.ALL);
 
 	/**
-	 * The display map (Task 10) at GUI scales 1-4, in Extend and in Mirror: the map and its Apply button lie inside the
-	 * window and overlap no other widget. Screenshot each.
+	 * The display map (Task 10) in Extend and in Mirror, in a 1080p window at GUI scales 1-4 and in the default 854 × 480
+	 * window at its largest (the tightest fit): the map and its buttons lie inside the window and overlap no other widget,
+	 * and every box lies inside the map panel. Screenshot each, and in Extend one with a display moved but not Applied (its
+	 * real spot dotted) and the mouse over another box.
 	 */
 	private void settingsMapFitsAtEveryGuiScale(final ClientGameTestContext context, final TestSingleplayerContext sp) {
 		int savedScale = context.computeOnClient(mc -> mc.options.guiScale().get());
@@ -1231,22 +1233,19 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				}
 				switchMode(context, sp, mode);
 				identifyLabelsTheHologram(context, mode);
+				String name = "settings-map-" + mode.name().toLowerCase(java.util.Locale.ROOT);
+				context.getInput().resizeWindow(1920, 1080);
 				for (int scale = 1; scale <= 4; scale++) {
-					final int s = scale;
-					context.runOnClient(mc -> {
-						mc.options.guiScale().set(s);
-						mc.resizeGui();
-						mc.gui.setScreen(new HologramSettingsScreen(clientHologram(mc), "Test"));
-					});
-					context.waitTicks(2);
-					String problem = context.computeOnClient(mc -> mapProblem(mc, mode));
-					context.takeScreenshot("settings-map-" + mode.name().toLowerCase(java.util.Locale.ROOT) + "-scale-" + s);
-					if (problem != null) {
-						throw new AssertionError(mode + " at GUI scale " + s + ": " + problem);
-					}
+					openMapAt(context, mode, scale, name + "-scale-" + scale);
 				}
+				if (mode == local.carter.office.core.Mode.EXTEND) {
+					pendingMoveShows(context, name + "-pending-move");
+				}
+				context.getInput().resizeWindow(854, 480);
+				openMapAt(context, mode, 4, name + "-854x480"); // GUI scale 4 is clamped to 2 here: the tightest layout
 			}
 		} finally {
+			context.getInput().resizeWindow(854, 480);
 			context.runOnClient(mc -> {
 				mc.gui.setScreen(null);
 				ScreenList.setTestOverride(null);
@@ -1255,6 +1254,53 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			});
 			switchMode(context, sp, original);
 		}
+	}
+
+	/** Opens the settings screen at GUI scale {@code scale}, checks the map's fit and takes screenshot {@code shot}. */
+	private void openMapAt(final ClientGameTestContext context, final local.carter.office.core.Mode mode, final int scale,
+			final String shot) {
+		context.runOnClient(mc -> {
+			mc.options.guiScale().set(scale);
+			mc.resizeGui();
+			mc.gui.setScreen(new HologramSettingsScreen(clientHologram(mc), "Test"));
+		});
+		context.waitTicks(2);
+		String problem = context.computeOnClient(mc -> mapProblem(mc, mode));
+		context.takeScreenshot(shot);
+		if (problem != null) {
+			throw new AssertionError(mode + " at GUI scale " + scale + " (" + shot + "): " + problem);
+		}
+	}
+
+	/**
+	 * Extend at GUI scale 2 in the 1080p window: Office display 4 dragged under display 1 and dropped (not Applied) keeps
+	 * a dotted outline where it really is; the mouse rests on display 2 (lit). Screenshot.
+	 */
+	private void pendingMoveShows(final ClientGameTestContext context, final String shot) {
+		context.runOnClient(mc -> {
+			mc.options.guiScale().set(2);
+			mc.resizeGui();
+			mc.gui.setScreen(new HologramSettingsScreen(clientHologram(mc), "Test"));
+		});
+		context.waitTicks(2);
+		double[] at = context.computeOnClient(mc -> {
+			HologramSettingsScreen screen = (HologramSettingsScreen) mc.gui.screen();
+			local.carter.office.client.screens.DisplayMapModel model = screen.displayMap().model();
+			if (!model.drag("O4", 1440, 1080) || !model.drop("O4") || model.pending().isEmpty()) {
+				throw new AssertionError("display 4 should move under display 1 (not Applied): " + model.pending());
+			}
+			if (model.movedFrom().size() != 1) {
+				throw new AssertionError("display 4's real spot should be drawn dotted: " + model.movedFrom());
+			}
+			local.carter.office.client.platform.Platform.Rect box = screen.displayMap().boxOnScreen("O2");
+			double gx = box.x() + box.w() / 2.0, gy = box.y() + box.h() / 2.0;
+			return new double[] {gx * mc.getWindow().getScreenWidth() / mc.getWindow().getGuiScaledWidth(),
+					gy * mc.getWindow().getScreenHeight() / mc.getWindow().getGuiScaledHeight()};
+		});
+		context.getInput().setCursorPos(at[0], at[1]);
+		context.waitTicks(2);
+		context.takeScreenshot(shot);
+		context.runOnClient(mc -> mc.gui.setScreen(null)); // closing drops the move
 	}
 
 	/** One Office display: dashed slots 2, 3 and 4 right of it. */
@@ -1399,6 +1445,14 @@ public class HologramClientGameTests implements FabricClientGameTest {
 						&& o.getRectangle().intersects(m.getRectangle())) {
 					return m.getMessage().getString() + " overlaps " + o.getMessage().getString();
 				}
+			}
+		}
+		local.carter.office.client.interact.DisplayMap map = screen.displayMap();
+		for (Screen s : map.model().drawOrder()) {
+			local.carter.office.client.platform.Platform.Rect b = map.boxOnScreen(s.id());
+			if (b == null || b.x() < map.getX() + 2 || b.y() < map.getY() + 2 || b.x() + b.w() > map.getRight() - 2
+					|| b.y() + b.h() > map.getBottom() - 2) {
+				return "box " + s.id() + " " + b + " leaves the map panel " + map.getRectangle();
 			}
 		}
 		return null;

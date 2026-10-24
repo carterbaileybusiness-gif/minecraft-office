@@ -78,4 +78,60 @@ class MapLayoutTest {
 		assertEquals(1440, g[0], 1 / fit.scale() + 1);
 		assertEquals(0, g[1], 1 / fit.scale() + 1);
 	}
+
+	/** The busy layout the client GameTests use: three monitors and four Office displays, much wider than tall. */
+	private static final List<Rect> BUSY = List.of(new Rect(0, 0, 1440, 900), new Rect(-1920, -180, 1920, 1080),
+			new Rect(-3000, -1000, 1080, 1920), new Rect(1440, 0, 1920, 1080), new Rect(3360, 0, 1920, 1080),
+			new Rect(5280, 0, 1920, 1080), new Rect(7200, 0, 1920, 1080));
+
+	@Test
+	void theAreaKeepsTheMarginAndTheStatusLineFree() {
+		Rect a = MapLayout.area(10, 20, 160, 80, 0);
+		assertEquals(new Rect(10 + MapLayout.MARGIN, 20 + MapLayout.MARGIN, 160 - 2 * MapLayout.MARGIN, 80 - 2 * MapLayout.MARGIN), a);
+		Rect two = MapLayout.area(10, 20, 160, 80, 2);
+		assertEquals(a.h() - (2 * MapLayout.STATUS_LINE + 2), two.h(), "two status lines under the screens");
+		assertEquals(a.w(), two.w());
+	}
+
+	@Test
+	void theArrangementFillsTheAreaOneWayAndIsCentredTheOther() {
+		for (int[] size : new int[][] {{148, 44}, {148, 120}, {60, 120}}) {
+			MapLayout.Fit fit = MapLayout.fit(BUSY, size[0], size[1]);
+			int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
+			for (Rect r : BUSY) {
+				Rect m = fit.toMap(r);
+				minX = Math.min(minX, m.x());
+				minY = Math.min(minY, m.y());
+				maxX = Math.max(maxX, m.x() + m.w());
+				maxY = Math.max(maxY, m.y() + m.h());
+			}
+			int w = maxX - minX, h = maxY - minY;
+			assertTrue(w >= size[0] - 2 || h >= size[1] - 2, "fills the width or the height of " + size[0] + "x" + size[1]);
+			assertTrue(minX >= 0 && minY >= 0 && maxX <= size[0] && maxY <= size[1], "inside " + size[0] + "x" + size[1]);
+			assertTrue(Math.abs(minX - (size[0] - maxX)) <= 1 && Math.abs(minY - (size[1] - maxY)) <= 1, "centred in " + size[0] + "x" + size[1]);
+			assertEquals(12120 * fit.scale(), w, 1.01, "one scale for x");
+			assertEquals(2080 * fit.scale(), h, 1.01, "and the same for y");
+		}
+	}
+
+	@Test
+	void thePanelGrowsOnlyAsFarAsTheArrangementUsesIt() {
+		// Wide: the panel's width decides; more height would only add empty bands.
+		int wide = MapLayout.panelHeight(BUSY, 160, 0, 56, 150);
+		assertEquals(56, wide, "the busy layout is wider than the smallest panel");
+		// One portrait monitor: as tall as allowed.
+		List<Rect> tall = List.of(new Rect(0, 0, 1080, 1920));
+		assertEquals(150, MapLayout.panelHeight(tall, 160, 0, 56, 150));
+		assertEquals(80, MapLayout.panelHeight(tall, 160, 0, 56, 80), "never past the room the window has");
+		// Main + one Office display (2.1:1): just tall enough for the column's width, the status line under it.
+		List<Rect> pair = List.of(new Rect(0, 0, 1440, 900), new Rect(1440, 0, 1920, 1080));
+		int h0 = MapLayout.panelHeight(pair, 160, 0, 40, 150);
+		int h1 = MapLayout.panelHeight(pair, 160, 1, 40, 150);
+		assertEquals(h0 + MapLayout.STATUS_LINE + 2, h1);
+		Rect area = MapLayout.area(0, 0, 160, h0, 0);
+		MapLayout.Fit fit = MapLayout.fit(pair, area.w(), area.h());
+		int right = fit.toMap(pair.get(1)).x() + fit.toMap(pair.get(1)).w();
+		assertTrue(right >= area.w() - 2, "the pair spans the area's width (" + right + " of " + area.w() + ")");
+		assertEquals(56, MapLayout.panelHeight(List.of(), 160, 0, 56, 150), "nothing to show: the smallest panel");
+	}
 }

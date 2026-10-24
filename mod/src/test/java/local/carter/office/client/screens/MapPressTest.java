@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -23,11 +24,12 @@ import local.carter.office.core.Shape;
 class MapPressTest {
 	private static final Screen MAIN = new Screen("MAIN", 0, true, "MacBook", 0, 0, 1440, 900);
 	private static final Screen OFFICE_1 = new Screen("O1", 1, false, null, 1440, 0, 1920, 1080);
-	/** The widget's screens area: x, y, w, h (a 160-px column less the insets, above the status line). */
-	private static final int AX = 24;
-	private static final int AY = 40;
-	private static final int AW = 152;
-	private static final int AH = 72;
+	/** The widget's screens area: a 160 × 80 panel at (18, 34) less its margin, above a one-line status line. */
+	private static final Rect AREA = MapLayout.area(18, 34, 160, 80, 1);
+	private static final int AX = AREA.x();
+	private static final int AY = AREA.y();
+	private static final int AW = AREA.w();
+	private static final int AH = AREA.h();
 
 	private final DisplayMapModel model = new DisplayMapModel(new ScreenList(List.of(MAIN, OFFICE_1), ScreenList.Abilities.ALL),
 			Mode.EXTEND, 1, null, Shape.WIDE_16_9);
@@ -103,5 +105,25 @@ class MapPressTest {
 		assertTrue(r.dropped());
 		assertEquals(new Choice.None(), r.choice());
 		assertFalse(model.pending().isEmpty(), "snapped somewhere new");
+	}
+
+	@Test
+	void everyDrawnBoxIsHitWhereItIsDrawnAndNowhereElse() {
+		// The widget draws each box one pixel short on the right and bottom (a hairline between neighbours); every pixel it
+		// draws must hit that box, and the margin round the arrangement must hit nothing.
+		for (Screen s : model.drawOrder()) {
+			Rect b = MapPress.box(s, fit(), AX, AY);
+			for (int x = b.x(); x < b.x() + b.w() - 1; x++) {
+				for (int y = b.y(); y < b.y() + b.h() - 1; y++) {
+					Screen h = hit(x + 0.5, y + 0.5);
+					assertNotNull(h, "pixel " + x + "," + y + " of " + s.id());
+					assertEquals(s.id(), h.id(), "pixel " + x + "," + y + " of " + s.id());
+				}
+			}
+		}
+		for (int x = AX - MapLayout.MARGIN; x < AX + AW + MapLayout.MARGIN; x++) {
+			assertNull(hit(x + 0.5, AY - 1 + 0.5), "above the arrangement");
+			assertNull(hit(x + 0.5, AY + AH + 0.5), "below the arrangement");
+		}
 	}
 }

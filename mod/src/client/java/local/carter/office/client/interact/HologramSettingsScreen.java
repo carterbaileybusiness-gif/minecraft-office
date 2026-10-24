@@ -17,6 +17,7 @@ import local.carter.office.client.platform.WindowsPlatform;
 import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.screens.DisplayMapModel;
 import local.carter.office.client.screens.DisplayMapModel.Choice;
+import local.carter.office.client.screens.MapLayout;
 import local.carter.office.client.screens.ScreenList;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.core.HologramSpec;
@@ -63,8 +64,14 @@ public class HologramSettingsScreen extends Screen {
 	private static final int TEXT_COLOR = 0xFFFFFFFF;
 	private static final int SELECTED_FRAME = 0xFFFFFFFF;
 	private static final int WARNING_COLOR = 0xFFFFD060;
-	/** The display map's panel height: it and its button row end above the line a Mirror's warning may take. */
+	/**
+	 * The display map's smallest panel height: it and its button row end above the line a Mirror's warning may take.
+	 * With spare height the panel grows ({@link #mapHeight}) up to {@link #MAP_H_MAX}, the rest of the screen moving with it.
+	 */
 	private static final int MAP_H = 56;
+	private static final int MAP_H_MAX = 150;
+	/** The window margin kept above the title and under the footer when the map grows. */
+	private static final int MAP_MARGIN = 8;
 	/** The map's button row: under the panel, two half-column buttons. */
 	private static final int MAP_BUTTON_W = (COL_W - 4) / 2;
 	private static final String MOVE_HINT = "Drag an Office display, then Apply";
@@ -95,6 +102,8 @@ public class HologramSettingsScreen extends Screen {
 	/** The display map's state (owners only), kept across widget rebuilds while the screen is open. */
 	private final @Nullable DisplayMapModel mapModel;
 	private @Nullable DisplayMap map;
+	/** The map panel's height in this layout ({@link #mapHeight}). */
+	private int mapH = MAP_H;
 	private @Nullable Button apply;
 	private @Nullable Button identify;
 	private int playerPage;
@@ -223,6 +232,8 @@ public class HologramSettingsScreen extends Screen {
 		int right = left + COL_W + GAP;
 		int bodyHeight = 3 * LABEL + 2 * ROW + 8 + 4 * ROW; // tallest column (window list / player list)
 		int header = LABEL * 2 + 10;
+		mapH = mapHeight(header, bodyHeight);
+		bodyHeight += mapH - MAP_H; // a taller map makes the left column the tallest
 		int top = Math.max(header + 6, (height - (header + bodyHeight + 8 + 20)) / 2 + header);
 		titleY = top - header;
 
@@ -258,7 +269,7 @@ public class HologramSettingsScreen extends Screen {
 			note(left, y, "Shows the owner's screen");
 		} else if (mode == Mode.MIRROR) {
 			note(left, y, "Your screen, minus Minecraft");
-			addMap(left, y + LABEL, Platform.current().supportsZoom() ? "Zoom in to use your real desktop" : "This screen: click, type and drag here");
+			addMap(left, y + LABEL, mirrorNote());
 		} else if (mode == Mode.EXTEND && extendUnavailable) {
 			note(left, y, "Extend is coming soon here:");
 			note(left, y + LABEL, "pick Mirror or Window");
@@ -356,9 +367,33 @@ public class HologramSettingsScreen extends Screen {
 		}
 	}
 
+	/** The map's status line in Mirror while it has nothing else to say. */
+	private static String mirrorNote() {
+		return Platform.current().supportsZoom() ? "Zoom in to use your real desktop" : "This screen: click, type and drag here";
+	}
+
 	/**
-	 * The display map at {@code (x, mapTop)}, one column wide, and its button row under it: Identify on the left, Apply
-	 * (Extend) on the right.
+	 * The display map panel's height: {@link #MAP_H}, grown into the window's spare height (keeping a margin, and the
+	 * room a Mirror's warning takes under the footer) as far as the arrangement can use it at the column's width, up to
+	 * {@link #MAP_H_MAX}. Nothing scrolls at any GUI scale: without spare height the map keeps {@link #MAP_H}.
+	 */
+	private int mapHeight(final int header, final int bodyHeight) {
+		DisplayMapModel model = mapModel;
+		boolean shown = model != null && (mode == Mode.MIRROR || (mode == Mode.EXTEND && !extendUnavailable));
+		if (!shown) {
+			return MAP_H;
+		}
+		model.reset(mode, displaySlot, mirrorDisplay, shape);
+		int warning = HologramLook.mirrorWarning(mode, privacyLevel) == null ? 0 : 2 * (24 + 9 - 20);
+		int spare = height - (header + bodyHeight + 8 + 20) - 2 * MAP_MARGIN - warning;
+		int max = Math.min(MAP_H_MAX, MAP_H + Math.max(0, spare));
+		int lines = DisplayMap.statusLineCount(model, mode == Mode.MIRROR ? mirrorNote() : null, COL_W);
+		return MapLayout.panelHeight(model.fitRects(), COL_W, lines, MAP_H, max);
+	}
+
+	/**
+	 * The display map at {@code (x, mapTop)}, one column wide and {@link #mapH} tall, and its button row under it:
+	 * Identify on the left, Apply (Extend) on the right.
 	 * {@code note}: the platform's line, the map's status line while it has nothing else to say.
 	 */
 	private void addMap(final int x, final int mapTop, final @Nullable String note) {
@@ -367,9 +402,9 @@ public class HologramSettingsScreen extends Screen {
 			return;
 		}
 		model.reset(mode, displaySlot, mirrorDisplay, shape);
-		DisplayMap m = new DisplayMap(x, mapTop, COL_W, MAP_H, model, this::chose, this::mapChanged, note);
+		DisplayMap m = new DisplayMap(x, mapTop, COL_W, mapH, model, this::chose, this::mapChanged, note);
 		map = addRenderableWidget(m);
-		int rowY = mapTop + MAP_H + 4;
+		int rowY = mapTop + mapH + 4;
 		ScreenList list = model.list();
 		Button identify = Button.builder(Component.literal("Identify"), btn -> DisplayMap.identify(model.list()))
 				.bounds(x, rowY, MAP_BUTTON_W, 20).build();
