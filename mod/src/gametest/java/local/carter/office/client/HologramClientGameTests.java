@@ -692,7 +692,16 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
 			context.waitTicks(5);
 			int through = fake.calls.indexOf("layer floating click-through");
-			int mirrorClick = fake.calls.indexOf("click LEFT 0 960,540");
+			// the centre of the 1920x1080 main display, give or take float rounding of the look ray
+			int mirrorClick = -1;
+			for (int i = 0; i < fake.calls.size(); i++) {
+				String[] c = fake.calls.get(i).split("[ ,]");
+				if (c.length == 5 && "click".equals(c[0]) && "LEFT".equals(c[1]) && "0".equals(c[2])
+						&& Math.abs(Integer.parseInt(c[3]) - 960) <= 2 && Math.abs(Integer.parseInt(c[4]) - 540) <= 2) {
+					mirrorClick = i;
+					break;
+				}
+			}
 			if (through < 0 || mirrorClick < 0 || through > mirrorClick) {
 				throw new AssertionError("a Mirror click should make Minecraft click-through, then CLICK slot 0 at the centre, sent " + fake.calls);
 			}
