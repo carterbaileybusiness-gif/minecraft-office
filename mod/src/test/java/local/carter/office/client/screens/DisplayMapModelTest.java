@@ -192,4 +192,19 @@ class DisplayMapModelTest {
 		assertEquals("B", mirror(ALL, null).label(LG));
 		assertEquals("2", extend(ALL).label(OFFICE_2));
 	}
+
+	@Test
+	void aMovedDisplayLeavesItsRealSpotDottedAndInTheFit() {
+		DisplayMapModel m = extend(ALL);
+		assertTrue(m.movedFrom().isEmpty());
+		assertTrue(m.drag("O2", 3360, 200));
+		assertEquals(List.of(OFFICE_2), m.movedFrom(), "while dragged: where it really is");
+		assertTrue(m.drag("O1", 0, -1100));
+		assertTrue(m.drop("O1"));
+		assertEquals(List.of(OFFICE_1), m.movedFrom(), "moved but not Applied: its real spot");
+		assertTrue(m.fitRects().contains(OFFICE_1.rect()), "the real spot stays on the map");
+		m.applied(0);
+		m.update(ALL);
+		assertTrue(m.movedFrom().isEmpty(), "Applied: nothing left behind");
+	}
 }

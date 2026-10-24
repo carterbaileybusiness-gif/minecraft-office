@@ -159,7 +159,10 @@ public final class DisplayMapModel {
 		return out;
 	}
 
-	/** Everything the map fits: the screens at their base spots (not following a drag) and the dashed slots. */
+	/**
+	 * Everything the map fits: the screens at their base spots (not following a drag), the dashed slots, and the real
+	 * spots of displays moved but not Applied (drawn dotted, {@link #movedFrom}).
+	 */
 	public List<Rect> fitRects() {
 		List<Rect> out = new ArrayList<>();
 		for (Screen s : placed()) {
@@ -167,6 +170,25 @@ public final class DisplayMapModel {
 		}
 		for (Screen g : ghosts()) {
 			out.add(g.rect());
+		}
+		for (Screen s : list.screens()) {
+			if (!s.isMonitor() && pending.containsKey(s.slot())) {
+				out.add(s.rect());
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * The Office displays drawn away from where they really are (moved but not Applied, or being dragged), at their real
+	 * spot: the map draws that spot dotted under the moved box.
+	 */
+	public List<Screen> movedFrom() {
+		List<Screen> out = new ArrayList<>();
+		for (Screen s : list.screens()) {
+			if (!s.isMonitor() && (pending.containsKey(s.slot()) || s.id().equals(dragId))) {
+				out.add(s);
+			}
 		}
 		return out;
 	}
