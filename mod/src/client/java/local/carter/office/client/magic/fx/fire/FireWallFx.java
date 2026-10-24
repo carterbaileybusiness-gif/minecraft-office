@@ -143,11 +143,12 @@ public final class FireWallFx implements SpellFx {
 	}
 
 	/**
-	 * One upright sheet of flame: the animated fire texture on a quad that turns about the vertical to face the camera, tinted
+	 * One upright sheet of flame (Flame Dash's burning trail and the Meteor's fiery tail use it too; callers charge it to their
+	 * event's budget): the animated fire texture on a quad that turns about the vertical to face the camera, tinted
 	 * orange (so the texture's white core never washes out at night), full bright. It climbs out of the ground as it appears,
 	 * flickers in size, and shrinks back into the ground over its last ticks.
 	 */
-	private static final class Flame extends SingleQuadParticle {
+	static final class Flame extends SingleQuadParticle {
 		private static final int IN = 5;
 		private static final int OUT = 8;
 		private final double footY;

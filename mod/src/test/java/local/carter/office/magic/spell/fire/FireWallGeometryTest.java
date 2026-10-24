@@ -136,4 +136,17 @@ class FireWallGeometryTest {
 		assertFalse(d.touches(small.move(2.4, 0, -2.4)), "off the diagonal");
 		assertTrue(d.bounds().contains(end.add(0, 1, 0)));
 	}
+
+	@Test
+	void backSweepCoversThrowsNotTeleports() {
+		assertTrue(FireWallGeometry.sweeps(new Vec3(0, 0.4, 3.5)), "a hard throw is swept");
+		assertTrue(FireWallGeometry.sweeps(new Vec3(0, 0, FireWallGeometry.MAX_SWEEP)), "up to the cap");
+		assertFalse(FireWallGeometry.sweeps(new Vec3(0, 0, FireWallGeometry.MAX_SWEEP + 0.01)), "past it: a teleport");
+		assertFalse(FireWallGeometry.sweeps(new Vec3(0, 0, -12)), "an ender pearl across the wall");
+		assertFalse(FireWallGeometry.sweeps(Vec3.ZERO), "standing still");
+		// The swept test itself would catch the teleport: the cap is what spares it.
+		FireWallGeometry g = FireWallGeometry.of(new Vec3(16.5, 4, 8.5), new Vec3(0, 0, 1), 0F);
+		AABB behind = new AABB(16.2, 4, 2.2, 16.8, 5.9, 2.8);
+		assertTrue(g.crosses(behind, new Vec3(0, 0, 12)));
+	}
 }

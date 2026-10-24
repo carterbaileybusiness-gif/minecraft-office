@@ -9,5 +9,8 @@ public final class FireSpells {
 	public static void register() {
 		SpellRegistry.register(new FireBolt());
 		SpellRegistry.register(new FireWall());
+		SpellRegistry.register(new FlameDash());
+		SpellRegistry.register(new FireballBarrage());
+		SpellRegistry.register(new Meteor());
 	}
 }
