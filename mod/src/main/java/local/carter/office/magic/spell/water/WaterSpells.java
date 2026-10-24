@@ -1,8 +1,13 @@
 package local.carter.office.magic.spell.water;
 
-/** Water spells. The water lane fills {@link #register()}; {@code MagicMod.init} calls it once. */
+import local.carter.office.magic.spell.SpellRegistry;
+
+/** Water spells. {@code MagicMod.init} calls {@link #register()} once (both sides). */
 public final class WaterSpells {
 	private WaterSpells() {}
 
-	public static void register() {}
+	public static void register() {
+		SpellRegistry.register(new WaterBullet());
+		SpellRegistry.register(new TidalPush());
+	}
 }
