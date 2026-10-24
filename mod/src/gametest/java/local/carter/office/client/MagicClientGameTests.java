@@ -105,6 +105,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			manaBarOnlyInCastingStance(context, sp);
 			rebindingSealRebindsOnChoice(context, sp);
 			friendsPageAsksToTravel(context, sp);
+			grimoireHowToTabFits(context, sp);
 			castingInputPrecedence(context, sp);
 			castingFeel(context, sp);
 		} finally {
@@ -465,6 +466,30 @@ public class MagicClientGameTests implements FabricClientGameTest {
 				for (ServerPlayer f : fakes) f.connection.disconnect(new net.minecraft.network.DisconnectionDetails(net.minecraft.network.chat.Component.literal("test over")));
 			});
 		}
+	}
+
+	/** The How to cast tab at GUI scales 1 to 4: the wrapped text fits both pages without scrolling (any exception fails the test). */
+	private static void grimoireHowToTabFits(ClientGameTestContext context, TestSingleplayerContext sp) {
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.GRIMOIRE));
+			p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+		});
+		context.waitTicks(10);
+		context.getInput().pressMouse(MOUSE_RIGHT);
+		context.waitForScreen(GrimoireScreen.class);
+		context.waitFor(mc -> mc.gui.screen() instanceof GrimoireScreen s && s.introDone());
+		context.runOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).setTab(GrimoireScreen.TAB_HOWTO));
+		for (int scale = 1; scale <= 4; scale++) {
+			setGuiScale(context, scale);
+			context.waitTicks(10);
+			centreCursor(context);
+			context.takeScreenshot("magic-howto-gui" + scale);
+		}
+		// Closing with the Grimoire in the main hand shows the hold hint in the action bar (not asserted: no accessor, see the shot).
+		context.runOnClient(mc -> mc.gui.screen().onClose());
+		context.waitTicks(4);
+		context.takeScreenshot("magic-howto-hint");
 	}
 
 	/** A real server player with an embedded-channel connection (the way {@code GameTestHelper} makes its mock players). */

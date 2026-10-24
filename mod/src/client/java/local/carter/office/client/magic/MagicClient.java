@@ -25,6 +25,7 @@ import local.carter.office.magic.net.MagicPayloads.SignChallenge;
 import local.carter.office.magic.spell.SpellIds;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.util.Util;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
@@ -35,7 +36,14 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 public final class MagicClient {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 
+	/** The "put the Grimoire in your off hand" hint, at most once per 30 s. */
+	private static final HoldHint HOLD_HINT = new HoldHint(Util::getMillis);
+
 	private MagicClient() {}
+
+	public static HoldHint holdHint() {
+		return HOLD_HINT;
+	}
 
 	public static void register() {
 		ClientPlayNetworking.registerGlobalReceiver(SignChallenge.TYPE, (payload, ctx) -> onChallenge(ctx.client(), payload));

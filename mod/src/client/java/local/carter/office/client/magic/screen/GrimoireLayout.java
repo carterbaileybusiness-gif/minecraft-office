@@ -7,7 +7,7 @@ import local.carter.office.client.magic.screen.SignLayout.Rect;
 
 /**
  * Where the grimoire screen draws, in GUI units: the open book as large as the screen allows (up to 8× its texture, 3:2),
- * two index tabs (Spells, Friends) sticking out of its left edge, a two-line footer hint under it, the left page (sigil,
+ * three index tabs (Spells, Friends, How to cast) sticking out of its left edge, a two-line footer hint under it, the left page (sigil,
  * level, xp bar, home) and six spell rows filling the right page; on the Friends tab ({@link Friends}) the right page holds a
  * header with the pager and {@link #FRIEND_ROWS} friend rows. Text is drawn at {@link Layout#unit()} (an integer that grows
  * with the book); nothing scrolls at any size.
@@ -16,8 +16,8 @@ public final class GrimoireLayout {
 	public static final int ROWS = 6;
 	/** Friends per page of the Friends tab (more turn pages with the arrows). */
 	public static final int FRIEND_ROWS = 8;
-	/** Index tabs: Spells, Friends. */
-	public static final int TABS = 2;
+	/** Index tabs: Spells, Friends, How to cast (more tabs: raise this and add the page in {@code GrimoireScreen}). */
+	public static final int TABS = 3;
 	/** How far a tab sticks out of the book, and its height, per text unit. */
 	private static final int TAB_OUT = 20;
 	private static final int TAB_H = 28;
