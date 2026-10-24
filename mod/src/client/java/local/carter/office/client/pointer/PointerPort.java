@@ -71,6 +71,12 @@ public interface PointerPort {
 	default void onSecureInput(final Consumer<Boolean> listener) {}
 
 	/**
+	 * Walk while dragging (round 3): called on the client thread with the movement keys the helper holds for Minecraft
+	 * (any of forward, back, left, right, jump, sneak; empty = stop) while the real mouse button is held in work mode.
+	 */
+	default void onWalk(final Consumer<java.util.Set<String>> listener) {}
+
+	/**
 	 * Why the Mirror can't be used right now (a sentence), or null: on a Mac, Minecraft in macOS's separate full-screen
 	 * Space, where the other apps aren't.
 	 */

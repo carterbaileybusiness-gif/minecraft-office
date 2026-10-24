@@ -9,6 +9,7 @@
 		"EntityRendererNameTagMixin",
 		"GameRendererSkipWorldMixin",
 		"HitStopMixin",
+		"KeyMappingAccessor",
 		"MinecraftAttackMixin",
 		"MinecraftFrameMixin",
 		"MinecraftUseItemMixin",

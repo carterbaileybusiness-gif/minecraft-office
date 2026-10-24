@@ -62,6 +62,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			grimoireScreenSelectsSpells(context, sp);
 			manaBarOnlyInCastingStance(context, sp);
 			rebindingSealRebindsOnChoice(context, sp);
+			friendsPageAsksToTravel(context, sp);
 		} finally {
 			setGuiScale(context, savedScale);
 		}
@@ -327,6 +328,110 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		if (!now.equals(Optional.of(Element.WATER))) throw new AssertionError("rebound to WATER expected, got " + now);
 		seals = sp.getServer().computeOnServer(server -> player(server).getMainHandItem().getCount());
 		if (seals != 1) throw new AssertionError("exactly one seal spent, have " + seals);
+	}
+
+	/** Ava first (the one asked); "Aaron_Wolfington" is a 16-character name, the longest vanilla allows, sorted onto row 0. */
+	private static final String[] FRIENDS = {"Ava", "Ben", "Chloe", "Dev", "Eli", "Fay", "Gus", "Hana", "Ivo", "Juno", "Aaron_Wolfington"};
+
+	/**
+	 * The grimoire's Friends tab with ten other players online (real server players with an embedded connection, so the client
+	 * gets them in its tab list): page 1 of 2 at three GUI scales, page 2, a click on Ava sends a request (the row waits), and
+	 * the cooldown greys everyone. Dev has travel off.
+	 */
+	private static void friendsPageAsksToTravel(ClientGameTestContext context, TestSingleplayerContext sp) {
+		setGuiScale(context, 4);
+		java.util.List<ServerPlayer> fakes = new java.util.ArrayList<>();
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.GRIMOIRE));
+			p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+			MagicAttachments.set(p, MagicAttachments.get(p).withLevel(5).withReadyAt(Map.of()).withTravel(true));
+			for (String name : FRIENDS) {
+				ServerPlayer f = fakePlayer(server, name);
+				if (name.equals("Dev")) MagicAttachments.set(f, MagicAttachments.get(f).withTravel(false));
+				fakes.add(f);
+			}
+		});
+		try {
+			context.waitTicks(10);
+			context.getInput().pressMouse(MOUSE_RIGHT);
+			context.waitForScreen(GrimoireScreen.class);
+			context.waitFor(mc -> mc.gui.screen() instanceof GrimoireScreen s && s.introDone());
+			Rect tab = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).layout().tabs().get(GrimoireScreen.TAB_FRIENDS));
+			moveTo(context, tab.x() + 3, tab.cy());
+			context.waitTicks(1);
+			context.getInput().pressMouse(MOUSE_LEFT);
+			context.waitFor(mc -> mc.gui.screen() instanceof GrimoireScreen s && s.tab() == GrimoireScreen.TAB_FRIENDS, 20);
+			context.waitFor(mc -> local.carter.office.client.magic.TravelClient.roster().friends().size() >= FRIENDS.length, 60);
+			centreCursor(context);
+			context.waitTicks(12);
+			context.takeScreenshot("magic-friends-gui4");
+			setGuiScale(context, 1);
+			context.waitTicks(4);
+			context.takeScreenshot("magic-friends-gui1");
+			setGuiScale(context, 2);
+			context.waitTicks(4);
+			context.takeScreenshot("magic-friends-gui2");
+			setGuiScale(context, 4);
+			context.waitTicks(3);
+
+			// Page 2 and back.
+			Rect next = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).layout().friends().next());
+			moveTo(context, next.cx(), next.cy());
+			context.waitTicks(1);
+			context.getInput().pressMouse(MOUSE_LEFT);
+			context.waitTicks(10);
+			int page = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).friendsPage().page());
+			if (page != 1) throw new AssertionError("the next arrow should turn to page 2, page index " + page);
+			context.takeScreenshot("magic-friends-page2-gui4");
+			context.runOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).friendsPage().turn(-1));
+
+			// Click Ava (row 1, after Aaron_Wolfington): the request reaches the server and the row waits.
+			Rect row = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).layout().friends().rows().get(1));
+			moveTo(context, row.cx(), row.cy());
+			context.waitTicks(10);
+			context.takeScreenshot("magic-friends-hover-gui4");
+			context.getInput().pressMouse(MOUSE_LEFT);
+			sp.getConnection().waitForServerboundPackets();
+			context.waitTicks(3);
+			java.util.UUID ava = fakes.get(0).getUUID();
+			Optional<java.util.UUID> asked = sp.getServer().computeOnServer(server ->
+					local.carter.office.magic.cast.Travel.pendingFrom(player(server)).map(local.carter.office.magic.cast.Travel.Request::target));
+			if (!asked.equals(Optional.of(ava))) throw new AssertionError("clicking Ava should ask Ava, asked " + asked);
+			context.waitFor(mc -> local.carter.office.client.magic.TravelClient.roster().state()
+					== local.carter.office.magic.net.MagicPayloads.TravelRoster.State.WAITING, 40);
+			centreCursor(context);
+			context.waitTicks(8);
+			context.takeScreenshot("magic-friends-waiting-gui4");
+
+			// Ava says no; then Recall's cooldown greys everyone.
+			sp.getServer().runOnServer(server -> {
+				var req = local.carter.office.magic.cast.Travel.pendingFrom(player(server)).orElseThrow();
+				local.carter.office.magic.cast.Travel.deny(fakes.get(0), req.id());
+				ServerPlayer p = player(server);
+				MagicAttachments.set(p, MagicAttachments.get(p).withReady(SpellIds.RECALL, p.level().getGameTime() + 700));
+			});
+			context.waitFor(mc -> local.carter.office.client.magic.TravelClient.roster().state()
+					== local.carter.office.magic.net.MagicPayloads.TravelRoster.State.READY, 60);
+			context.waitTicks(4);
+			context.takeScreenshot("magic-friends-cooldown-gui4");
+			context.runOnClient(mc -> mc.gui.setScreen(null));
+		} finally {
+			sp.getServer().runOnServer(server -> {
+				for (ServerPlayer f : fakes) f.connection.disconnect(new net.minecraft.network.DisconnectionDetails(net.minecraft.network.chat.Component.literal("test over")));
+			});
+		}
+	}
+
+	/** A real server player with an embedded-channel connection (the way {@code GameTestHelper} makes its mock players). */
+	private static ServerPlayer fakePlayer(MinecraftServer server, String name) {
+		var profile = new com.mojang.authlib.GameProfile(java.util.UUID.nameUUIDFromBytes(("office-test:" + name).getBytes(java.nio.charset.StandardCharsets.UTF_8)), name);
+		var cookie = net.minecraft.server.network.CommonListenerCookie.createInitial(profile, false);
+		ServerPlayer p = new ServerPlayer(server, server.overworld(), profile, cookie.clientInformation());
+		var connection = new net.minecraft.network.Connection(net.minecraft.network.protocol.PacketFlow.SERVERBOUND);
+		new io.netty.channel.embedded.EmbeddedChannel(connection);
+		server.getPlayerList().placeNewPlayer(connection, p, cookie);
+		return p;
 	}
 
 	// ---- helpers ----

@@ -144,6 +144,10 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			double off = measurePhase(context, "working, Minecraft inactive, Dynamic FPS integration OFF", 5_000);
 			context.runOnClient(mc -> PointerClient.setDynamicFpsAwakeOffForTesting(false));
 			measurePhase(context, "working, Minecraft inactive, integration ON again", 4_000);
+			// the drawn cursor (round 3): a real-time feed of cursor positions (as CURSOR reports arrive), set → on screen
+			measureCursor(context, fake, true);
+			measureCursor(context, fake, false);
+			fake.cursor = new int[] {0, 720, 450, 1440, 900};
 			boolean hookRan = context.computeOnClient(mc -> local.carter.office.client.pointer.DynamicFps.hookHasRun());
 			System.out.println("[measure] realHelper=" + realHelper + " dynamicFps=" + dynamicFps + " hookRan=" + hookRan + " fps on=" + on
 					+ " off=" + off);
@@ -166,6 +170,54 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				PointerClient.setPortForTesting(null);
 			});
 			context.waitTicks(5);
+		}
+	}
+
+	/**
+	 * The drawn work-mode cursor: a thread moves the reported cursor every 3-20 ms (like CURSOR reports of a moving mouse)
+	 * for 4 s; each new position's set → on-screen time (the end of the frame that drew it). {@code atFrameStart}: the
+	 * round-2 way (read at the frame's start) instead of round 3's (the newest at draw time).
+	 */
+	private static void measureCursor(final ClientGameTestContext context, final FakePointer fake, final boolean atFrameStart) {
+		java.util.concurrent.ConcurrentHashMap<Long, Long> setAt = new java.util.concurrent.ConcurrentHashMap<>();
+		context.runOnClient(mc -> {
+			PointerClient.setCursorAtFrameStartForTesting(atFrameStart);
+			local.carter.office.client.render.FrameStats.setCursorStamps(k -> setAt.getOrDefault(k, 0L));
+			local.carter.office.client.render.FrameStats.record(true);
+		});
+		java.util.concurrent.atomic.AtomicBoolean run = new java.util.concurrent.atomic.AtomicBoolean(true);
+		Thread mover = new Thread(() -> {
+			java.util.Random rnd = new java.util.Random(7);
+			while (run.get()) {
+				int x = 100 + rnd.nextInt(1200);
+				setAt.put(x * 100_000L + 450, System.nanoTime());
+				fake.cursor = new int[] {0, x, 450, 1440, 900};
+				try {
+					Thread.sleep(3 + rnd.nextInt(18));
+				} catch (InterruptedException e) {
+					return;
+				}
+			}
+		}, "measure-cursor");
+		mover.start();
+		long end = System.currentTimeMillis() + 4_000;
+		while (System.currentTimeMillis() < end) {
+			context.waitTick();
+		}
+		run.set(false);
+		local.carter.office.client.render.FrameStats.Snapshot s = context.computeOnClient(mc -> local.carter.office.client.render.FrameStats.snapshot());
+		context.runOnClient(mc -> {
+			local.carter.office.client.render.FrameStats.setCursorStamps(null);
+			local.carter.office.client.render.FrameStats.record(false);
+			PointerClient.setCursorAtFrameStartForTesting(false);
+		});
+		System.out.println(String.format(java.util.Locale.ROOT,
+				"[measure] cursor %s: set → drawn p50=%.1f p90=%.1f ms, set → on screen p50=%.1f p90=%.1f ms (n=%d) at %.1f fps",
+				atFrameStart ? "read at frame start (round 2)" : "newest at draw time (round 3)", s.cursorDrawP50(), s.cursorDrawP90(),
+				s.cursorP50(), s.cursorP90(), s.cursorsShown(), s.fps()));
+		if (!atFrameStart && s.cursorDrawP90() > 1000.0 / Math.max(30, s.fps()) + 2) {
+			throw new AssertionError("the drawn cursor should be within one rendered frame of the newest report: set → drawn p90 "
+					+ s.cursorDrawP90() + " ms at " + s.fps() + " fps");
 		}
 	}
 
@@ -644,6 +696,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		final java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
 		java.util.function.Consumer<String> typingExit = r -> {};
 		java.util.function.Consumer<Boolean> secureInput = on -> {};
+		java.util.function.Consumer<java.util.Set<String>> walk = keys -> {};
 		volatile int[] cursor;
 
 		@Override
@@ -684,6 +737,11 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		@Override
 		public void onSecureInput(final java.util.function.Consumer<Boolean> listener) {
 			secureInput = listener;
+		}
+
+		@Override
+		public void onWalk(final java.util.function.Consumer<java.util.Set<String>> listener) {
+			walk = listener;
 		}
 
 		@Override
@@ -747,6 +805,13 @@ public class HologramClientGameTests implements FabricClientGameTest {
 						+ " (hologram centre " + hologramCenter(spec) + ", emitter " + emitter + ")");
 			}
 
+			// a WALK outside work mode (a late one) presses nothing
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("forward")));
+			context.waitTicks(2);
+			if (context.computeOnClient(mc -> mc.options.keyUp.isDown()) || !context.computeOnClient(mc -> PointerClient.walkingForTesting()).isEmpty()) {
+				throw new AssertionError("WALK outside work mode must be ignored");
+			}
+
 			// 1. work mode: a click on display 1's hologram → floating + click-through first, then WORK_BEGIN at its middle
 			fake.calls.clear();
 			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
@@ -791,6 +856,60 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				throw new AssertionError("the cursor should be drawn at the helper's position, was " + java.util.Arrays.toString(drawn));
 			}
 			context.takeScreenshot("pointer-work-cursor");
+
+			// walk while dragging (round 3): the helper holds S for Minecraft while the button is down (it never reaches
+			// the app: helper tests / inputprobe W9) → the player walks, still working, the view still on the cursor;
+			// the button released (WALK []) → Minecraft's key is released at once and the player stops
+			// the Mac app has the keyboard (as when the helper's press activates it): work mode doesn't time out waiting
+			context.runOnClient(mc -> PointerClient.setFocusForTesting(false));
+			net.minecraft.world.phys.Vec3 start = context.computeOnClient(mc -> mc.player.position());
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("back")));
+			context.waitTicks(10);
+			net.minecraft.world.phys.Vec3 walked = context.computeOnClient(mc -> mc.player.position());
+			if (walked.subtract(start).horizontalDistance() < 0.5 || !context.computeOnClient(mc -> PointerClient.working())
+					|| !java.util.Set.of("back").equals(context.computeOnClient(mc -> PointerClient.walkingForTesting()))
+					|| !context.computeOnClient(mc -> mc.options.keyDown.isDown())) {
+				throw new AssertionError("WALK [back] while working should walk the player back: " + start + " → " + walked);
+			}
+			float[] walkWanted = context.computeOnClient(mc -> local.carter.office.client.pointer.ViewFollow.aim(
+					new Vec3d(mc.player.getEyePosition().x, mc.player.getEyePosition().y, mc.player.getEyePosition().z), cursorPoint));
+			float[] walkLook = context.computeOnClient(mc -> PointerClient.look());
+			if (Math.abs(wrapDegrees(walkLook[0] - walkWanted[0])) > 1.5f || Math.abs(walkLook[1] - walkWanted[1]) > 1.5f) {
+				throw new AssertionError("while walking the view keeps following the cursor: looking " + java.util.Arrays.toString(walkLook)
+						+ ", cursor at " + java.util.Arrays.toString(walkWanted));
+			}
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of()));
+			context.waitTicks(1);
+			if (context.computeOnClient(mc -> mc.options.keyDown.isDown()) || !context.computeOnClient(mc -> PointerClient.walkingForTesting()).isEmpty()) {
+				throw new AssertionError("WALK [] must release Minecraft's movement key at once");
+			}
+			context.waitTicks(6); // the last bit of momentum
+			net.minecraft.world.phys.Vec3 stopped = context.computeOnClient(mc -> mc.player.position());
+			context.waitTicks(5);
+			if (context.computeOnClient(mc -> mc.player.position()).subtract(stopped).horizontalDistance() > 0.01) {
+				throw new AssertionError("after WALK [] the player stands still");
+			}
+			// Sneak: Toggle on: sneak stays held (no flip each tick) while reported, and is off after the release
+			context.runOnClient(mc -> mc.options.toggleCrouch().set(true));
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("sneak")));
+			for (int i = 0; i < 4; i++) {
+				context.waitTick();
+				if (!context.computeOnClient(mc -> mc.options.keyShift.isDown() && mc.player.isShiftKeyDown())) {
+					throw new AssertionError("with Sneak: Toggle, WALK [sneak] must keep the player sneaking every tick (tick " + i + ")");
+				}
+			}
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of()));
+			context.waitTicks(2);
+			if (context.computeOnClient(mc -> mc.options.keyShift.isDown() || mc.player.isShiftKeyDown())) {
+				throw new AssertionError("with Sneak: Toggle, releasing must not leave sneak on");
+			}
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("sneak")));
+			context.waitTicks(2);
+			// walking again, then work mode ends (Esc): nothing stays pressed
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("left", "jump", "sneak")));
+			context.waitTicks(2);
+			sp.getServer().runOnServer(server -> player(server).teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5));
+			context.waitTicks(2);
 			float[] before = context.computeOnClient(mc -> PointerClient.look());
 			fake.cursor = new int[] {-1, 0, 0, 0, 0}; // moved onto another monitor
 			context.waitTicks(4);
@@ -802,14 +921,37 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				throw new AssertionError("with the cursor on another monitor the view holds still: " + java.util.Arrays.toString(before)
 						+ " → " + java.util.Arrays.toString(held));
 			}
-			// Esc (the helper's TYPING_EXIT): the camera turns again, Minecraft's window is normal again, no cursor
-			context.runOnClient(mc -> fake.typingExit.accept("esc"));
+			if (!context.computeOnClient(mc -> mc.options.keyLeft.isDown())) {
+				throw new AssertionError("WALK [left, jump] presses Minecraft's left key while working (working "
+						+ context.computeOnClient(mc -> PointerClient.working()) + ", pressed " + context.computeOnClient(mc -> PointerClient.walkingForTesting())
+						+ ", key " + context.computeOnClient(mc -> mc.options.keyLeft.saveString()) + ")");
+			}
+			// Esc (the helper's TYPING_EXIT): the camera turns again, Minecraft's window is normal again, no cursor; the
+			// movement keys are released right away, in the same tick (not at the next one)
+			boolean stillPressed = context.computeOnClient(mc -> {
+				fake.typingExit.accept("esc");
+				return mc.options.keyLeft.isDown() || mc.options.keyJump.isDown() || mc.options.keyShift.isDown();
+			});
+			if (stillPressed) {
+				throw new AssertionError("work mode ending must release the movement keys at once (same tick)");
+			}
+			context.runOnClient(mc -> PointerClient.setFocusForTesting(null));
 			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
 			context.waitTicks(3);
 			String lastLayer = fake.calls.stream().filter(c -> c.startsWith("layer")).reduce((a, b) -> b).orElse("");
 			if (!"layer normal".equals(lastLayer)) {
 				throw new AssertionError("after Esc Minecraft's window must be normal again, sent " + fake.calls);
 			}
+			if (context.computeOnClient(mc -> mc.options.keyLeft.isDown() || mc.options.keyJump.isDown() || mc.options.keyShift.isDown()
+					|| mc.player.isShiftKeyDown())) {
+				throw new AssertionError("work mode ending must release the movement keys it pressed (Sneak: Toggle too)");
+			}
+			context.runOnClient(mc -> mc.options.toggleCrouch().set(false));
+			context.waitTicks(10); // the walk's momentum dies down, then back to the spot (twice: a moving client drifts once)
+			sp.getServer().runOnServer(server -> player(server).teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5));
+			context.waitTicks(10);
+			sp.getServer().runOnServer(server -> player(server).teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5));
+			context.waitTicks(5);
 			fake.cursor = new int[] {1, 1440, 270, 1920, 1080};
 			if (context.computeOnClient(mc -> PointerClient.cursorOn(clientHologram(mc).spec())) != null) {
 				throw new AssertionError("no cursor is drawn outside work mode");

@@ -167,14 +167,22 @@ the screen wouldn't match with my cursor… it just didn't parity well at all." 
    that it renders 1 fps and a change takes ~2 s to show — the lag Carter saw), nor may vanilla's AFK frame limit. In
    game (laptop-fixround-probe.log, Mirror in work mode, Minecraft inactive): 60 fps, picture arrival → on screen 27 ms
    median (p90 36), so change → seen ≈ 35 + 27 ≈ 60 ms. The frame path reuses its pixel arrays (no garbage per frame).
+5. Esc leaves work mode: Minecraft focused, mouse grabbed, camera turns again, its window normal.
 6. **The view follows the cursor** (Carter, after playing round 2): while working, the camera turns each frame so the
    crosshair sits on the cursor's point on whichever own hologram it is on (also across Mirror → Extend), lightly smoothed
    (settles within ~100 ms). The real cursor still maps 1:1 and clicks land where it's drawn; on a real monitor (not one
-   of the player's screens) the view holds still; the body doesn't move.
+   of the player's screens) the view holds still; the body doesn't move. The drawn cursor itself is never smoothed: the
+   helper reports it on every real mouse event, and each frame draws the newest report (round 3: real move → report
+   ~1 ms, report → drawn within one frame).
 7. **Extend holograms go where their displays are**: the helper places the Office displays right of the laptop screen,
    or left when a real monitor is there; a newly placed Extend hologram is moved beside the Mirror on that same side, and
    chat says which edge of the Mirror leads to it.
-5. Esc leaves work mode: Minecraft focused, mouse grabbed, camera turns again, its window normal.
+8. **Walk while dragging** (Carter, round 3): while the real mouse button is held in work mode, W A S D, Space and
+   Shift move the player in Minecraft and never reach the Mac app; with the button up they go to the app (typing is
+   unchanged). Releasing the button stops the walk at once, even with a key still held; a key taken that way stays
+   away from the app until it comes up, and a key already down in the app stays the app's. The view keeps following
+   the cursor while walking, so a window can be carried from one big screen to another. The keys are physical
+   positions (AZERTY: Z Q S D); Minecraft's own movement bindings don't apply here (Carter's ruling).
 - Also: a Mirror starts **Private** (owner only; Extend / Window keep Public), and switching a screen to Mirror makes it
   Private (it can be made Public afterwards). The Dock shows the apps' own icons.
 - Windows keeps its current behaviour (zoom).

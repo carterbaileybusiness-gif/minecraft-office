@@ -33,7 +33,8 @@ import net.minecraft.util.Util;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 /**
- * Reading your grimoire (main-hand use while bound). Left page: your element's sigil, the grimoire level, xp to the next
+ * Reading your grimoire (main-hand use while bound). Two index tabs on the book's left edge switch between Spells and Friends
+ * (click them, or Left / Right); the Friends tab is {@link FriendsPage} (Travel to a friend). Spells tab: left page: your element's sigil, the grimoire level, xp to the next
  * level and your Recall home. Right page: the six spells of your wheel (icon, name, mana, cooldown; locked ones greyed with a
  * padlock and the level that unlocks them); clicking an unlocked one (or Enter / 1–6) selects it, marked by a ribbon in your
  * element's colour. Footer: how to cast from the off hand. Nothing scrolls; not a pause screen.
@@ -57,6 +58,14 @@ public final class GrimoireScreen extends Screen {
 	private long shakeAt;
 	private float ribbonY = Float.NaN;
 	private final List<FormattedCharSequence> lines = new ArrayList<>();
+	/** 0 = Spells, 1 = Friends. */
+	private int tab;
+	/** When the spell rows start sliding in (the opening, or a switch back to Spells). */
+	private long rowsFrom = openedAt;
+	private long tabAt = openedAt - 1000;
+	private final float[] tabHover = new float[GrimoireLayout.TABS];
+	private final FriendsPage friends = new FriendsPage(this);
+	public static final int TAB_SPELLS = 0, TAB_FRIENDS = 1;
 
 	public GrimoireScreen() {
 		super(Component.translatable("item.office.grimoire"));
@@ -64,6 +73,25 @@ public final class GrimoireScreen extends Screen {
 
 	public GrimoireLayout.Layout layout() {
 		return GrimoireLayout.layout(width, height);
+	}
+
+	public int tab() {
+		return tab;
+	}
+
+	public FriendsPage friendsPage() {
+		return friends;
+	}
+
+	/** Shows tab {@code t} ({@link #TAB_SPELLS} or {@link #TAB_FRIENDS}). */
+	public void setTab(int t) {
+		if (t == tab || t < 0 || t >= GrimoireLayout.TABS) return;
+		tab = t;
+		tabAt = Util.getMillis();
+		focus = -1;
+		if (t == TAB_FRIENDS) friends.shown();
+		else rowsFrom = tabAt - ROW_DELAY_MS;
+		play(SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 1.0f, 0.8f));
 	}
 
 	public boolean introDone() {
@@ -77,7 +105,11 @@ public final class GrimoireScreen extends Screen {
 
 	@Override
 	public void tick() {
-		if (minecraft.player == null || !minecraft.player.isAlive() || data().element().isEmpty()) onClose();
+		if (minecraft.player == null || !minecraft.player.isAlive() || data().element().isEmpty()) {
+			onClose();
+			return;
+		}
+		if (tab == TAB_FRIENDS) friends.tick();
 	}
 
 	private MagicData data() {
@@ -96,7 +128,14 @@ public final class GrimoireScreen extends Screen {
 
 	@Override
 	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-		int row = layout().rowAt(event.x(), event.y());
+		GrimoireLayout.Layout l = layout();
+		int t = l.tabAt(event.x(), event.y());
+		if (t >= 0) {
+			setTab(t);
+			return true;
+		}
+		if (tab == TAB_FRIENDS) return friends.click(l, event.x(), event.y()) || super.mouseClicked(event, doubleClick);
+		int row = l.rowAt(event.x(), event.y());
 		if (row >= 0) {
 			select(row);
 			return true;
@@ -106,6 +145,11 @@ public final class GrimoireScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
+		if (event.isLeft() || event.isRight()) {
+			setTab(event.isLeft() ? TAB_SPELLS : TAB_FRIENDS);
+			return true;
+		}
+		if (tab == TAB_FRIENDS) return friends.key(event) || super.keyPressed(event);
 		if (event.isUp() || event.isDown() || event.isCycleFocus()) {
 			boolean back = event.isUp() || (event.isCycleFocus() && event.hasShiftDown());
 			int from = focus >= 0 ? focus : selectedRow();
@@ -180,7 +224,7 @@ public final class GrimoireScreen extends Screen {
 		Element e = element();
 		GrimoireLayout.Layout l = layout();
 		float u = l.unit();
-		int mouseRow = l.rowAt(mouseX, mouseY);
+		int mouseRow = tab == TAB_SPELLS ? l.rowAt(mouseX, mouseY) : -1;
 		if (mouseRow != hover && mouseRow >= 0) focus = -1;
 		hover = mouseRow;
 		int lit = hover >= 0 ? hover : focus;
@@ -191,10 +235,15 @@ public final class GrimoireScreen extends Screen {
 		UiKit.glow(g, book.cx(), book.cy(), Math.max(book.w(), book.h()) * (1.9f + 0.06f * (float) Math.sin(now / 900.0)),
 				UiKit.alpha(e.argb(), 0.26f * open));
 		ElementChoiceScreen.book(g, book, open, 1f);
-		float content = UiKit.clamp01((now - openedAt - OPEN_MS * 0.55f) / 220f);
+		tabs(g, l, e, mouseX, mouseY, now, dt, open);
+		float content = UiKit.clamp01((now - openedAt - OPEN_MS * 0.55f) / 220f) * UiKit.easeOut((now - tabAt) / 200f);
 		if (content > 0f) {
-			leftPage(g, l, d, e, now, content);
-			rightPage(g, l, d, e, now, dt);
+			if (tab == TAB_FRIENDS) {
+				friends.draw(g, font, l, e, mouseX, mouseY, now, dt, content);
+			} else {
+				leftPage(g, l, d, e, now, content);
+				rightPage(g, l, d, e, now, dt, content);
+			}
 		}
 		footer(g, l, open);
 		super.extractRenderState(g, mouseX, mouseY, a);
@@ -278,7 +327,68 @@ public final class GrimoireScreen extends Screen {
 		return Component.translatable("magic.office.home", h.pos().getX(), h.pos().getY(), h.pos().getZ(), dim);
 	}
 
-	private void rightPage(GuiGraphicsExtractor g, GrimoireLayout.Layout l, MagicData d, Element e, long now, float dt) {
+	/**
+	 * The index tabs: leather when idle, page-coloured and pulled out when active, sliding out a little on hover. Spells shows
+	 * your sigil; Friends shows two friends' faces and how many are online.
+	 */
+	private void tabs(GuiGraphicsExtractor g, GrimoireLayout.Layout l, Element e, int mouseX, int mouseY, long now, float dt, float open) {
+		if (open < 0.6f) return;
+		float k = UiKit.clamp01((open - 0.6f) / 0.4f);
+		float u = l.unit();
+		int hovered = l.tabAt(mouseX, mouseY);
+		var conn = minecraft.getConnection();
+		List<java.util.UUID> others = new ArrayList<>();
+		if (conn != null && minecraft.player != null) {
+			for (net.minecraft.client.multiplayer.PlayerInfo info : conn.getOnlinePlayers()) {
+				java.util.UUID id = info.getProfile().id();
+				if (!id.equals(minecraft.player.getUUID()) && info.getGameMode() != net.minecraft.world.level.GameType.SPECTATOR) others.add(id);
+			}
+		}
+		for (int i = 0; i < GrimoireLayout.TABS; i++) {
+			Rect r = l.tabs().get(i);
+			boolean active = i == tab;
+			tabHover[i] = UiKit.approach(tabHover[i], i == hovered && !active ? 1f : 0f, 16f, dt);
+			int out = active ? 0 : Math.round((3 - 2 * tabHover[i]) * u);
+			// Drawn over the book up to its cover edge (the texture's transparent rim), so the tab comes out from under the cover.
+			int x0 = r.x() + out, x1 = l.book().x() + (int) Math.ceil(3 * l.book().w() / 192f), y0 = r.y(), y1 = r.bottom();
+			int body = active ? FriendsPage.paper() : UiKit.mix(0xFF6E4E33, 0xFF8E6A47, tabHover[i]);
+			UiKit.rounded(g, x0, y0 + 1, x1, y1 + 1, UiKit.alpha(0xFF000000, 0.4f * k));
+			UiKit.rounded(g, x0, y0, x1, y1, UiKit.alpha(body, k));
+			int edge = UiKit.alpha(active ? 0xFF7A6248 : 0xFF3E2A1A, k);
+			g.fill(x0 + 1, y0, x1, y0 + 1, edge);
+			g.fill(x0 + 1, y1 - 1, x1, y1, edge);
+			g.fill(x0, y0 + 1, x0 + 1, y1 - 1, edge);
+			if (active) g.fill(x0 + 1, y0 + 1, x0 + Math.max(1, Math.round(u)) + 1, y1 - 1, UiKit.alpha(e.argb(), 0.9f * k));
+			float visible = l.book().x() - x0;
+			float cx = x0 + visible / 2f + Math.max(1, Math.round(u)) / 2f, cy = (y0 + y1) / 2f;
+			float icon = Math.min(visible - 3 * u, r.h() - 8 * u);
+			float ik = (active ? 1f : 0.75f + 0.25f * tabHover[i]) * k;
+			if (i == TAB_SPELLS) {
+				UiKit.centredTexture(g, UiKit.sigil(e), 64, cx, cy, icon, 0f, UiKit.alpha(UiKit.WHITE, ik));
+			} else {
+				float fs = Math.round(icon * 0.78f);
+				java.util.UUID a = others.size() > 0 ? others.get(0) : null, b = others.size() > 1 ? others.get(1) : null;
+				var skinA = a != null ? FriendsPage.skin(a) : net.minecraft.client.resources.DefaultPlayerSkin.getDefaultSkin();
+				if (b != null) FriendsPage.face(g, FriendsPage.skin(b), cx - fs / 2f + icon * 0.16f, cy - fs / 2f - icon * 0.14f, fs, 0xFFC8C8C8, ik);
+				FriendsPage.face(g, skinA, cx - fs / 2f - (b != null ? icon * 0.12f : 0f), cy - fs / 2f + (b != null ? icon * 0.12f : 0f), fs,
+						a == null ? 0x90FFFFFF : UiKit.WHITE, ik);
+				if (!others.isEmpty()) {
+					Component n = Component.literal(Integer.toString(others.size()));
+					float bs = UiKit.crisp(u * 0.75f);
+					float bw = Math.max(9 * bs, font.width(n) * bs + 4 * bs);
+					float bx = x0 + 1, by = y0 + 1;
+					UiKit.rounded(g, Math.round(bx), Math.round(by), Math.round(bx + bw), Math.round(by + 9 * bs), UiKit.alpha(0xFFB33A2A, k));
+					UiKit.centred(g, font, n, bx + bw / 2f, by + 0.5f * bs, bs, UiKit.alpha(UiKit.WHITE, k), false);
+				}
+			}
+			if (i == hovered) {
+				g.setTooltipForNextFrame(font, Component.translatable(i == TAB_SPELLS ? "magic.office.tab_spells" : "magic.office.tab_friends"),
+						mouseX, mouseY);
+			}
+		}
+	}
+
+	private void rightPage(GuiGraphicsExtractor g, GrimoireLayout.Layout l, MagicData d, Element e, long now, float dt, float fade) {
 		float u = l.unit();
 		int sel = selectedRow();
 		long gt = gameTime();
@@ -302,9 +412,9 @@ public final class GrimoireScreen extends Screen {
 
 		for (int slot = 0; slot < GrimoireLayout.ROWS; slot++) {
 			Rect r = l.rows().get(slot);
-			float appear = UiKit.easeOut((now - openedAt - ROW_DELAY_MS - slot * ROW_STAGGER_MS) / (float) ROW_MS);
+			float appear = UiKit.easeOut((now - rowsFrom - ROW_DELAY_MS - slot * ROW_STAGGER_MS) / (float) ROW_MS);
 			if (appear <= 0f) continue;
-			float k = appear;
+			float k = appear * fade;
 			float dx = (1f - appear) * 8f * u;
 			Identifier id = SpellIds.at(e, slot);
 			boolean locked = d.level() < Slots.unlockLevel(slot);
@@ -361,10 +471,10 @@ public final class GrimoireScreen extends Screen {
 			int x0 = l.book().right() - Math.round(3 * u), x1 = l.book().right() + Math.round(5 * u);
 			int y0 = Math.round(ribbonY) + 1, y1 = y0 + r.h() - 2;
 			int c = e.argb();
-			g.fill(x0, y0 + 1, x1, y1 + 1, UiKit.alpha(0xFF000000, 0.35f));
+			g.fill(x0, y0 + 1, x1, y1 + 1, UiKit.alpha(0xFF000000, 0.35f * fade));
 			int mid = (y0 + y1) / 2;
 			int notch = Math.max(2, Math.round(2.5f * u));
-			int body = UiKit.mix(c, 0xFF000000, 0.2f);
+			int body = UiKit.alpha(UiKit.mix(c, 0xFF000000, 0.2f), fade);
 			g.fill(x0, y0, x1 - notch, y1, body);
 			// Swallow-tail end: each column of the tail leaves a wider notch around the middle.
 			for (int i = 0; i < notch; i++) {
@@ -372,7 +482,7 @@ public final class GrimoireScreen extends Screen {
 				g.fill(x1 - notch + i, y0, x1 - notch + i + 1, mid - cut, body);
 				g.fill(x1 - notch + i, mid + cut, x1 - notch + i + 1, y1, body);
 			}
-			g.fill(x0, y0, x1, y0 + Math.max(1, Math.round(u)), UiKit.mix(c, UiKit.WHITE, 0.35f));
+			g.fill(x0, y0, x1, y0 + Math.max(1, Math.round(u)), UiKit.alpha(UiKit.mix(c, UiKit.WHITE, 0.35f), fade));
 		}
 	}
 
@@ -415,7 +525,7 @@ public final class GrimoireScreen extends Screen {
 
 	private void footer(GuiGraphicsExtractor g, GrimoireLayout.Layout l, float k) {
 		Rect f = l.footer();
-		Component hint = Component.translatable("magic.office.hint");
+		Component hint = Component.translatable(tab == TAB_FRIENDS ? "magic.office.friends_hint" : "magic.office.hint");
 		float s = UiKit.wrap(font, hint, f.w(), l.unit(), 2, lines);
 		float total = lines.size() * 10 * s - s;
 		float y = f.y() + (f.h() - total) / 2f;

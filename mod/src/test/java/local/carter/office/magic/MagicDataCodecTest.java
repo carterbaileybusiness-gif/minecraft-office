@@ -95,4 +95,24 @@ class MagicDataCodecTest {
 		assertEquals(Optional.empty(), d.withElement(Optional.empty()).element());
 		assertEquals(5, d.withElement(Optional.empty()).level());
 	}
+
+	@Test void travelFlagDefaultsOnPersistsAndSyncs() {
+		assertTrue(MagicData.EMPTY.travel(), "requests accepted by default");
+		MagicData off = full().withTravel(false);
+		assertFalse(off.travel());
+		assertFalse(off.withLevel(3).withHome(Optional.empty()).withReady(SpellIds.GUST, 5L).travel(), "copies keep it");
+		JsonElement json = MagicData.CODEC.encodeStart(JsonOps.INSTANCE, off).getOrThrow();
+		assertEquals(off, MagicData.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow());
+		FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+		MagicData.STREAM_CODEC.encode(buf, off);
+		assertEquals(off, MagicData.STREAM_CODEC.decode(buf));
+		// Old saves have no "travel" field, and a bad value falls back: both mean on.
+		JsonObject old = json.getAsJsonObject().deepCopy();
+		old.remove("travel");
+		assertTrue(MagicData.CODEC.parse(JsonOps.INSTANCE, old).getOrThrow().travel());
+		old.addProperty("travel", "maybe");
+		MagicData lenient = MagicData.CODEC.parse(JsonOps.INSTANCE, old).getOrThrow();
+		assertTrue(lenient.travel());
+		assertEquals(7, lenient.level(), "other fields survive");
+	}
 }

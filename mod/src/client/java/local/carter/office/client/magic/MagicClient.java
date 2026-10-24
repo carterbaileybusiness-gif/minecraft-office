@@ -41,6 +41,7 @@ public final class MagicClient {
 		ClientPlayNetworking.registerGlobalReceiver(SignChallenge.TYPE, (payload, ctx) -> onChallenge(ctx.client(), payload));
 		ClientPlayNetworking.registerGlobalReceiver(OpenGrimoire.TYPE, (payload, ctx) -> onOpenGrimoire(ctx.client(), payload));
 		ManaBarHud.register();
+		TravelClient.register();
 
 		// Spell visuals (Task 10): the fx core, Recall, and each element lane's fx.
 		FxClient.register();

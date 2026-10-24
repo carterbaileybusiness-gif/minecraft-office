@@ -647,6 +647,88 @@ extension Probe {
                 && reportedAt.map { abs($0.x - real.x) <= 1 && abs($0.y - real.y) <= 1 } == true,
               "real \(real), \(reports.count) reports, last \(last.map { "\($0)" } ?? "none")")
 
+        // W9 (round 3): walk while dragging. With the real button held, W goes to Minecraft (WALK [forward]), never to
+        // TextEdit; with it up, W types. Releasing the button while W is held stops the walk at once and nothing of
+        // that W reaches TextEdit (its repeat, its up).
+        func walks() -> [[String]] { inbox().compactMap { m -> [String]? in if case .walk(let w) = m { return w.keys }; return nil } }
+        func keyEvent(_ code: CGKeyCode, _ down: Bool) { CGEvent(keyboardEventSource: hid, virtualKey: code, keyDown: down)?.post(tap: .cghidEventTap) }
+        let textW0 = (axAttr(text, kAXValueAttribute) as? String) ?? ""
+        let w9at = cursorNow
+        clearInbox()
+        hand(.leftMouseDown, to: w9at, from: w9at)
+        await sleep(0.15)
+        keyEvent(13, true)
+        await sleep(0.15)
+        keyEvent(13, true) // a repeat
+        await sleep(0.1)
+        let walking = walks()
+        keyEvent(13, false)
+        await sleep(0.15)
+        let afterUp = walks()
+        hand(.leftMouseUp, to: w9at, from: w9at)
+        await sleep(0.2)
+        let textW1 = (axAttr(text, kAXValueAttribute) as? String) ?? ""
+        check("W9 button held: W walks in Minecraft (WALK [forward], then []) and TextEdit gets no 'w'",
+              walking.last == ["forward"] && afterUp.last == [] && textW1 == textW0,
+              "walks \(afterUp), TextEdit \(textW1.count - textW0.count) chars more")
+        clearInbox()
+        key(13)
+        await sleep(0.3)
+        let textW2 = (axAttr(text, kAXValueAttribute) as? String) ?? ""
+        check("W9 button up: W types into TextEdit again, no WALK", textW2.count == textW0.count + 1 && textW2.contains("w") && walks().isEmpty,
+              "TextEdit \(textW2.count - textW0.count) chars more, walks \(walks())")
+        clearInbox()
+        hand(.leftMouseDown, to: w9at, from: w9at)
+        await sleep(0.15)
+        keyEvent(13, true)
+        await sleep(0.15)
+        let released = Date()
+        hand(.leftMouseUp, to: w9at, from: w9at)
+        var stopMs = -1.0
+        for _ in 0..<50 {
+            if walks().last == [] { stopMs = Date().timeIntervalSince(released) * 1000; break }
+            await sleep(0.005)
+        }
+        keyEvent(13, true) // the key still held after the release: its repeat ...
+        await sleep(0.1)
+        keyEvent(13, false) // ... and its up
+        await sleep(0.3)
+        let textW3 = (axAttr(text, kAXValueAttribute) as? String) ?? ""
+        check("W9 releasing the button with W held stops the walk at once; that W never reaches TextEdit, nothing stuck",
+              walks() == [["forward"], []] && stopMs >= 0 && stopMs < 100 && textW3 == textW2
+                && !CGEventSource.keyState(.hidSystemState, key: 13) && !CGEventSource.buttonState(.hidSystemState, button: .left),
+              String(format: "walks %@, stopped %.0f ms after the release, TextEdit %d chars more", "\(walks())", stopMs, textW3.count - textW2.count))
+        if textW2 != textW0 { AXUIElementSetAttributeValue(text, kAXValueAttribute as CFString, textW0 as CFString) }
+
+        // W10 (round 3): real mouse → CURSOR report latency (the drawn cursor's helper share): 40 moves at random gaps
+        var arrivals: [(time: Date, cursor: CursorPayload)] = []
+        let keepOnMessage = client.onMessage
+        client.onMessage = { m in
+            if case .cursor(let c) = m { arrivals.append((Date(), c)) }
+            keepOnMessage?(m)
+        }
+        var moves: [(time: Date, x: Int, y: Int)] = []
+        var at = cursorNow
+        for i in 0..<40 {
+            let next = CGPoint(x: (at.x + Double(i % 2 == 0 ? 7 : -5)).rounded(), y: (at.y + 3).rounded())
+            let t = Date()
+            hand(.mouseMoved, to: next, from: at)
+            moves.append((t, Int(next.x - mainBounds.minX), Int(next.y - mainBounds.minY)))
+            at = next
+            await sleep(0.008 + Double((i * 7) % 13) / 1000)
+        }
+        await sleep(0.2)
+        client.onMessage = keepOnMessage
+        let lat = moves.compactMap { m in
+            arrivals.first { $0.time >= m.time && $0.cursor.slot == 0 && $0.cursor.x == m.x && $0.cursor.y == m.y }
+                .map { $0.time.timeIntervalSince(m.time) * 1000 }
+        }.sorted()
+        let p50 = lat.isEmpty ? Double.nan : lat[lat.count / 2]
+        let p90 = lat.isEmpty ? Double.nan : lat[min(lat.count - 1, Int(Double(lat.count) * 0.9))]
+        let line = String(format: "CURSOR LATENCY real move → CURSOR report: median %.1f ms, p90 %.1f ms (%d/40 seen)", p50, p90, lat.count)
+        print(line); fflush(stdout)
+        check("W10 every real move is reported (\(lat.count)/40)", lat.count >= 36, line)
+
         // W5 (PROBE_MONITOR): the cursor on a real monitor — no hologram shows it — is the system cursor, shown; back on
         // the Mirror it is hidden again.
         if let mid = probeMonitorID {

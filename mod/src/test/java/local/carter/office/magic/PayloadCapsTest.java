@@ -126,4 +126,34 @@ class PayloadCapsTest {
 		assertEquals(MagicPayloads.OpenGrimoire.Mode.INFO, MagicPayloads.OpenGrimoire.CODEC.decode(b).mode());
 		assertEquals(0, b.readableBytes());
 	}
+
+	@Test void travelPayloadsRoundTripAndCap() {
+		java.util.UUID a = java.util.UUID.randomUUID(), b = java.util.UUID.randomUUID();
+		MagicPayloads.TravelRoster r = new MagicPayloads.TravelRoster(java.util.List.of(
+				new MagicPayloads.TravelRoster.Friend(a, "Ava", true), new MagicPayloads.TravelRoster.Friend(b, "Ben", false)),
+				MagicPayloads.TravelRoster.State.WAITING, java.util.Optional.of(a), 412);
+		FriendlyByteBuf buf = buf();
+		MagicPayloads.TravelRoster.CODEC.encode(buf, r);
+		assertEquals(r, MagicPayloads.TravelRoster.CODEC.decode(buf));
+		MagicPayloads.TravelRequest.CODEC.encode(buf, new MagicPayloads.TravelRequest(b));
+		assertEquals(b, MagicPayloads.TravelRequest.CODEC.decode(buf).target());
+		MagicPayloads.TravelRosterQuery.CODEC.encode(buf, MagicPayloads.TravelRosterQuery.INSTANCE);
+		assertEquals(MagicPayloads.TravelRosterQuery.INSTANCE, MagicPayloads.TravelRosterQuery.CODEC.decode(buf));
+		assertEquals(0, buf.readableBytes());
+
+		// The constructor keeps at most MAX_FRIENDS friends and MAX_NAME characters, so every roster encodes.
+		java.util.List<MagicPayloads.TravelRoster.Friend> many = new java.util.ArrayList<>();
+		for (int i = 0; i < MagicPayloads.MAX_FRIENDS + 10; i++) many.add(new MagicPayloads.TravelRoster.Friend(java.util.UUID.randomUUID(), "p" + i, true));
+		MagicPayloads.TravelRoster big = new MagicPayloads.TravelRoster(many, MagicPayloads.TravelRoster.State.READY, java.util.Optional.empty(), -5);
+		assertEquals(MagicPayloads.MAX_FRIENDS, big.friends().size());
+		assertEquals(0, big.ticksLeft());
+		assertEquals(MagicPayloads.MAX_NAME, new MagicPayloads.TravelRoster.Friend(a, "x".repeat(40), true).name().length());
+		FriendlyByteBuf bigBuf = buf();
+		MagicPayloads.TravelRoster.CODEC.encode(bigBuf, big);
+		assertEquals(big, MagicPayloads.TravelRoster.CODEC.decode(bigBuf));
+
+		FriendlyByteBuf bad = buf();
+		bad.writeVarInt(MagicPayloads.MAX_FRIENDS + 1);
+		assertThrows(DecoderException.class, () -> MagicPayloads.TravelRoster.CODEC.decode(bad));
+	}
 }

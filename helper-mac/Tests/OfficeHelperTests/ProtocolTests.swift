@@ -57,6 +57,7 @@ enum ProtocolTests {
         ("secure_input", .secureInput(SecureInputPayload(on: true))),
         ("work_begin", .workBegin(PointerPayload(slot: 0, x: 960, y: 540, button: .left, w: 1920, h: 1080))),
         ("cursor", .cursor(CursorPayload(slot: 1, x: 100, y: 200, w: 1920, h: 1080))),
+        ("walk", .walk(WalkPayload(keys: ["forward", "jump"]))),
         ("rate", .rate(RatePayload(surface: 7, fps: 60))),
         ("display_side", .display(DisplayPayload(slot: 1, displayId: 5, w: 1920, h: 1080, x: -1920, y: 0, side: "left"))),
     ]

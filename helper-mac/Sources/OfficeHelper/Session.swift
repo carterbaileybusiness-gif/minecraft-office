@@ -30,6 +30,7 @@ import ScreenCaptureKit
         displays.log = Log.write; placement.log = Log.write; cursor.log = Log.write
         input.log = Log.write; launcher.log = Log.write
         input.send = { [weak self] message in self?.server.send(message) }
+        input.sendLatest = { [weak self] message in self?.server.sendLatest(message) }
         input.minecraftPid = { [weak self] in self?.minecraftPid }
         input.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
         input.display = { [weak self] slot in
@@ -131,7 +132,7 @@ import ScreenCaptureKit
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
-             .apps, .icons, .appResult, .secureInput, .cursor:
+             .apps, .icons, .appResult, .secureInput, .cursor, .walk:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
     }

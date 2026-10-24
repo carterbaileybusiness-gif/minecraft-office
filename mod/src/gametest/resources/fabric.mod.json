@@ -14,6 +14,7 @@
 			"local.carter.office.magic.TerrainGameTests",
 			"local.carter.office.magic.HandSignGameTests",
 			"local.carter.office.magic.RecallGameTests",
+			"local.carter.office.magic.TravelGameTests",
 			"local.carter.office.magic.BalanceGameTests",
 			"local.carter.office.magic.FireGameTests",
 			"local.carter.office.magic.WaterGameTests",
