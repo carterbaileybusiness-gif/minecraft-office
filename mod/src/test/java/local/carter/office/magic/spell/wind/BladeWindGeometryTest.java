@@ -91,7 +91,7 @@ class BladeWindGeometryTest {
 	}
 
 	@Test
-	void swathIsThreeWideOneHighAndNeverRepeatsAcrossTicks() {
+	void swathIsThreeWideFromBladeToFeetAndNeverRepeatsAcrossTicks() {
 		ProjectileSpec s = BladeWindGeometry.specs(EYE, SOUTH, 0F).get(1);
 		BladeWindGeometry.Frame f = BladeWindGeometry.frame(s.velocity());
 		Set<BlockPos> all = new HashSet<>();
@@ -102,7 +102,7 @@ class BladeWindGeometryTest {
 			all.addAll(cells);
 			for (int i = 1; i < cells.size(); i++) assertTrue(cells.get(i).getZ() >= cells.get(i - 1).getZ(), "ordered along the path");
 			for (BlockPos p : cells) {
-				assertEquals(65, p.getY(), "one layer, at the blade");
+				assertTrue(p.getY() == 65 || p.getY() == 64, "the blade's layer and the feet layer: " + p);
 				assertTrue(Math.abs(p.getX() - 10) <= 1, "three wide: " + p);
 				Vec3 c = Vec3.atCenterOf(p);
 				double k = BladeWindGeometry.along(s, c);
@@ -111,6 +111,8 @@ class BladeWindGeometryTest {
 		}
 		assertEquals(all.size(), total, "no cell twice");
 		assertTrue(all.contains(new BlockPos(9, 65, 14)) && all.contains(new BlockPos(10, 65, 14)) && all.contains(new BlockPos(11, 65, 14)));
-		assertFalse(all.contains(new BlockPos(10, 66, 14)) || all.contains(new BlockPos(10, 64, 14)));
+		// Eye at 65.62: the feet stand at 64, so ground plants in 64 are cut; nothing above the blade's layer or under the feet.
+		assertTrue(all.contains(new BlockPos(9, 64, 14)) && all.contains(new BlockPos(10, 64, 14)) && all.contains(new BlockPos(11, 64, 14)));
+		assertFalse(all.contains(new BlockPos(10, 66, 14)) || all.contains(new BlockPos(10, 63, 14)) || all.contains(new BlockPos(8, 65, 14)));
 	}
 }

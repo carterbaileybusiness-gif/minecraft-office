@@ -54,20 +54,21 @@ public final class GustFx implements SpellFx {
 		RandomSource r = kit.random();
 		int lines = 16 + Math.round(10 * c);
 		for (int i = 0; i < lines; i++) {
-			if (kit.budget().particles(1) == 0) break;
 			double phase = Mth.TWO_PI * (i + r.nextDouble() * 0.6) / lines;
 			double spread = Math.tan(CONE) * (0.45 + 0.55 * r.nextDouble());
 			double twist = (i % 2 == 0 ? 1 : -1) * (0.9 + 0.8 * r.nextDouble());
 			double reach = range * (0.75 + 0.25 * r.nextDouble());
 			int life = 8 + r.nextInt(4);
-			Minecraft.getInstance().particleEngine.add(new Streak(level, hand, f, phase, spread, twist, reach, life, 0.16F + 0.08F * c,
-					i % 3 == 0 ? 0xFFFFFF : PALE));
+			Streak line = new Streak(level, hand, f, phase, spread, twist, reach, life, 0.16F + 0.08F * c, i % 3 == 0 ? 0xFFFFFF : PALE);
+			if (kit.budget().particles(line.cost()) < line.cost()) break;
+			Minecraft.getInstance().particleEngine.add(line);
 		}
 
 		// Shock rings rolling out along the cone, and motes thrown with them.
 		for (int k = 0; k < 2; k++) {
-			if (kit.budget().particles(1) == 0) break;
-			Minecraft.getInstance().particleEngine.add(new Ring(level, hand, f, range * (k == 0 ? 0.85 : 0.6), 7 + 2 * k, k, 0.2F + 0.08F * c));
+			Ring ring = new Ring(level, hand, f, range * (k == 0 ? 0.85 : 0.6), 7 + 2 * k, k, 0.2F + 0.08F * c);
+			if (kit.budget().particles(ring.cost()) < ring.cost()) break;
+			Minecraft.getInstance().particleEngine.add(ring);
 		}
 		kit.motes(hand, PALE, 18 + Math.round(10 * c), 0.3, dir.scale(range / 8), range / 14, GlowMote.Drift.SWIRL, 0.12F, 9);
 
@@ -141,6 +142,23 @@ public final class GustFx implements SpellFx {
 			}
 		}
 
+		/** Fx-budget particles this line costs: its quads a frame at their most (the full length at the reach), per 50. */
+		int cost() {
+			lay(1 - LENGTH, 1, 1);
+			return WindRibbon.budgetCost(WindRibbon.pieces(pts, width));
+		}
+
+		/** Points from {@code tail} to {@code head} along the spiral, thickening toward the head, at brightness {@code a}. */
+		private void lay(double tail, double head, float a) {
+			for (int k = 0; k < POINTS; k++) {
+				double u = tail + (head - tail) * k / (POINTS - 1);
+				pts[k] = point(u);
+				float s = k / (float) (POINTS - 1);
+				width[k] = thick * (0.25F + 0.75F * s) * (1F + 0.8F * (float) u);
+				alpha[k] = a * s * s;
+			}
+		}
+
 		@Override
 		public void extract(QuadParticleRenderState state, Camera camera, float partial) {
 			float t = Math.min(1F, (age + partial) / lifetime);
@@ -151,13 +169,7 @@ public final class GustFx implements SpellFx {
 			if (a <= 0.02F || head - tail < 1.0E-3) {
 				return;
 			}
-			for (int k = 0; k < POINTS; k++) {
-				double u = tail + (head - tail) * k / (POINTS - 1);
-				pts[k] = point(u);
-				float s = k / (float) (POINTS - 1);
-				width[k] = thick * (0.25F + 0.75F * s) * (1F + 0.8F * (float) u);
-				alpha[k] = a * s * s;
-			}
+			lay(tail, head, a);
 			ribbon.draw(state, camera.position(), pts, width, alpha, rgb, 0.6F, 0xFFFFFF);
 		}
 
@@ -238,17 +250,27 @@ public final class GustFx implements SpellFx {
 			}
 		}
 
+		/** Fx-budget particles this ring costs: its quads a frame at their most (fully widened), per 50. */
+		int cost() {
+			lay(1, 1);
+			return WindRibbon.budgetCost(WindRibbon.pieces(pts, width));
+		}
+
 		@Override
 		public void extract(QuadParticleRenderState state, Camera camera, float partial) {
 			float t = (age + partial - delay) / (lifetime - delay);
 			if (t <= 0 || t >= 1) {
 				return;
 			}
-			double u = 1 - Math.pow(1 - t, 2.4);
+			lay(1 - Math.pow(1 - t, 2.4), (1 - t) * (1 - t) * Math.min(1F, t * 8));
+			ribbon.draw(state, camera.position(), pts, width, alpha, PALE, 0.5F, 0xFFFFFF);
+		}
+
+		/** The loop {@code u} of the way out (0..1), at brightness {@code a}. */
+		private void lay(double u, float a) {
 			double d = reach * u;
 			double rad = 0.3 + d * Math.tan(CONE);
 			Vec3 c = start.add(frame.forward().scale(d));
-			float a = (1 - t) * (1 - t) * Math.min(1F, t * 8);
 			for (int k = 0; k < POINTS; k++) {
 				double ang = Mth.TWO_PI * k / (POINTS - 1);
 				pts[k] = c.add(frame.side().scale(rad * Math.cos(ang))).add(frame.up().scale(rad * Math.sin(ang)));
@@ -257,7 +279,6 @@ public final class GustFx implements SpellFx {
 				width[k] = thick * (1 + (float) u) * (0.6F + 0.4F * shade);
 				alpha[k] = a * shade;
 			}
-			ribbon.draw(state, camera.position(), pts, width, alpha, PALE, 0.5F, 0xFFFFFF);
 		}
 
 		@Override

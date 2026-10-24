@@ -18,7 +18,8 @@ import net.minecraft.world.phys.Vec3;
  *   <li>the fan: 3 blades over ±15°, or 5 over ±25° at charge ≥ 0.5, turned about the look's own "up";</li>
  *   <li>each blade's path: a {@link ProjectileSpec} (speed 2.0, radius 0.6, pierce, 14 ticks, no gravity) walked with
  *       {@link Projectiles#step};</li>
- *   <li>the swath a blade cuts: cells whose centre lies in a flat ellipse round its centre line (1.1 sideways, 0.7 up and down);</li>
+ *   <li>the swath a blade cuts: cells whose centre lies within 1.1 sideways of its centre line, from 0.7 above it down to the
+ *       caster's feet (1.62 below, the eye height);</li>
  *   <li>the 6-block stretches of a blade, each with its own edit-batch origin (the stretch's middle).</li>
  * </ul>
  */
@@ -32,9 +33,10 @@ public final class BladeWindGeometry {
 	public static final double START = 0.5;
 	/** Length of the stretch of path that shares one edit batch. */
 	public static final double SEGMENT = 6;
-	/** Half-width (sideways) and half-height of the cut swath, from the blade's centre line to a cell's centre. */
+	/** The cut swath, from the blade's centre line to a cell's centre: sideways, above, and below (down to the caster's feet). */
 	public static final double CUT_HALF_WIDTH = 1.1;
-	public static final double CUT_HALF_HEIGHT = 0.7;
+	public static final double CUT_UP = 0.7;
+	public static final double CUT_DOWN = 1.62;
 	/** Most blocks one cast cuts, over all its blades. */
 	public static final int MAX_CUTS = 64;
 	/** Charge from which the fan has 5 blades at ±25° instead of 3 at ±15°. */
@@ -117,15 +119,15 @@ public final class BladeWindGeometry {
 
 	/**
 	 * The cells a blade sweeping {@code from} → {@code to} cuts, nearest {@code from} first: those whose centre projects onto
-	 * the segment ({@code [from, to)}, so back-to-back segments never share a cell) and lies within the swath ellipse
-	 * ({@link #CUT_HALF_WIDTH} along {@code frame.side}, {@link #CUT_HALF_HEIGHT} along {@code frame.up}).
+	 * the segment ({@code [from, to)}, so back-to-back segments never share a cell) and lies within the swath: at most
+	 * {@link #CUT_HALF_WIDTH} along {@code frame.side}, from {@link #CUT_UP} above to {@link #CUT_DOWN} below along {@code frame.up}.
 	 */
 	public static List<BlockPos> cuts(Vec3 from, Vec3 to, Frame frame) {
 		Vec3 seg = to.subtract(from);
 		double len2 = seg.lengthSqr();
 		List<BlockPos> out = new ArrayList<>();
 		if (len2 < 1.0E-10) return out;
-		double reach = Math.max(CUT_HALF_WIDTH, CUT_HALF_HEIGHT) + 0.5;
+		double reach = Math.max(CUT_HALF_WIDTH, Math.max(CUT_UP, CUT_DOWN)) + 0.5;
 		int x0 = Mth.floor(Math.min(from.x, to.x) - reach);
 		int y0 = Mth.floor(Math.min(from.y, to.y) - reach);
 		int z0 = Mth.floor(Math.min(from.z, to.z) - reach);
@@ -141,9 +143,9 @@ public final class BladeWindGeometry {
 					double t = rel.dot(seg) / len2;
 					if (t < 0 || t >= 1) continue;
 					Vec3 off = rel.subtract(seg.scale(t));
-					double s = off.dot(frame.side()) / CUT_HALF_WIDTH;
-					double u = off.dot(frame.up()) / CUT_HALF_HEIGHT;
-					if (s * s + u * u <= 1) keyed.add(new double[] {t, x, y, z});
+					double s = off.dot(frame.side());
+					double u = off.dot(frame.up());
+					if (Math.abs(s) <= CUT_HALF_WIDTH && u <= CUT_UP && u >= -CUT_DOWN) keyed.add(new double[] {t, x, y, z});
 				}
 			}
 		}

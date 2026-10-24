@@ -76,10 +76,11 @@ public final class BladeWindFx implements SpellFx {
 		double[] angles = BladeWindGeometry.angles(c);
 		float size = 1.25F + 0.45F * c;
 		for (int i = 0; i < n; i++) {
-			if (kit.budget().particles(1) == 0) break;
-			// A spray of arcs: the outer blades tilt outward.
+			// A spray of arcs: the outer blades tilt outward. Each pays the fx budget for the quads it draws a frame.
 			float roll = (float) Math.toRadians(angles[i] * 1.2);
-			Minecraft.getInstance().particleEngine.add(new Crescent(level, specs.get(i), stops[i], size, roll));
+			Crescent blade = new Crescent(level, specs.get(i), stops[i], size, roll);
+			if (kit.budget().particles(blade.cost()) < blade.cost()) break;
+			Minecraft.getInstance().particleEngine.add(blade);
 		}
 
 		// Foliage on the paths as this client sees it now, before the server's cuts arrive: it bursts when a blade gets there.
@@ -208,16 +209,29 @@ public final class BladeWindFx implements SpellFx {
 			float grow = 1 + 0.5F * past / FADE;
 			double t = Math.min(now, stop);
 			Vec3 cam = camera.position();
-			// Afterimages first, then the blade.
-			if (t > 0.8) arc(state, cam, BladeWindGeometry.at(spec, t - 0.8), a * 0.18F, size * 0.92F * grow, 0.9);
-			if (t > 0.4) arc(state, cam, BladeWindGeometry.at(spec, t - 0.4), a * 0.4F, size * 0.96F * grow, 0.95);
-			arc(state, cam, BladeWindGeometry.at(spec, t), a, size * grow, 1);
+			// Afterimages (the edge only) first, then the blade.
+			if (t > 0.8) arc(state, cam, BladeWindGeometry.at(spec, t - 0.8), a * 0.18F, size * 0.92F * grow, 0.9, false);
+			if (t > 0.4) arc(state, cam, BladeWindGeometry.at(spec, t - 0.4), a * 0.4F, size * 0.96F * grow, 0.95, false);
+			arc(state, cam, BladeWindGeometry.at(spec, t), a, size * grow, 1, true);
 		}
 
-		/** The crescent with its peak at {@code tip}: the bright edge (white core) and a softer inner arc under it. */
-		private void arc(QuadParticleRenderState state, Vec3 cam, Vec3 tip, float a, float r, double spanScale) {
+		/** Fx-budget particles this blade costs: its quads a frame at their most (fully grown, both afterimages), per 50. */
+		int cost() {
+			Vec3 tip = spec.origin();
+			float r = size * 1.5F;
+			fill(tip, r, SPAN, 0.42F * r, 1);
+			int edge = WindRibbon.pieces(pts, width);
+			fill(tip, r * 0.82, SPAN * 0.8, 0.3F * r, 1);
+			return WindRibbon.budgetCost(3 * edge + WindRibbon.pieces(pts, width));
+		}
+
+		/** The crescent with its peak at {@code tip}: the bright edge (white core) and, if {@code inner}, a softer arc under it. */
+		private void arc(QuadParticleRenderState state, Vec3 cam, Vec3 tip, float a, float r, double spanScale, boolean inner) {
 			fill(tip, r, SPAN * spanScale, 0.42F * r, a);
 			ribbon.draw(state, cam, pts, width, alpha, PALE, 0.85F, 0xF4FFFA);
+			if (!inner) {
+				return;
+			}
 			fill(tip.add(upward.scale(-0.16 * r)).add(forward.scale(-0.08 * r)), r * 0.82, SPAN * 0.8 * spanScale, 0.3F * r, a * 0.5F);
 			ribbon.draw(state, cam, pts, width, alpha, WIND, 0F, 0);
 		}

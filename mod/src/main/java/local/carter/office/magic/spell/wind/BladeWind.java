@@ -34,7 +34,9 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -45,8 +47,13 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * Blade Wind (Wind, slot 1, medium, lingering): crescent blades fly out in a fan ({@link BladeWindGeometry}: 3 over ±15°, 5
  * over ±25° at charge ≥ 0.5), speed 2.0, radius 0.6, piercing, for at most 14 ticks. Each foe a blade passes takes
  * {@code 5 × P} (once per cast, however many blades cross it). Blades slice through foliage and stop at the first other solid
- * block. Minor permanent change: the foliage in a blade's swath ({@link #cuttable}) is cut, in one MEDIUM batch per blade per
- * 6-block stretch (origin = the stretch's middle), at most 64 blocks per cast.
+ * block. Minor permanent change: the foliage in a blade's swath ({@link #cuttable}; the swath reaches from just above the blade
+ * down to the caster's feet, so ground grass and flowers go too) is cut, in one MEDIUM batch per blade per 6-block stretch
+ * (origin = the stretch's middle), at most 64 blocks per cast.
+ *
+ * <p>Side effects of a cut, all vanilla: natural leaves cut out of a canopy can leave leaves beyond them without a path to a
+ * log, and those decay over the next minutes; vines, glow berries, snow layers and anything else that needs the cut block for
+ * support pop off and drop as items. Player-placed (persistent) leaves are never cut, so hedges and leaf builds are safe.
  *
  * <p>The blades are flown by this spell's own lingering effect along {@link BladeWindGeometry#at} (that is {@code Projectiles.step}),
  * not by {@code Projectiles}: those stop at the first block collider, and leaves have one, so a blade could never cut through a
@@ -75,10 +82,16 @@ public final class BladeWind implements Spell {
 		return Slots.MEDIUM_A;
 	}
 
-	/** Foliage a blade cuts and flies through: leaves, flowers, short and tall grass, ferns and dead bushes. */
+	/**
+	 * Foliage a blade cuts and flies through: natural leaves (never persistent, player-placed ones), {@code #small_flowers}, pink
+	 * petals, wildflowers, cactus flowers, short grass and ferns. Never a two-block plant (the terrain service refuses either
+	 * half), chorus flowers, propagules, spore blossoms, flowering azalea or crops. The client uses the same test.
+	 */
 	public static boolean cuttable(BlockState s) {
-		return s.is(BlockTags.LEAVES) || s.is(BlockTags.FLOWERS) || s.is(Blocks.SHORT_GRASS) || s.is(Blocks.TALL_GRASS) || s.is(Blocks.FERN)
-				|| s.is(Blocks.LARGE_FERN) || s.is(Blocks.DEAD_BUSH);
+		if (s.hasProperty(BlockStateProperties.DOUBLE_BLOCK_HALF)) return false;
+		if (s.is(BlockTags.LEAVES)) return s.hasProperty(LeavesBlock.PERSISTENT) && !s.getValue(LeavesBlock.PERSISTENT);
+		return s.is(BlockTags.SMALL_FLOWERS) || s.is(Blocks.PINK_PETALS) || s.is(Blocks.WILDFLOWERS) || s.is(Blocks.CACTUS_FLOWER)
+				|| s.is(Blocks.SHORT_GRASS) || s.is(Blocks.FERN);
 	}
 
 	@Override

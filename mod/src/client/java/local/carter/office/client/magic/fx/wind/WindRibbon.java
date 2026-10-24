@@ -27,6 +27,10 @@ final class WindRibbon {
 	private static final float BLOB_LIGHT = 0.22F;
 	/** The crisp line: its pieces as a share of the thickness. */
 	private static final float LINE_SIZE = 0.55F;
+	/** Pieces are never closer than this (blocks), however thin the stroke gets: tapered tips stay cheap. */
+	private static final float MIN_STEP = 0.04F;
+	/** Quads one budget particle pays for ({@link #budgetCost}). */
+	static final int QUADS_PER_PARTICLE = 50;
 
 	private final Vector3f dir = new Vector3f();
 	private final Vector3f zv = new Vector3f();
@@ -70,7 +74,7 @@ final class WindRibbon {
 				float f = s / length;
 				float w = Math.max(0.02F, width[i] + (width[i + 1] - width[i]) * f);
 				float a = (alpha[i] + (alpha[i + 1] - alpha[i]) * f) * light;
-				float advance = Math.max(0.01F, w * step);
+				float advance = Math.max(MIN_STEP, w * step);
 				float at = Math.min(length, s + advance / 2);
 				if (a > 0.004F) {
 					float mx = (float) (p0.x - cam.x) + dir.x * at;
@@ -84,6 +88,36 @@ final class WindRibbon {
 			}
 			carry = s - length;
 		}
+	}
+
+	/** Quads {@link #draw} lays for {@code pts} with thicknesses {@code width} (both passes). */
+	static int pieces(Vec3[] pts, float[] width) {
+		return count(pts, width, BLOB_STEP) + count(pts, width, LINE_SIZE);
+	}
+
+	/** What a visual drawing {@code quads} quads a frame costs in fx-budget particles: one per {@value #QUADS_PER_PARTICLE}, at least one. */
+	static int budgetCost(int quads) {
+		return Math.max(1, (quads + QUADS_PER_PARTICLE - 1) / QUADS_PER_PARTICLE);
+	}
+
+	private static int count(Vec3[] pts, float[] width, float step) {
+		int n = 0;
+		double carry = 0;
+		for (int i = 0; i + 1 < pts.length; i++) {
+			double length = pts[i].distanceTo(pts[i + 1]);
+			if (length < 1.0E-5) {
+				continue;
+			}
+			double s = carry;
+			while (s < length) {
+				double f = s / length;
+				double w = Math.max(0.02, width[i] + (width[i + 1] - width[i]) * f);
+				s += Math.max(MIN_STEP, w * step);
+				n++;
+			}
+			carry = s - length;
+		}
+		return n;
 	}
 
 	/** Into {@link #q}: a piece at (mx, my, mz) (camera-relative) lying along {@link #dir}, facing the camera as squarely as it can. */
