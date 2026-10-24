@@ -48,6 +48,16 @@ public final class HelperProtocol {
     public static final int ZOOM_OUT = 9;
     /** Ask macOS for the missing permissions now (native prompts); the helper answers with a fresh WELCOME. */
     public static final int REQUEST_PERMISSIONS = 10;
+    /** In-world use (spec 5.9): a drag the helper drives, a click into typing mode, scrolling, leaving typing mode. */
+    public static final int POINTER_DOWN = 11;
+    public static final int POINTER_MOVE = 12;
+    public static final int POINTER_UP = 13;
+    public static final int SCROLL = 14;
+    public static final int CLICK = 15;
+    public static final int EXIT_TYPING = 16;
+    /** Joining / leaving a world: the player's windows move onto a hologram's display and back. */
+    public static final int WINDOWS_TO_DISPLAY = 17;
+    public static final int WINDOWS_BACK = 18;
     // Helper -> mod
     public static final int WELCOME = 64;
     public static final int WINDOWS = 65;
@@ -57,6 +67,9 @@ public final class HelperProtocol {
     public static final int ENDED = 69;
     public static final int EXIT_ZOOM = 70;
     public static final int ERROR = 71;
+    public static final int TYPING_EXIT = 72;
+    public static final int DRAG_DELTA = 73;
+    public static final int DRAG_ENDED = 74;
 
     private static final int IMAGE_HEADER = 20; // u32 surface, u64 generation, u32 width, u32 height
     private static final int PATCH_HEADER = IMAGE_HEADER + 4; // + u32 count
@@ -72,7 +85,9 @@ public final class HelperProtocol {
     // ---------------------------------------------------------------- messages
 
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
-            ZoomIn, ZoomOut, RequestPermissions, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError {
+            ZoomIn, ZoomOut, RequestPermissions, PointerDown, PointerMove, PointerUp, Scroll, Click, ExitTyping,
+            WindowsToDisplay, WindowsBack, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
+            DragDelta, DragEnded {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -86,6 +101,14 @@ public final class HelperProtocol {
                 case ZoomIn m -> ZOOM_IN;
                 case ZoomOut m -> ZOOM_OUT;
                 case RequestPermissions m -> REQUEST_PERMISSIONS;
+                case PointerDown m -> POINTER_DOWN;
+                case PointerMove m -> POINTER_MOVE;
+                case PointerUp m -> POINTER_UP;
+                case Scroll m -> SCROLL;
+                case Click m -> CLICK;
+                case ExitTyping m -> EXIT_TYPING;
+                case WindowsToDisplay m -> WINDOWS_TO_DISPLAY;
+                case WindowsBack m -> WINDOWS_BACK;
                 case Welcome m -> WELCOME;
                 case Windows m -> WINDOWS;
                 case Display m -> DISPLAY;
@@ -94,6 +117,9 @@ public final class HelperProtocol {
                 case Ended m -> ENDED;
                 case ExitZoom m -> EXIT_ZOOM;
                 case HelperError m -> ERROR;
+                case TypingExit m -> TYPING_EXIT;
+                case DragDelta m -> DRAG_DELTA;
+                case DragEnded m -> DRAG_ENDED;
             };
         }
     }
@@ -113,6 +139,24 @@ public final class HelperProtocol {
         static CaptureKind of(String wire) throws ProtocolException {
             for (CaptureKind k : values()) if (k.wire.equals(wire)) return k;
             throw new ProtocolException("bad payload: unknown capture kind " + wire);
+        }
+    }
+
+    /** Mouse button of a pointer message. */
+    public enum PointerButton {
+        LEFT("left"),
+        RIGHT("right"),
+        MIDDLE("middle");
+
+        public final String wire;
+
+        PointerButton(String wire) {
+            this.wire = wire;
+        }
+
+        static PointerButton of(String wire) throws ProtocolException {
+            for (PointerButton b : values()) if (b.wire.equals(wire)) return b;
+            throw new ProtocolException("bad payload: unknown button " + wire);
         }
     }
 
@@ -165,6 +209,31 @@ public final class HelperProtocol {
 
     public record RequestPermissions() implements Message {}
 
+    // In-world use: (x, y) is a pixel of slot's virtual display (0..w-1, 0..h-1).
+    /** Start a drag the helper drives at the press point; it ends when the physical button is released (DRAG_ENDED). */
+    public record PointerDown(int slot, int x, int y, PointerButton button) implements Message {}
+
+    /** The crosshair is over this pixel now (during a drag; any slot). */
+    public record PointerMove(int slot, int x, int y) implements Message {}
+
+    /** Cancel the drag from the mod's side. */
+    public record PointerUp(int slot, int x, int y, PointerButton button) implements Message {}
+
+    /** Scroll there, in pixels of content motion (dy &gt; 0 = up / away). */
+    public record Scroll(int slot, int x, int y, int dx, int dy) implements Message {}
+
+    /** A real click there: the app comes forward with the keyboard (typing mode). */
+    public record Click(int slot, int x, int y, PointerButton button) implements Message {}
+
+    /** The mod left typing mode (no reply). */
+    public record ExitTyping() implements Message {}
+
+    /** Move the player's windows from the main display onto slot's display; {@code apps} (bundle ids) or null = all. */
+    public record WindowsToDisplay(int slot, List<String> apps) implements Message {}
+
+    /** Put every moved window back where it was. */
+    public record WindowsBack() implements Message {}
+
     // Helper -> mod
     /** The handshake reply; sent again whenever a permission changes while connected. */
     public record Welcome(int version, boolean screenRecording, boolean accessibility) implements Message {}
@@ -183,6 +252,15 @@ public final class HelperProtocol {
     public record Ended(int surface, String reason) implements Message {}
 
     public record ExitZoom() implements Message {}
+
+    /** Typing mode ended in the helper: {@code "esc"} (Esc, swallowed) or {@code "minecraft"} (Minecraft active again). */
+    public record TypingExit(String reason) implements Message {}
+
+    /** Physical mouse motion (points) during a helper-driven drag: turn the player's head by it. */
+    public record DragDelta(int dx, int dy) implements Message {}
+
+    /** The helper-driven drag ended: {@code "released"} (the physical button came up) or {@code "cancelled"}. */
+    public record DragEnded(String reason) implements Message {}
 
     /** ERROR message. Named HelperError so it does not clash with {@link java.lang.Error}. */
     public record HelperError(String code, String message) implements Message {
@@ -294,6 +372,17 @@ public final class HelperProtocol {
                     "surface", m.surface());
             case ZoomOut m -> map();
             case RequestPermissions m -> map();
+            case PointerDown m -> map("button", m.button().wire, "slot", m.slot(), "x", m.x(), "y", m.y());
+            case PointerMove m -> map("slot", m.slot(), "x", m.x(), "y", m.y());
+            case PointerUp m -> map("button", m.button().wire, "slot", m.slot(), "x", m.x(), "y", m.y());
+            case Scroll m -> map("dx", m.dx(), "dy", m.dy(), "slot", m.slot(), "x", m.x(), "y", m.y());
+            case Click m -> map("button", m.button().wire, "slot", m.slot(), "x", m.x(), "y", m.y());
+            case ExitTyping m -> map();
+            case WindowsToDisplay m -> map("apps", m.apps() == null ? null : List.copyOf(m.apps()), "slot", m.slot());
+            case WindowsBack m -> map();
+            case TypingExit m -> map("reason", m.reason());
+            case DragDelta m -> map("dx", m.dx(), "dy", m.dy());
+            case DragEnded m -> map("reason", m.reason());
             case Welcome m -> map("accessibility", m.accessibility(), "screenRecording", m.screenRecording(),
                     "version", m.version());
             case Windows m -> {
@@ -359,6 +448,53 @@ public final class HelperProtocol {
                 return new ZoomOut();
             case REQUEST_PERMISSIONS:
                 return new RequestPermissions();
+            case POINTER_DOWN: {
+                JsonObject o = object(root);
+                return new PointerDown(integer(o, "slot"), integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")));
+            }
+            case POINTER_MOVE: {
+                JsonObject o = object(root);
+                return new PointerMove(integer(o, "slot"), integer(o, "x"), integer(o, "y"));
+            }
+            case POINTER_UP: {
+                JsonObject o = object(root);
+                return new PointerUp(integer(o, "slot"), integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")));
+            }
+            case SCROLL: {
+                JsonObject o = object(root);
+                return new Scroll(integer(o, "slot"), integer(o, "x"), integer(o, "y"), integer(o, "dx"), integer(o, "dy"));
+            }
+            case CLICK: {
+                JsonObject o = object(root);
+                return new Click(integer(o, "slot"), integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")));
+            }
+            case EXIT_TYPING:
+                return new ExitTyping();
+            case WINDOWS_TO_DISPLAY: {
+                JsonObject o = object(root);
+                JsonElement apps = o.get("apps");
+                List<String> list = null;
+                if (apps != null && !apps.isJsonNull()) {
+                    if (!apps.isJsonArray()) throw bad("apps must be an array");
+                    list = new ArrayList<>();
+                    for (JsonElement e : apps.getAsJsonArray()) {
+                        if (!e.isJsonPrimitive() || !e.getAsJsonPrimitive().isString()) throw bad("apps must hold strings");
+                        list.add(e.getAsString());
+                    }
+                    list = Collections.unmodifiableList(list);
+                }
+                return new WindowsToDisplay(integer(o, "slot"), list);
+            }
+            case WINDOWS_BACK:
+                return new WindowsBack();
+            case TYPING_EXIT:
+                return new TypingExit(str(object(root), "reason"));
+            case DRAG_DELTA: {
+                JsonObject o = object(root);
+                return new DragDelta(integer(o, "dx"), integer(o, "dy"));
+            }
+            case DRAG_ENDED:
+                return new DragEnded(str(object(root), "reason"));
             case WELCOME: {
                 JsonObject o = object(root);
                 return new Welcome(integer(o, "version"), bool(o, "screenRecording"), bool(o, "accessibility"));
@@ -687,6 +823,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= REQUEST_PERMISSIONS) || (t >= WELCOME && t <= ERROR);
+        return (t >= HELLO && t <= WINDOWS_BACK) || (t >= WELCOME && t <= DRAG_ENDED);
     }
 }

@@ -159,7 +159,7 @@ public class HologramSettingsScreen extends Screen {
 
 		if (mode == Mode.MIRROR) {
 			note(left, y, "Your screen, minus Minecraft");
-			note(left, y + LABEL, "Zoom in to use your real desktop");
+			note(left, y + LABEL, Platform.current().supportsZoom() ? "Zoom in to use your real desktop" : "View-only: use Extend to click and type");
 		} else if (mode == Mode.EXTEND && extendUnavailable) {
 			note(left, y, "Extend is coming soon here:");
 			note(left, y + LABEL, "pick Mirror or Window");

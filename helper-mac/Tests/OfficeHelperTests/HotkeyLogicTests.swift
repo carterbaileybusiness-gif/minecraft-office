@@ -6,10 +6,9 @@ enum HotkeyLogicTests {
     static func runAll() {
         run("zoom style follows what the surface shows") {
             let mirror = ZoomStyle(kind: .main), display = ZoomStyle(kind: .display), window = ZoomStyle(kind: .window)
-            expect(mirror.hidesMinecraft && !mirror.clampsCursor && !mirror.placesWindow, "Mirror: Minecraft steps aside, no clamp")
-            expect(mirror.exitsWhenMinecraftActivates, "Mirror: clicking back into Minecraft exits")
-            expect(display.clampsCursor && !display.hidesMinecraft && !display.exitsWhenMinecraftActivates, "Extend: cursor clamp only")
-            expect(window.placesWindow && !window.hidesMinecraft && !window.clampsCursor, "Window: placement only")
+            expect(!mirror.clampsCursor && !mirror.placesWindow, "Mirror: view-only, nothing happens")
+            expect(display.clampsCursor && !display.placesWindow, "Extend: cursor clamp only")
+            expect(window.placesWindow && !window.clampsCursor, "Window: placement only")
         }
 
         run("Mirror never captures without Minecraft excluded") {
@@ -21,19 +20,6 @@ enum HotkeyLogicTests {
             let total = MirrorExclusion.delays.reduce(0, +)
             expect(total >= 4 && total <= 6, "about 5 s in all, got \(total)")
             expect(zip(MirrorExclusion.delays, MirrorExclusion.delays.dropFirst()).allSatisfy { $0 <= $1 }, "backs off")
-        }
-
-        run("Minecraft is never left hidden") {
-            var guardState = MinecraftHideGuard()
-            expect(!guardState.shouldUnhide, "nothing hidden yet")
-            guardState.hid()
-            expect(guardState.isHidden, "hidden while zoomed into Mirror")
-            expect(guardState.shouldUnhide, "every way out (exit, disconnect, error, quit) must unhide")
-            guardState.unhid()
-            expect(!guardState.shouldUnhide, "unhidden once")
-            guardState.hid(); guardState.hid()
-            guardState.unhid()
-            expect(!guardState.isHidden, "a second hide is still one unhide")
         }
 
         run("double Esc within 350 ms exits") {

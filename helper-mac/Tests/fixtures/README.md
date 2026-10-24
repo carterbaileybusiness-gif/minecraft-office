@@ -34,6 +34,15 @@ Swift change alters them without the fixtures being committed.
 | `zoom_in.bin` | ZOOM_IN = 8 | `{"mcWindowFrame":{"h":875,"w":1440,"x":0,"y":25},"surface":7}` |
 | `zoom_out.bin` | ZOOM_OUT = 9 | `{}` |
 | `request_permissions.bin` | REQUEST_PERMISSIONS = 10 | `{}` |
+| `pointer_down.bin` | POINTER_DOWN = 11 | `{"button":"left","slot":1,"x":960,"y":540}` |
+| `pointer_move.bin` | POINTER_MOVE = 12 | `{"slot":2,"x":10,"y":20}` (no `button`) |
+| `pointer_up.bin` | POINTER_UP = 13 | `{"button":"left","slot":2,"x":10,"y":20}` |
+| `scroll.bin` | SCROLL = 14 | `{"dx":0,"dy":-120,"slot":1,"x":100,"y":200}` |
+| `click.bin` | CLICK = 15 | `{"button":"right","slot":1,"x":300,"y":400}` |
+| `exit_typing.bin` | EXIT_TYPING = 16 | `{}` |
+| `windows_to_display.bin` | WINDOWS_TO_DISPLAY = 17 | `{"slot":1}` |
+| `windows_to_display_apps.bin` | WINDOWS_TO_DISPLAY = 17 | `{"apps":["com.apple.TextEdit"],"slot":1}` |
+| `windows_back.bin` | WINDOWS_BACK = 18 | `{}` |
 | `welcome.bin` | WELCOME = 64 | `{"accessibility":false,"screenRecording":true,"version":1}` |
 | `windows.bin` | WINDOWS = 65 | `[{"app":"Notes","h":600,"title":"Groceries — List","w":800,"windowKey":"com.apple.Notes\|4321"},{"app":"Safari","h":900,"title":"","w":1200,"windowKey":"com.apple.Safari\|99"}]` (the dash is U+2014, bytes `e2 80 94`) |
 | `display.bin` | DISPLAY = 66 | `{"displayId":5,"h":1080,"slot":1,"w":1920}` |
@@ -42,6 +51,9 @@ Swift change alters them without the fixtures being committed.
 | `ended.bin` | ENDED = 69 | `{"reason":"window closed","surface":8}` |
 | `exit_zoom.bin` | EXIT_ZOOM = 70 | `{}` |
 | `error.bin` | ERROR = 71 | `{"code":"bad_slot","message":"slot must be 1...4"}` |
+| `typing_exit.bin` | TYPING_EXIT = 72 | `{"reason":"esc"}` |
+| `drag_delta.bin` | DRAG_DELTA = 73 | `{"dx":12,"dy":-3}` |
+| `drag_ended.bin` | DRAG_ENDED = 74 | `{"reason":"released"}` |
 
 (`\|` above is a table escape; the bytes contain a plain `|`.)
 
@@ -68,13 +80,32 @@ length=37    67  surface=7    generation=3             width=2      height=2    
 - CAPTURE kinds: `display` (a virtual display, needs `slot`), `window` (needs `windowKey`), `main` (Mirror: the main
   display, `CGMainDisplayID()`, captured with `SCContentFilter(display:excludingApplications:[the app whose pid is
   HELLO's mcPid], exceptingWindows:[])`, cursor shown; needs neither).
-- ZOOM_IN on a `main` surface hides the Minecraft app (`NSRunningApplication.hide()`), no cursor clamp, exit hotkey
-  armed. Minecraft is unhidden on every way out: ZOOM_OUT, the exit hotkey (then EXIT_ZOOM), the surface ending, the mod
-  disconnecting, the helper quitting. Minecraft becoming the active app again while zoomed (Dock, Cmd-Tab, a click)
-  ends the zoom too (EXIT_ZOOM).
+- Zoom (ZOOM_IN / ZOOM_OUT / EXIT_ZOOM) is retired on a Mac (spec 5.9); the messages stay for compatibility. ZOOM_IN
+  on a `main` (Mirror) surface does nothing: Mirror is view-only.
+- In-world use (spec 5.9; the crosshair is the mouse). `slot` + `x`, `y` = a pixel of that slot's virtual display
+  (0…w-1, 0…h-1); the helper maps it to `CGDisplayBounds` (global points). `button`: `left`, `right` or `middle`,
+  required for POINTER_DOWN, POINTER_UP and CLICK. All of it needs Accessibility (else `ERROR no_accessibility`); an
+  unknown slot gives `ERROR not_found`. Why it works this way: `helper-mac/Tools/inputprobe.swift`.
+  - CLICK: a real click there (the cursor moves there, the app under it comes forward with the keyboard) = typing mode.
+    A session event tap swallows a plain Esc (its repeats and release too) → the helper re-activates Minecraft and sends
+    `TYPING_EXIT {"reason":"esc"}`. Minecraft becoming active (a click on its window, Cmd-Tab) → `TYPING_EXIT
+    {"reason":"minecraft"}`. EXIT_TYPING (mod → helper) ends typing without a reply.
+  - POINTER_DOWN starts a drag the helper drives: it brings the app under the point forward, posts a real button down
+    there, and takes the physical mouse with an event tap until the physical button is released. The physical motion
+    goes to the mod as `DRAG_DELTA {dx, dy}` (points, summed, about every 4 ms) so it can turn the player's head;
+    POINTER_MOVE (the crosshair's new pixel, on any slot) is posted as a real drag there. The physical release (or a
+    0.25 s button-state poll that finds it up, also when it was released before POINTER_DOWN arrived) posts the up at
+    the last point, sends `DRAG_ENDED {"reason":"released"}` and re-activates Minecraft. POINTER_UP cancels from the
+    mod side (`DRAG_ENDED {"reason":"cancelled"}`). The mod disconnecting cancels too.
+  - SCROLL: a real scroll-wheel event at the point, in pixels (`dy` > 0 = up); scrolling never activates an app.
+  - WINDOWS_TO_DISPLAY: the player's standard app windows on the main display (not Minecraft, not the helper, not
+    minimized or full screen) move onto that slot's display, scaled into its visible area with the layout kept; `apps`
+    (bundle ids) limits it. WINDOWS_BACK, the mod disconnecting and the helper quitting put each one back where it was
+    (still-existing windows only; the originals live in memory).
 - ENDED reasons: `"window closed"`, `"display removed"`, `"no display"`, `"no permission"` (Screen Recording missing),
   `"capture failed: <detail>"`.
 - ERROR codes: `bad_slot`, `bad_size`, `display_failed`, `not_found`, `no_accessibility`, `bad_request`, `version`,
   `busy`.
+- TYPING_EXIT / DRAG_ENDED reasons: `esc`, `minecraft` / `released`, `cancelled`.
 - `windowKey` = `"<bundleId>|<CGWindowID>"` (id after the last `|`; bundle id may be empty).
 - `mcWindowFrame` and WINDOWS `w`/`h` are global points, top-left origin (Quartz window coordinates).

@@ -21,14 +21,15 @@ import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperInstaller;
 import local.carter.office.client.helper.HelperProtocol;
 import local.carter.office.client.helper.HelperProtocol.Welcome;
-import local.carter.office.client.helper.HelperProtocol.WindowRect;
+import local.carter.office.client.helper.HelperProtocol.PointerButton;
 import local.carter.office.client.helper.MacHelper;
 import local.carter.office.client.interact.HologramSettingsScreen;
 import local.carter.office.client.interact.WindowListProvider;
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
+import local.carter.office.client.pointer.PointerPoint;
+import local.carter.office.client.pointer.PointerPort;
 import local.carter.office.client.selftest.SelfTestScreen;
 import local.carter.office.core.HologramSpec;
-import local.carter.office.core.Mode;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
@@ -43,9 +44,11 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
 /**
- * macOS: the player's own screens come from OfficeHelper.app (Mirror = the main display minus Minecraft, virtual
- * displays, ScreenCaptureKit, window placement, cursor focus, hiding Minecraft while working on a Mirror, exit hotkey)
- * over {@link HelperConnection}.
+ * macOS: the player's own screens come from OfficeHelper.app (virtual displays, Mirror = the main display minus
+ * Minecraft, ScreenCaptureKit) over {@link HelperConnection}, and the holograms are used right in the world with the
+ * crosshair as the mouse ({@link #pointer}, spec 5.9: clicks, helper-driven drags, scrolling, typing mode with Esc to
+ * return). Joining moves the player's windows onto their first hologram's display; leaving moves them back. There is
+ * no zoom on a Mac ({@link #supportsZoom} false).
  *
  * <p>Setup UX: the first time an own hologram needs the helper and it isn't installed, an in-game confirm screen asks
  * before anything is downloaded ("Set up your screens?", Yes / Not now). Until the helper runs with Screen Recording,
@@ -66,11 +69,7 @@ public final class MacPlatform implements Platform {
 	private HelperInstaller.@Nullable Asset pendingAsk;
 	private int pendingSession;
 	private boolean permissionNotified;
-	// zoom (client thread)
-	private boolean zoomed;
-	/** The current zoom is into a Mirror hologram (the helper hides Minecraft). */
-	private boolean mirrorZoom;
-	private @Nullable String zoomFailure;
+	private final PointerPort pointer = new HelperPointer();
 
 	MacPlatform() {
 		installer = HelperInstaller.create(OfficeClient.MOD_VERSION, OfficeClient.RELEASE_BASE);
@@ -81,6 +80,8 @@ public final class MacPlatform implements Platform {
 				HelperInstaller.launch(a);
 			}
 		}, listener), r -> Minecraft.getInstance().execute(r));
+		// -Doffice.moveWindows=false keeps the player's windows where they are when joining a world
+		helper.setMoveWindowsOnJoin(!"false".equalsIgnoreCase(System.getProperty("office.moveWindows")));
 	}
 
 	public MacHelper helper() {
@@ -91,7 +92,6 @@ public final class MacPlatform implements Platform {
 	public void register() {
 		helper.onStatusChange(this::statusChanged);
 		HologramLook.setOwnDetailProvider(OwnScreens::ownDetail); // why a capture ended, under "Screens unavailable"
-		helper.onError(this::helperError);
 		helper.onWindows(() -> {
 			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
 				s.refreshWindows();
@@ -147,48 +147,88 @@ public final class MacPlatform implements Platform {
 		helper.listWindows();
 	}
 
-	/**
-	 * Sends ZOOM_IN for the hologram's capture surface. If it can't be sent (no surface, helper gone) or the helper
-	 * answers ERROR not_found / no_accessibility, {@link #workProblem} reports why until {@link #zoomOut}, so the zoom
-	 * ends with that reason instead of leaving the player in a view they can't use.
-	 */
+	/** No zoom on a Mac: the holograms are used in the world (spec 5.9). */
+	@Override
+	public boolean supportsZoom() {
+		return false;
+	}
+
 	@Override
 	public void zoomIn(final HologramSpec spec, final Rect mcWindow) {
-		zoomed = true;
-		mirrorZoom = spec.mode() == Mode.MIRROR;
-		zoomFailure = null;
-		int surface = helper.surfaceFor(Target.of(spec));
-		boolean sent = helper.zoomIn(surface, new WindowRect(mcWindow.x(), mcWindow.y(), mcWindow.w(), mcWindow.h()));
-		zoomFailure = ZoomFailure.forZoomIn(helper.isConnected(), surface, sent);
-		if (zoomFailure != null) {
-			LOGGER.info("Office helper: zoom-in not possible ({}; surface {})", zoomFailure, surface);
-		}
-	}
-
-	/** ZOOM_OUT (the helper unhides Minecraft after a Mirror zoom); if the helper is gone, Minecraft unhides itself. */
-	@Override
-	public void zoomOut() {
-		boolean wasMirror = mirrorZoom;
-		zoomed = false;
-		mirrorZoom = false;
-		zoomFailure = null;
-		helper.zoomOut();
-		if (wasMirror) {
-			MacApp.unhideIfHidden(); // never leave Minecraft hidden, even if the helper died mid-zoom
-		}
-	}
-
-	/** An ERROR from the helper while zoomed that means the zoom didn't happen (client thread). */
-	private void helperError(final HelperProtocol.HelperError e) {
-		String why = ZoomFailure.forHelperError(e.code());
-		if (zoomed && why != null && zoomFailure == null) {
-			zoomFailure = why;
-		}
+		LOGGER.debug("Office: zoom isn't used on a Mac");
 	}
 
 	@Override
-	public void onExitRequested(final Runnable r) {
-		helper.onExitZoom(r);
+	public void zoomOut() {}
+
+	@Override
+	public void onExitRequested(final Runnable r) {}
+
+	@Override
+	public PointerPort pointer() {
+		return pointer;
+	}
+
+	/** In-world use through the helper. */
+	private final class HelperPointer implements PointerPort {
+		@Override
+		public @Nullable String problem() {
+			Welcome w = helper.welcome();
+			if (!helper.isConnected() || w == null) {
+				return ZoomFailure.NO_HELPER;
+			}
+			return w.accessibility() ? null : "OfficeHelper needs macOS Accessibility to click and type on your screens: /officescreens setup";
+		}
+
+		@Override
+		public void pointerDown(final PointerPoint p) {
+			helper.pointerDown(p);
+		}
+
+		@Override
+		public void pointerMove(final PointerPoint p) {
+			helper.pointerMove(p);
+		}
+
+		@Override
+		public void pointerUp(final PointerPoint p) {
+			helper.pointerUp(p);
+		}
+
+		@Override
+		public void click(final PointerPoint p, final PointerButton button) {
+			helper.click(p, button);
+		}
+
+		@Override
+		public void scroll(final PointerPoint p, final int dx, final int dy) {
+			helper.scroll(p, dx, dy);
+		}
+
+		@Override
+		public void exitTyping() {
+			helper.exitTyping();
+		}
+
+		@Override
+		public int[] drainDragDelta() {
+			return helper.drainDragDelta();
+		}
+
+		@Override
+		public void onTypingExit(final java.util.function.Consumer<String> listener) {
+			helper.onTypingExit(listener);
+		}
+
+		@Override
+		public void onDragEnded(final java.util.function.Consumer<String> listener) {
+			helper.onDragEnded(listener);
+		}
+
+		@Override
+		public void activateMinecraft() {
+			MacApp.activate(true);
+		}
 	}
 
 	// ---------------------------------------------------------------- self-test (off the client thread)
@@ -229,21 +269,10 @@ public final class MacPlatform implements Platform {
 		return new Readiness(true, ok, recording, detail);
 	}
 
-	/** Working needs the helper connected and Accessibility (cursor focus, window placement, the exit hotkey). */
+	/** Using a screen in the world needs the helper connected and Accessibility (posting events, the Esc tap). */
 	@Override
 	public @Nullable String workProblem(final HologramSpec spec) {
-		String failure = zoomFailure;
-		if (zoomed && failure != null) {
-			return failure;
-		}
-		Welcome w = helper.welcome();
-		if (!helper.isConnected() || w == null) {
-			return ZoomFailure.NO_HELPER;
-		}
-		if (!w.accessibility()) {
-			return ZoomFailure.NO_ACCESSIBILITY;
-		}
-		return null;
+		return pointer.problem();
 	}
 
 	@Override
@@ -395,7 +424,7 @@ public final class MacPlatform implements Platform {
 				missing.add("Screen Recording (to show your screens)");
 			}
 			if (!w.accessibility()) {
-				missing.add("Accessibility (to work on a screen)");
+				missing.add("Accessibility (to click and type on your screens)");
 			}
 			chat(Component.literal("OfficeHelper needs macOS " + String.join(" and ", missing) + ". ")
 					.append(link("Set up screens", OfficeScreensCommand.Action.SETUP, "Asks macOS again and opens System Settings"))

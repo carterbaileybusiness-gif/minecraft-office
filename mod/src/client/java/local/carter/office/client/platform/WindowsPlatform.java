@@ -301,6 +301,11 @@ public final class WindowsPlatform implements Platform {
 	 * undoes what it did and asks to exit instead. Extend mode does nothing. Never throws, never blocks on the hook.
 	 */
 	@Override
+	public boolean supportsZoom() {
+		return true; // click-to-zoom (beta) until Windows gets virtual displays
+	}
+
+	@Override
 	public synchronized void zoomIn(final HologramSpec spec, final Rect mcWindow) {
 		if (spec.mode() == Mode.MIRROR) {
 			zoomInMirror();

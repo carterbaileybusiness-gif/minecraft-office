@@ -6,6 +6,7 @@
 		"CameraZoomMixin",
 		"EntityRendererNameTagMixin",
 		"GameRendererSkipWorldMixin",
+		"MinecraftAttackMixin",
 		"MinecraftFrameMixin",
 		"MinecraftUseItemMixin",
 		"OptionsSaveMixin",

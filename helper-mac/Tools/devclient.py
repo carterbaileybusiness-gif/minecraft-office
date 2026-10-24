@@ -12,6 +12,14 @@ Steps (run in order; incoming messages are printed as they arrive):
   zoomin SURFACE X Y W H     ZOOM_IN with mcWindowFrame
   zoomout                    ZOOM_OUT
   permissions                REQUEST_PERMISSIONS (macOS prompts for what is missing), then a fresh WELCOME
+  down SLOT X Y [BUTTON]     POINTER_DOWN at a display pixel (a helper-driven drag; ends when the physical button is up)
+  move SLOT X Y              POINTER_MOVE (during a drag)
+  up SLOT X Y [BUTTON]       POINTER_UP (the mod cancels the drag)
+  click SLOT X Y [BUTTON]    CLICK: a real click there; the app gets the keyboard (typing mode, Esc returns)
+  scroll SLOT X Y DX DY      SCROLL (pixels; positive DY = up)
+  exittyping                 EXIT_TYPING
+  windowsto SLOT [BUNDLE..]  WINDOWS_TO_DISPLAY (optionally only these apps' windows; ends at the next step word)
+  windowsback                WINDOWS_BACK
   sleep SECONDS              wait (still printing incoming messages)
   displays                   print online display ids (CoreGraphics)
   uuid SLOT                  print the display UUID macOS uses to restore arrangement / window positions
@@ -33,7 +41,11 @@ SOCK = os.path.join(DIR, "helper.sock")
 TOKEN = os.path.join(DIR, "helper.token")
 NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY", 5: "CAPTURE", 6: "STOP", 7: "READY",
          8: "ZOOM_IN", 9: "ZOOM_OUT", 10: "REQUEST_PERMISSIONS", 64: "WELCOME", 65: "WINDOWS", 66: "DISPLAY", 67: "FRAME", 68: "PATCH",
-         69: "ENDED", 70: "EXIT_ZOOM", 71: "ERROR"}
+         69: "ENDED", 70: "EXIT_ZOOM", 71: "ERROR",
+         11: "POINTER_DOWN", 12: "POINTER_MOVE", 13: "POINTER_UP", 14: "SCROLL", 15: "CLICK", 16: "EXIT_TYPING",
+         17: "WINDOWS_TO_DISPLAY", 18: "WINDOWS_BACK", 72: "TYPING_EXIT", 73: "DRAG_DELTA", 74: "DRAG_ENDED"}
+STEPS = {"create", "remove", "list", "capture", "ready", "stop", "zoomin", "zoomout", "permissions", "down", "move", "up",
+         "click", "scroll", "exittyping", "windowsto", "windowsback", "sleep", "uuid", "displays", "waitgone", "badtoken"}
 CODES = {v: k for k, v in NAMES.items()}
 
 cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
@@ -188,6 +200,29 @@ def main(argv):
             c.send("ZOOM_OUT"); i += 1
         elif step == "permissions":
             c.send("REQUEST_PERMISSIONS"); i += 1
+        elif step in ("down", "up", "click"):
+            slot, x, y = map(int, argv[i + 1:i + 4]); i += 4
+            button = "left"
+            if i < len(argv) and argv[i] in ("left", "right", "middle"):
+                button = argv[i]; i += 1
+            kind = {"down": "POINTER_DOWN", "up": "POINTER_UP", "click": "CLICK"}[step]
+            c.send(kind, {"slot": slot, "x": x, "y": y, "button": button})
+        elif step == "move":
+            slot, x, y = map(int, argv[i + 1:i + 4]); i += 4
+            c.send("POINTER_MOVE", {"slot": slot, "x": x, "y": y})
+        elif step == "scroll":
+            slot, x, y, dx, dy = map(int, argv[i + 1:i + 6]); i += 6
+            c.send("SCROLL", {"slot": slot, "x": x, "y": y, "dx": dx, "dy": dy})
+        elif step == "exittyping":
+            c.send("EXIT_TYPING"); i += 1
+        elif step == "windowsto":
+            slot = int(argv[i + 1]); i += 2
+            apps = []
+            while i < len(argv) and argv[i] not in STEPS:
+                apps.append(argv[i]); i += 1
+            c.send("WINDOWS_TO_DISPLAY", {"slot": slot, **({"apps": apps} if apps else {})})
+        elif step == "windowsback":
+            c.send("WINDOWS_BACK"); i += 1
         elif step == "sleep":
             time.sleep(float(argv[i + 1])); i += 2
         elif step == "uuid":

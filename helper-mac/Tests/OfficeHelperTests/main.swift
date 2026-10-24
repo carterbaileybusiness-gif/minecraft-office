@@ -36,6 +36,7 @@ let fixtureDirectory: URL? = CommandLine.arguments.count > 1 ? URL(fileURLWithPa
 ProtocolTests.runAll(fixtures: fixtureDirectory)
 DisplaySpecTests.runAll()
 HotkeyLogicTests.runAll()
+PointerTests.runAll()
 
 print("\(checks) checks, \(failures) failures")
 exit(failures == 0 ? 0 : 1)

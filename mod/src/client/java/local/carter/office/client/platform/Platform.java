@@ -6,6 +6,7 @@ import java.util.Locale;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.capture.CaptureSource;
+import local.carter.office.client.pointer.PointerPort;
 import local.carter.office.core.HologramSpec;
 
 /**
@@ -32,6 +33,19 @@ public interface Platform {
 
 	/** Asks for a fresh window list; it arrives later in {@link #windows}. */
 	default void refreshWindows() {}
+
+	/**
+	 * Whether clicking your own hologram zooms in to work on it (Windows beta). On a Mac the holograms are used in the
+	 * world instead ({@link #pointer}, spec 5.9), so zoom is not used there.
+	 */
+	default boolean supportsZoom() {
+		return false;
+	}
+
+	/** In-world use: the crosshair as the mouse on your own Extend holograms (Mac), or null where it isn't available. */
+	default @Nullable PointerPort pointer() {
+		return null;
+	}
 
 	/** The player starts working on {@code spec}'s screen; {@code mcWindow} is Minecraft's window frame. */
 	void zoomIn(HologramSpec spec, Rect mcWindow);
