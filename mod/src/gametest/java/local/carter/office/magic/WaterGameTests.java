@@ -316,20 +316,32 @@ public class WaterGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
-	public void waterPrisonTakesTheFoeNotTheCow(GameTestHelper h) {
+	public void waterPrisonTakesACowButNeverANamedOne(GameTestHelper h) {
+		// Lane A: a named cow stands in the ray (a friend's: protected), the zombie behind it is taken.
 		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 5);
-		Cow cow = h.spawn(EntityTypes.COW, new BlockPos(16, 4, 8));
-		cow.setNoAi(true);
+		Cow named = h.spawn(EntityTypes.COW, new BlockPos(16, 4, 8));
+		named.setNoAi(true);
+		named.setCustomName(net.minecraft.network.chat.Component.literal("Daisy"));
 		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 4, 14));
 		MagicTestKit.aim(p, new BlockPos(16, 5, 14));
+		// Lane B: a plain cow is fair game (Carter's ruling, 2026-10-24): the prison takes it.
+		ServerPlayer q = MagicTestKit.caster(h, Element.WATER, 5);
+		MagicTestKit.teleportTo(q, new BlockPos(6, 4, 4));
+		Cow cow = h.spawn(EntityTypes.COW, new BlockPos(6, 4, 10));
+		cow.setNoAi(true);
+		MagicTestKit.aim(q, new BlockPos(6, 4, 10));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
-		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.WATER_PRISON, 0f), Result.CAST, "result");
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.WATER_PRISON, 0f), Result.CAST, "lane A");
+		h.assertValueEqual(MagicTestKit.cast(q, SpellIds.WATER_PRISON, 0f), Result.CAST, "lane B");
 		FxEvent e = rec.fx(p).get(0);
 		h.assertValueEqual(e.entities().length, 1, "one prisoner");
-		h.assertValueEqual(e.entities()[0], z.getId(), "the ray passed the cow for the zombie");
+		h.assertValueEqual(e.entities()[0], z.getId(), "the ray passed the named cow for the zombie");
+		FxEvent f = rec.fx(q).get(0);
+		h.assertTrue(f.entities().length == 1 && f.entities()[0] == cow.getId(), "the cow is taken");
 		h.runAfterDelay(5, () -> {
 			h.assertTrue(z.getEffect(MobEffects.SLOWNESS) != null, "the zombie is held");
-			h.assertTrue(cow.getEffect(MobEffects.SLOWNESS) == null, "the cow is not");
+			h.assertTrue(named.getEffect(MobEffects.SLOWNESS) == null, "the named cow is not");
+			h.assertTrue(cow.getEffect(MobEffects.SLOWNESS) != null, "the cow is held");
 			h.succeed();
 		});
 	}
@@ -438,7 +450,7 @@ public class WaterGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 60)
-	public void waterDragonStrikesAllButThrowsOnlyFoes(GameTestHelper h) {
+	public void waterDragonStrikesAndThrowsAnimalsButSparesTheProtected(GameTestHelper h) {
 		ServerPlayer p = dragonCaster(h);
 		Zombie z = MagicTestKit.movableDummy(h, DRAGON_CELL.east(3));
 		tough(z);
@@ -446,16 +458,24 @@ public class WaterGameTests {
 		cow.removeAllGoals(g -> true);
 		cow.setPersistenceRequired();
 		tough(cow);
+		// A name tag makes a cow a friend's: never struck, never thrown (Carter's ruling, 2026-10-24).
+		Cow named = h.spawn(EntityTypes.COW, DRAGON_CELL.north(3));
+		named.removeAllGoals(g -> true);
+		named.setPersistenceRequired();
+		named.setCustomName(net.minecraft.network.chat.Component.literal("Daisy"));
 		Villager v = MagicTestKit.villager(h, DRAGON_CELL.south(3));
 		Vec3 z0 = z.position();
 		Vec3 c0 = cow.position();
+		Vec3 n0 = named.position();
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WATER_DRAGON), Result.CAST, "result");
 		h.runAfterDelay(DragonGeometry.FLIGHT + 4, () -> {
 			h.assertTrue(z.getHealth() <= 200 - DragonGeometry.DAMAGE, "the zombie is struck: " + z.getHealth());
-			h.assertTrue(cow.getHealth() <= 200 - DragonGeometry.DAMAGE, "the cow is struck too (damage follows the target filter): " + cow.getHealth());
+			h.assertTrue(cow.getHealth() <= 200 - DragonGeometry.DAMAGE, "the cow is struck too (animals are fair game): " + cow.getHealth());
 			h.assertValueEqual(v.getHealth(), v.getMaxHealth(), "the villager is spared");
+			h.assertValueEqual(named.getHealth(), named.getMaxHealth(), "the named cow is spared");
 			h.assertTrue(z.getX() - z0.x >= 1, "the foe is thrown away from the impact: " + (z.getX() - z0.x));
-			h.assertTrue(Math.abs(cow.getX() - c0.x) < 0.5, "the cow is not thrown: " + (cow.getX() - c0.x));
+			h.assertTrue(c0.x - cow.getX() >= 1, "the cow is thrown away from the impact too: " + (cow.getX() - c0.x));
+			h.assertTrue(named.position().distanceTo(n0) < 0.5, "the named cow is not thrown: " + named.position().subtract(n0));
 			h.succeed();
 		});
 	}

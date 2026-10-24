@@ -46,13 +46,14 @@ public final class WaterBulletFx implements SpellFx {
 
 		// The muzzle: a quick circle facing the caster, a puff of spray and a ring of light thrown out in its plane.
 		Vec3 muzzle = origin.add(dir.scale(1.7)).add(0, -0.15, 0);
-		kit.circle(muzzle, dir.reverse(), WaterFx.ARGB, 0.42F + 0.3F * c, 2 + Math.round(2 * c), 9 + Math.round(4 * c));
+		kit.circle(muzzle, dir.reverse(), WaterFx.ARGB, 0.42F * (1F + c), 2 + Math.round(2 * c), 9 + Math.round(4 * c));
 		kit.burst(muzzle.add(dir.scale(0.25)), ParticleTypes.SPLASH, 8 + Math.round(8 * c), 0.14);
 		ringOut(kit, muzzle, dir, 10, 0.12 + 0.06 * c, WaterFx.LIGHT, 0.12F);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.TRIDENT_THROW.value(), SoundSource.PLAYERS, 0.5F, 1.5F + 0.2F * (1 - c), false);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.PLAYER_SPLASH, SoundSource.PLAYERS, 0.35F, 1.7F, false);
 
-		float orb = 0.44F + 0.24F * c;
+		// As big as the server's jet (WaterBullet.radius): twice a tap's at full charge.
+		float orb = 0.44F * (1F + c);
 		// A short flight can afford a dense wake; a long one thins it so the splash keeps its share of the budget.
 		double spacing = e.duration() <= 8 ? 0.18 : 0.32;
 		boolean[] done = {false};
@@ -102,12 +103,12 @@ public final class WaterBulletFx implements SpellFx {
 	/** The splash: spray, popping bubbles, a ring of light in the plane facing back along the jet, and a slap. */
 	private static void impact(FxKit kit, ClientLevel level, Vec3 at, Vec3 dir, float c, boolean entity) {
 		Vec3 back = at.subtract(dir.scale(0.15));
-		kit.burst(back, ParticleTypes.SPLASH, 22 + Math.round(16 * c), 0.28 + 0.1 * c);
+		kit.burst(back, ParticleTypes.SPLASH, 22 + Math.round(22 * c), 0.28 * (1 + c));
 		kit.burst(back, ParticleTypes.BUBBLE_POP, 8, 0.14);
 		kit.burst(back, ParticleTypes.FALLING_WATER, 6, 0.1);
-		ringOut(kit, back, dir, 14, 0.22 + 0.1 * c, WaterFx.FOAM, 0.2F);
+		ringOut(kit, back, dir, 14, 0.22 * (1 + c), WaterFx.FOAM, 0.2F);
 		kit.motes(back, WaterFx.BODY, 8, 0.25, dir.scale(-0.05), 0.12, GlowMote.Drift.FALL, 0.16F, 12);
-		kit.circle(back, dir.reverse(), WaterFx.ARGB, 0.4F + 0.25F * c, 1, 7);
+		kit.circle(back, dir.reverse(), WaterFx.ARGB, 0.4F * (1F + c), 1, 7);
 		level.playLocalSound(at.x, at.y, at.z, SoundEvents.GENERIC_SPLASH, SoundSource.PLAYERS, 0.8F, 1.25F + level.getRandom().nextFloat() * 0.2F,
 				false);
 		if (entity) {

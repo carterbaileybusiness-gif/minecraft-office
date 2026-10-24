@@ -4,6 +4,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.ActiveEffects;
@@ -28,22 +29,23 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Flame Dash (fire, slot 2, small): the caster bursts forward along their flat facing at {@code 1.6 + 0.5 × charge} blocks a tick
- * plus {@link #UP} up ({@link Motion#dash}: their own client does the moving), with no fall damage for {@link #NO_FALL_TICKS}
- * ticks. For the next {@link #BURN_TICKS} ticks every creature within {@link #REACH} of the caster's body along the way (swept
- * tick to tick, so speed never skips one; never through a wall) takes {@code 3 × P} and burns for {@link #FIRE_TICKS} ticks,
- * each once. No block changes.
+ * Flame Dash (fire, slot 2, small): the caster bursts forward along their flat facing at {@link #speed} = {@code 1.6 × (1 +
+ * charge)} blocks a tick (a full charge dashes twice as far) plus {@link #UP} up ({@link Motion#dash}: their own client does the
+ * moving), with no fall damage for {@link #NO_FALL_TICKS} ticks. For the next {@link #BURN_TICKS} ticks every creature within
+ * {@link #reach} ({@code 1.5 + 0.75 × charge}) of the caster's body along the way (swept tick to tick, so speed never skips one;
+ * never through a wall) takes {@code 3 × P} and burns for {@code FIRE_TICKS × (1 + charge)} ticks, each once. No block changes.
  *
  * <p>Fx: {@code target} = where the dash starts (the caster's feet), {@code dir} = the dash's flat direction, {@code duration} =
  * {@link #BURN_TICKS}, {@code data} = {@code {speed}}.
  */
 public final class FlameDash implements Spell {
 	public static final double BASE_SPEED = 1.6;
-	public static final double CHARGE_SPEED = 0.5;
 	public static final double UP = 0.2;
 	public static final int NO_FALL_TICKS = 40;
 	public static final int BURN_TICKS = 8;
 	public static final double REACH = 1.5;
+	/** What a full charge adds to {@link #REACH}. */
+	public static final double CHARGE_REACH = 0.75;
 	public static final float DAMAGE = 3;
 	public static final int FIRE_TICKS = 40;
 	/** Spacing of the points the path is checked at. */
@@ -64,8 +66,14 @@ public final class FlameDash implements Spell {
 		return Slots.SMALL_B;
 	}
 
+	/** The dash's speed at {@code charge}: {@code 1.6 × ChargeMath.size(charge)}, 1.6 at a tap and 3.2 at full charge. */
 	public static double speed(float charge) {
-		return BASE_SPEED + CHARGE_SPEED * Mth.clamp(charge, 0F, 1F);
+		return BASE_SPEED * ChargeMath.size(charge);
+	}
+
+	/** How near the path a creature catches fire at {@code charge}: 1.5, 2.25 at full charge. */
+	public static double reach(float charge) {
+		return REACH + CHARGE_REACH * Mth.clamp(charge, 0F, 1F);
 	}
 
 	/** The dash's flat direction: the look without its vertical part (the facing when looking straight up or down). */
@@ -114,10 +122,11 @@ public final class FlameDash implements Spell {
 		}
 
 		private void burn(ServerLevel level, Vec3 from, Vec3 to) {
-			AABB near = new AABB(from, to).inflate(REACH + 1);
+			double reach = reach(ctx.charge());
+			AABB near = new AABB(from, to).inflate(reach + 1);
 			double len = from.distanceTo(to);
 			int steps = Math.max(1, (int) Math.ceil(len / SAMPLE));
-			double r2 = REACH * REACH;
+			double r2 = reach * reach;
 			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, near, e -> TargetFilter.affects(ctx.caster(), e))) {
 				if (burnt.contains(e.getId()) || burnt.size() >= Targets.MAX_ENTITIES) continue;
 				AABB box = e.getBoundingBox();
@@ -132,7 +141,7 @@ public final class FlameDash implements Spell {
 				if (closest == null || !clear(level, closest, box.getCenter())) continue;
 				burnt.add(e.getId());
 				Hurt.damage(ctx, e, DAMAGE * ctx.power());
-				if (e.isAlive()) e.igniteForTicks(FIRE_TICKS);
+				if (e.isAlive()) e.igniteForTicks(Math.round(FIRE_TICKS * ChargeMath.size(ctx.charge())));
 			}
 		}
 

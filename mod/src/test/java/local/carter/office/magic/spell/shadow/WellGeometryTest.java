@@ -103,9 +103,12 @@ class WellGeometryTest {
 	@Test
 	void lifeAndReach() {
 		assertEquals(80, WellGeometry.life(0));
-		assertEquals(100, WellGeometry.life(0.5F));
-		assertEquals(120, WellGeometry.life(1));
-		assertEquals(120, WellGeometry.life(3), "charge clamped");
+		assertEquals(120, WellGeometry.life(0.5F));
+		assertEquals(160, WellGeometry.life(1));
+		assertEquals(160, WellGeometry.life(3), "charge clamped");
+		assertEquals(6, WellGeometry.radius(0), 1e-9);
+		assertEquals(12, WellGeometry.radius(1), 1e-9, "a full charge pulls from twice as far");
+		assertTrue(WellGeometry.inReach(CENTRE, CENTRE.add(12, 0, 0), WellGeometry.radius(1)));
 		assertTrue(WellGeometry.inReach(CENTRE, CENTRE.add(6, 0, 0)));
 		assertFalse(WellGeometry.inReach(CENTRE, CENTRE.add(6.01, 0, 0)));
 		assertFalse(WellGeometry.inReach(CENTRE, CENTRE.add(4.3, 4.3, 0)));

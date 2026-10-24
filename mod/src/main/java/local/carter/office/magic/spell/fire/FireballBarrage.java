@@ -51,9 +51,10 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
- * Fireball Barrage (fire, slot 3, medium, lingering): {@code 3 + round(2 × charge)} fireballs rain on the spot the caster points
- * at (the look ray's first block within {@link BarrageGeometry#RANGE}, else the point at that range), one every
- * {@link BarrageGeometry#INTERVAL} ticks, each aimed within {@link BarrageGeometry#SPREAD} of it (seeded) and thrown down from the
+ * Fireball Barrage (fire, slot 3, medium, lingering): {@link BarrageGeometry#count} fireballs (3 at a tap, 6 at full charge) rain
+ * on the spot the caster points at (the look ray's first block within {@link BarrageGeometry#RANGE}, else the point at that
+ * range), one every {@link BarrageGeometry#INTERVAL} ticks, each aimed within {@link BarrageGeometry#spread} of it (1.5, twice
+ * that for six; seeded) and thrown down from the
  * sky behind it ({@link BarrageGeometry}: speed 1.8, gravity 0.03; the drop is shortened under a roof so it never starts inside
  * one). A fireball stops at the first block or creature it meets. Each impact:
  * <ul>

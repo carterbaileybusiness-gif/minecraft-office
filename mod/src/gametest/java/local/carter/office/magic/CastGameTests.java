@@ -104,7 +104,7 @@ public class CastGameTests {
 		ServerPlayer p = probeCaster(h, 1);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		h.assertValueEqual(MagicTestKit.cast(p, PROBE, 1f), Result.CAST, "result");
-		h.assertValueEqual(MagicAttachments.mana(p), 88, "mana after a full charge");
+		h.assertValueEqual(MagicAttachments.mana(p), 84, "mana after a full charge (100 - 8 × 2)");
 		FxEvent fx = rec.fx(p).get(0);
 		h.assertValueEqual(fx.power(), 2.0f, "fx power");
 		h.assertValueEqual(fx.charge(), 1.0f, "fx charge");

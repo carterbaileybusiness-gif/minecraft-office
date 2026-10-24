@@ -18,10 +18,10 @@ class EarthSpikesGeometryTest {
 	private static final Predicate<BlockPos> FLAT = p -> p.getY() < 4;
 
 	@Test
-	void lengthIsEightPlusFourTimesCharge() {
+	void lengthIsEightTimesOnePlusCharge() {
 		assertEquals(8, EarthSpikesGeometry.length(0F));
-		assertEquals(10, EarthSpikesGeometry.length(0.5F));
-		assertEquals(12, EarthSpikesGeometry.length(1F));
+		assertEquals(12, EarthSpikesGeometry.length(0.5F));
+		assertEquals(16, EarthSpikesGeometry.length(1F)); // a full charge's line is twice a tap's
 	}
 
 	@Test

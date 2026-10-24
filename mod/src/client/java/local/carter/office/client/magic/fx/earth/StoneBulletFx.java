@@ -74,7 +74,7 @@ public final class StoneBulletFx implements SpellFx {
 		Vec3 hand = own ? right.scale(0.9).add(0, -0.7, 0) : right.scale(0.38).add(0, -0.32, 0).add(dir.scale(0.55));
 		Vec3 muzzle = origin.add(dir.scale(1.6)).add(0, -0.15, 0);
 		EarthFx.Crumbs crumbs = new EarthFx.Crumbs(kit, CRUMB_CAP);
-		kit.circle(muzzle, dir.reverse(), EarthFx.ARGB, 0.42F + 0.3F * c, 2 + Math.round(2 * c), 9 + Math.round(4 * c));
+		kit.circle(muzzle, dir.reverse(), EarthFx.ARGB, 0.42F * (1F + c), 2 + Math.round(2 * c), 9 + Math.round(4 * c));
 		// The rock tears loose where it is drawn: at the hand (low and right in the caster's own view, off the crosshair).
 		Vec3 tear = own ? StoneBullet.path(spec, 1).add(hand) : muzzle;
 		crumbs.burst(tear, EarthFx.COBBLE, 8 + Math.round(6 * c), 0.12);
@@ -84,7 +84,8 @@ public final class StoneBulletFx implements SpellFx {
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.TRIDENT_THROW.value(), SoundSource.PLAYERS, 0.55F, 0.55F + 0.1F * (1 - c), false);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.STONE_BREAK, SoundSource.PLAYERS, 0.6F, 0.75F, false);
 
-		float size = 0.5F + 0.22F * c;
+		// As big as the server's stone (StoneBullet.radius): twice a tap's at full charge.
+		float size = 0.5F * (1F + c);
 		// The wall is somewhere along the last tick's step: stop the rock on it, not inside it.
 		Vec3 last = StoneBullet.path(spec, flight - 1);
 		double lastStep = Math.max(1.0E-6, last.distanceTo(StoneBullet.path(spec, flight)));

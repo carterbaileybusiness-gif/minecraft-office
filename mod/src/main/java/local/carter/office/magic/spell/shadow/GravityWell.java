@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.ActiveEffects;
@@ -23,7 +24,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
@@ -35,13 +35,14 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  *
  * <p>The well opens where the look ray meets a block within {@link WellGeometry#RANGE} (or at that range), stepped back off
  * the surface, then dropped to {@link WellGeometry#HEIGHT} above the ground under it ({@link #centre}). It lasts
- * {@link WellGeometry#life} = 80 + 40 × charge ticks. Every tick, everything pushable within {@link WellGeometry#RADIUS} of the
- * centre that the centre can see (no block collider between the centre and its middle: the well never pulls through walls)
+ * {@link WellGeometry#life} = 80 + 80 × charge ticks. Every tick, everything pushable within {@link WellGeometry#radius} (6 at a
+ * tap, 12 at full charge) of the centre that the centre can see (no block collider between the centre and its middle: the well
+ * never pulls through walls)
  * gets the pull {@link WellGeometry#pull} as its velocity, scaled by its knockback resistance (at most
  * {@link Targets#MAX_ENTITIES}, nearest first, and at most {@link #MAX_CLIPS} sight checks a tick). What it drags is
- * {@link #pulls}: items, XP orbs and hostile mobs only, never a boss. Every {@link WellGeometry#HURT_EVERY} ticks, hostile mobs within
- * {@link WellGeometry#HURT_RADIUS} that it can see take {@link WellGeometry#HURT}. No block changes; players, pets, villagers,
- * livestock, golems and the rest are never moved or hurt.
+ * {@link #pulls}: items, XP orbs, hostile mobs and animals, never a boss. Every {@link WellGeometry#HURT_EVERY} ticks, every
+ * creature within {@link WellGeometry#hurtRadius} that it can see takes {@code HURT × (1 + charge)} (a boss too). No block changes; players,
+ * pets, villagers, golems, named mobs and the rest are never moved or hurt.
  *
  * <p>Fx: {@code target} = the centre, {@code duration} = the life in ticks, {@code data[0]} = the pull radius.
  */
@@ -72,8 +73,9 @@ public final class GravityWell implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 centre = centre(ctx);
 		int life = WellGeometry.life(ctx.charge());
-		if (!ActiveEffects.add(ctx, new Well(ctx, centre, life))) return CastOutcome.fizzle("magic.office.busy");
-		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withData((float) WellGeometry.RADIUS));
+		double radius = WellGeometry.radius(ctx.charge());
+		if (!ActiveEffects.add(ctx, new Well(ctx, centre, life, radius))) return CastOutcome.fizzle("magic.office.busy");
+		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withData((float) radius));
 	}
 
 	/**
@@ -104,8 +106,8 @@ public final class GravityWell implements Spell {
 	}
 
 	/**
-	 * What the well (and Black Hole) drags: {@link TargetFilter#controllable}, so items, XP orbs and hostile mobs, never a boss (the
-	 * lane ruling, as Lightning's: friends' livestock, golems and allays are never dragged or hurt; bosses are hurt, never dragged).
+	 * What the well (and Black Hole) drags: {@link TargetFilter#controllable}, so items, XP orbs, hostile mobs and animals, never a
+	 * boss (bosses are hurt, never dragged), and never golems, pets, villagers, named mobs or players.
 	 */
 	static boolean pulls(CastContext ctx, Entity e) {
 		return TargetFilter.controllable(ctx.caster(), e);
@@ -123,22 +125,23 @@ public final class GravityWell implements Spell {
 		private final CastContext ctx;
 		private final Vec3 centre;
 		private final int life;
+		private final double radius;
 		/** At most {@code Targets.MAX_ENTITIES} different creatures hurt over its life (the per-cast budget). */
 		private final HitBudget hurtBudget = new HitBudget();
 
-		Well(CastContext ctx, Vec3 centre, int life) {
+		Well(CastContext ctx, Vec3 centre, int life, double radius) {
 			this.ctx = ctx;
 			this.centre = centre;
 			this.life = life;
+			this.radius = radius;
 		}
 
 		@Override
 		public boolean tick(ServerLevel level, int age) {
 			// The well never loads a chunk: it closes if its own goes away.
 			if (age > life || !level.isLoaded(BlockPos.containing(centre))) return false;
-			double r = WellGeometry.RADIUS;
-			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, new AABB(centre, centre).inflate(r),
-					e -> pulls(ctx, e) && WellGeometry.inReach(centre, e.getBoundingBox().getCenter())));
+			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, new AABB(centre, centre).inflate(radius),
+					e -> pulls(ctx, e) && WellGeometry.inReach(centre, e.getBoundingBox().getCenter(), radius)));
 			caught.sort(Comparator.comparingDouble(e -> e.getBoundingBox().getCenter().distanceToSqr(centre)));
 			int n = 0;
 			int clips = 0;
@@ -161,10 +164,12 @@ public final class GravityWell implements Spell {
 				}
 			}
 			if (age % WellGeometry.HURT_EVERY == 0) {
-				for (LivingEntity l : Targets.radius(ctx, centre, WellGeometry.HURT_RADIUS)) {
-					if (!(l instanceof Enemy) || clips >= MAX_CLIPS) continue;
+				for (LivingEntity l : Targets.radius(ctx, centre, WellGeometry.hurtRadius(ctx.charge()))) {
+					if (clips >= MAX_CLIPS) break;
 					clips++;
-					if (clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) Hurt.damage(ctx, l, WellGeometry.HURT);
+					if (clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) {
+						Hurt.damage(ctx, l, WellGeometry.HURT * ChargeMath.size(ctx.charge()));
+					}
 				}
 			}
 			return age < life;

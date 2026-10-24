@@ -2,6 +2,7 @@ package local.carter.office.magic.spell.wind;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.CastContext;
@@ -17,17 +18,22 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * Air Step (Wind, slot 2, small): the caster kicks off the air itself, on the ground or mid-jump (a double jump). The new
- * velocity is {@code look_h × 0.4} level plus {@code 0.9 + 0.2 × charge} up, where {@code look_h} is the level look direction
- * at unit length (the facing when looking straight up or down). It replaces the caster's velocity, so a falling caster is
- * caught and thrown up. No fall damage for {@link #NO_FALL_TICKS} ticks ({@link Motion#dash}). No block changes; touches no one else.
+ * velocity is {@code look_h × 0.4 × (1 + charge)} level plus {@code 0.9 + 0.43 × charge} up, where {@code look_h} is the level
+ * look direction at unit length (the facing when looking straight up or down): a tap rises about 5 blocks, a full charge about
+ * 10 ({@link #apex}). It replaces the caster's velocity, so a falling caster is caught and thrown up. No fall damage for {@link #NO_FALL_TICKS} ticks ({@link Motion#dash}). No block changes; touches no one else.
  *
  * <p>Fx: {@code target} = the caster's feet, {@code data} = {@code {up speed}} ({@code dir} is the look, as always).
  */
 public final class AirStep implements Spell {
 	public static final double UP = 0.9;
-	public static final double UP_PER_CHARGE = 0.2;
+	/** Full charge's extra lift: 1.33 up climbs twice a tap's height ({@link #apex}). */
+	public static final double UP_PER_CHARGE = 0.43;
 	public static final double FORWARD = 0.4;
-	public static final int NO_FALL_TICKS = 60;
+	/** Long enough for a full charge's rise and fall (about 40 ticks). */
+	public static final int NO_FALL_TICKS = 80;
+	/** Vanilla's player gravity and air drag, for {@link #apex}. */
+	private static final double GRAVITY = 0.08;
+	private static final double DRAG = 0.98;
 
 	@Override
 	public Identifier id() {
@@ -47,7 +53,15 @@ public final class AirStep implements Spell {
 	/** The jump's velocity for a caster looking along {@code look} (yaw {@code yRot} for a straight-up look) at {@code charge}. */
 	public static Vec3 velocity(Vec3 look, float yRot, float charge) {
 		Vec3 h = lookH(look, yRot);
-		return new Vec3(h.x * FORWARD, UP + UP_PER_CHARGE * Mth.clamp(charge, 0F, 1F), h.z * FORWARD);
+		double forward = FORWARD * ChargeMath.size(charge);
+		return new Vec3(h.x * forward, UP + UP_PER_CHARGE * Mth.clamp(charge, 0F, 1F), h.z * forward);
+	}
+
+	/** How high a jump of {@code up} blocks a tick climbs in open air (vanilla's step: move, then less gravity, times drag). */
+	public static double apex(double up) {
+		double y = 0;
+		for (double v = up; v > 0; v = (v - GRAVITY) * DRAG) y += v;
+		return y;
 	}
 
 	/** The level part of {@code look} at unit length; looking straight up or down, the facing of yaw {@code yRot}. */

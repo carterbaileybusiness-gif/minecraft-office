@@ -1,5 +1,7 @@
 package local.carter.office.magic.spell.shadow;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
@@ -7,7 +9,8 @@ import net.minecraft.world.phys.Vec3;
  * Pure geometry of Gravity Well (Vec3 math only, no world access), shared by the server effect ({@link GravityWell}) and the
  * client fx, so the motes you see falling in follow the same law that drags the mobs.
  *
- * <p><b>Pull.</b> Anything within {@link #RADIUS} of the centre moves toward it {@link #speed}{@code (d) = 0.12 + 0.03 × d}
+ * <p><b>Pull.</b> Anything within {@link #radius} of the centre ({@link #RADIUS} at a tap, twice that at full charge) moves
+ * toward it {@link #speed}{@code (d) = 0.12 + 0.03 × d}
  * blocks a tick (capped at {@link #CAP}), never more than the distance left, so it settles on the centre instead of
  * overshooting ({@link #pull}). From a distance {@code r0 ≤ 16} that law has a closed form: after {@code t} ticks the distance
  * left is {@code max(0, (r0 + 4) × 0.97^t − 4)} ({@link #radiusAt}); from 6 blocks it arrives in 31 ticks.
@@ -20,24 +23,37 @@ public final class WellGeometry {
 	public static final double RANGE = 16;
 	/** The well floats this far above the ground under the ray point. */
 	public static final double HEIGHT = 1;
-	/** Everything pushable within this distance of the centre is pulled. */
+	/** Everything pushable within this distance of a tap's centre is pulled (twice as far at full charge). */
 	public static final double RADIUS = 6;
 	public static final double BASE = 0.12;
 	public static final double PER_BLOCK = 0.03;
 	/** Most pull a tick. */
 	public static final double CAP = 0.6;
-	/** Foes this close to the centre take {@link #HURT} every {@link #HURT_EVERY} ticks. */
-	public static final double HURT_RADIUS = 2;
-	public static final int HURT_EVERY = 20;
-	public static final float HURT = 1;
+	/**
+	 * Creatures this close to the centre take {@link #HURT} × (1 + charge) every {@link #HURT_EVERY} ticks (4 a second at a tap:
+	 * a zombie dragged in feels it within a second).
+	 */
+	public static final double HURT_RADIUS = 2.5;
+	public static final int HURT_EVERY = 10;
+	public static final float HURT = 2;
 	public static final int BASE_LIFE = 80;
-	public static final int LIFE_PER_CHARGE = 40;
+	public static final int LIFE_PER_CHARGE = 80;
 
 	private WellGeometry() {}
 
-	/** Ticks the well lasts for a charge 0..1: 80 + 40 × charge. */
+	/** Ticks the well lasts for a charge 0..1: 80 + 80 × charge. */
 	public static int life(float charge) {
 		return BASE_LIFE + Math.round(LIFE_PER_CHARGE * Mth.clamp(charge, 0F, 1F));
+	}
+
+	/** The pull's reach at {@code charge}: {@code RADIUS × ChargeMath.size(charge)}, 6 at a tap and 12 at full charge. */
+	public static double radius(float charge) {
+		return RADIUS * ChargeMath.size(charge);
+	}
+
+	/** The core's hurting reach at {@code charge}: {@code HURT_RADIUS × ChargeMath.size(charge)}. */
+	public static double hurtRadius(float charge) {
+		return HURT_RADIUS * ChargeMath.size(charge);
 	}
 
 	/** The pull's speed at distance {@code d} by the formula alone: {@code min(0.6, 0.12 + 0.03 × d)}. */
@@ -56,9 +72,14 @@ public final class WellGeometry {
 		return to.scale(Math.min(speed(d), d) / d);
 	}
 
-	/** Whether {@code at} is within the pull's reach of {@code centre}. */
+	/** Whether {@code at} is within a tap's pull of {@code centre}. */
 	public static boolean inReach(Vec3 centre, Vec3 at) {
-		return at.distanceToSqr(centre) <= RADIUS * RADIUS;
+		return inReach(centre, at, RADIUS);
+	}
+
+	/** Whether {@code at} is within {@code radius} of {@code centre}. */
+	public static boolean inReach(Vec3 centre, Vec3 at, double radius) {
+		return at.distanceToSqr(centre) <= radius * radius;
 	}
 
 	/**

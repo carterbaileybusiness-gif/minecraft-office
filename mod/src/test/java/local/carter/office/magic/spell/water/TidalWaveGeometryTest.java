@@ -139,7 +139,8 @@ class TidalWaveGeometryTest {
 		Vec3 eye = new Vec3(0.5, 65.62, 0.5);
 		Vec3 look = new Vec3(0, 0, 1);
 		assertEquals(8, TidalWaveGeometry.range(0), 1e-9);
-		assertEquals(12, TidalWaveGeometry.range(1), 1e-9);
+		assertEquals(16, TidalWaveGeometry.range(1), 1e-9); // a full charge reaches twice as far
+		assertEquals(16, new TidalWaveGeometry(eye, look, TidalWaveGeometry.length(TidalWaveGeometry.range(1))).length(), "and its wave runs as far");
 		assertTrue(TidalWaveGeometry.inCone(eye, look, 12, eye.add(0, -1, 10)));
 		assertFalse(TidalWaveGeometry.inCone(eye, look, 8, eye.add(0, -1, 10)), "out of range at charge 0");
 		double tan = Math.tan(Math.toRadians(34));

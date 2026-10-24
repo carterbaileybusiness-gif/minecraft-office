@@ -1,5 +1,6 @@
 package local.carter.office.magic.spell.water;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.CastContext;
@@ -21,8 +22,9 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
  * Water Bullet (Water, slot 0, small): a hard jet of water that knocks foes back. An entity-free projectile from the eye along
- * the look ({@link #SPEED} blocks a tick, radius {@link #RADIUS}, at most {@link #MAX_TICKS} ticks, no gravity). The first
- * entity it hits takes 3 × P damage, is knocked {@link #KNOCK} along the travel and is extinguished. No block changes.
+ * the look ({@link #SPEED} blocks a tick, radius {@link #radius}: {@link #RADIUS} at a tap, twice that at full charge; at most
+ * {@link #MAX_TICKS} ticks, no gravity). The first entity it hits takes 3 × P damage, is knocked {@code KNOCK × (1 + charge)}
+ * along the travel and is extinguished. No block changes.
  *
  * <p>Fx: {@code origin} = the projectile's start (the eye), {@code dir} = its unit direction, {@code target} = where it would
  * meet a block (or its end of range), {@code duration} = ticks to get there; {@code data} = {speed, radius}. The client flies
@@ -58,9 +60,10 @@ public final class WaterBullet implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 dir = ctx.look().normalize();
 		Vec3 origin = ctx.eye();
-		ProjectileSpec spec = spec(origin, dir);
+		ProjectileSpec spec = spec(origin, dir, ctx.charge());
 		float damage = DAMAGE * ctx.power();
-		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, dir, damage, hit))) return CastOutcome.fizzle("magic.office.busy");
+		double knock = KNOCK * ChargeMath.size(ctx.charge());
+		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, dir, damage, knock, hit))) return CastOutcome.fizzle("magic.office.busy");
 
 		// Where the path meets a block, so every client stops the jet at the same wall.
 		Vec3 end = Projectiles.step(spec, MAX_TICKS);
@@ -68,18 +71,27 @@ public final class WaterBullet implements Spell {
 				CollisionContext.empty()));
 		Vec3 stop = block.getType() == HitResult.Type.MISS ? end : block.getLocation();
 		int ticks = Math.min(MAX_TICKS, (int) Math.ceil(stop.distanceTo(origin) / SPEED));
-		return CastOutcome.cast(ctx.fx().withTarget(stop).withDuration(Math.max(1, ticks)).withData((float) SPEED, (float) RADIUS));
+		return CastOutcome.cast(ctx.fx().withTarget(stop).withDuration(Math.max(1, ticks)).withData((float) SPEED, (float) spec.radius()));
+	}
+
+	/** The jet's size at {@code charge}: {@code RADIUS × ChargeMath.size(charge)}. */
+	public static double radius(float charge) {
+		return RADIUS * ChargeMath.size(charge);
 	}
 
 	public static ProjectileSpec spec(Vec3 origin, Vec3 dir) {
-		return new ProjectileSpec(origin, dir.scale(SPEED), 0, RADIUS, MAX_TICKS, false);
+		return spec(origin, dir, 0F);
 	}
 
-	private static void hit(CastContext ctx, Vec3 dir, float damage, ProjectileHit hit) {
+	public static ProjectileSpec spec(Vec3 origin, Vec3 dir, float charge) {
+		return new ProjectileSpec(origin, dir.scale(SPEED), 0, radius(charge), MAX_TICKS, false);
+	}
+
+	private static void hit(CastContext ctx, Vec3 dir, float damage, double knock, ProjectileHit hit) {
 		LivingEntity e = hit.entity();
 		if (e == null) return;
 		Hurt.damage(ctx, e, damage);
-		Hurt.knock(e, dir, KNOCK, Math.min(MAX_UP, LIFT + KNOCK * Math.max(0, dir.y)));
+		Hurt.knock(e, dir, knock, Math.min(MAX_UP, LIFT + knock * Math.max(0, dir.y)));
 		e.extinguishFire();
 	}
 }

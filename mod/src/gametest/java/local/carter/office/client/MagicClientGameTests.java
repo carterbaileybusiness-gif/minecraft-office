@@ -1065,7 +1065,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 
 	/**
 	 * Hold right-click 40 ticks: no mana is spent while held, and the circle (seen from behind the caster) changes at least 20 % of
-	 * the pixels inside its projection (the ellipse in its projected rect) against the same frame before charging. The release casts at full charge (8 × 1.5 = 12).
+	 * the pixels inside its projection (the ellipse in its projected rect) against the same frame before charging. The release casts at full charge (8 × 2 = 16).
 	 */
 	private static void chargeCircleGrowsWhileHeld(ClientGameTestContext context, TestSingleplayerContext sp) {
 		refill(context, sp, TAP_PROBE);
@@ -1097,9 +1097,11 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			}
 			System.out.println(String.format(Locale.ROOT, "[magic] charge circle rect %s: %d/%d pixels changed (%.3f)", java.util.Arrays.toString(r), diff, n,
 					n == 0 ? 0.0 : diff / (double) n));
+			// Seen from behind (this view) the circle is held BELOW the eye line, so only its sideways centring is checked here; the
+			// first-person centring on the crosshair is ChargeCircles.heldCentre's (unit-tested in CircleMathTest).
 			int sw = full.getWidth(), sh = full.getHeight();
-			if (Math.abs(cx - sw / 2.0) > 0.02 * sh || Math.abs(cy - sh / 2.0) > 0.02 * sh) {
-				throw new AssertionError("the charge circle is not centred on the crosshair: centre " + cx + "," + cy + " on " + sw + "x" + sh);
+			if (Math.abs(cx - sw / 2.0) > 0.02 * sh) {
+				throw new AssertionError("the charge circle is not centred under the crosshair: centre " + cx + "," + cy + " on " + sw + "x" + sh);
 			}
 			if (n == 0 || diff < 0.20 * n) {
 				throw new AssertionError("the full charge circle changed only " + diff + "/" + n + " pixels of its rect " + java.util.Arrays.toString(r));
@@ -1109,25 +1111,25 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		}
 		waitCast(sp, TAP_PROBE);
 		int left = mana(sp);
-		if (left != FEEL_MANA - 12) throw new AssertionError("a full charge costs 8 × 1.5 = 12: mana " + FEEL_MANA + " -> " + left);
+		if (left != FEEL_MANA - 16) throw new AssertionError("a full charge costs 8 × 2 = 16: mana " + FEEL_MANA + " -> " + left);
 		context.runOnClient(mc -> mc.options.setCameraType(CameraType.FIRST_PERSON));
 		context.waitTicks(2);
 	}
 
 	/**
-	 * The full-charge circle's rect on screen, in pixels {x0, y0, x1, y1} (clamped to the screen): its rim (radius of 5 rings,
-	 * {@link ChargeCircles#AHEAD} ahead of the eye and {@link ChargeCircles#BELOW} below it, facing along the look) projected
-	 * through the camera.
+	 * The full-charge circle's rect on screen, in pixels {x0, y0, x1, y1} (clamped to the screen): its rim (radius of 5 rings
+	 * grown by {@link ChargeCircles#scale} at full charge, at {@link ChargeCircles#heldCentre} for this camera, facing along the
+	 * look) projected through the camera.
 	 */
 	private static int[] circleRect(Minecraft mc) {
 		Camera cam = mc.gameRenderer.mainCamera();
 		Matrix4f vp = cam.getViewRotationProjectionMatrix(new Matrix4f());
 		Vec3 look = mc.player.getViewVector(1F);
-		// first person: centred on the crosshair (only other players see it ChargeCircles.BELOW lower)
-		Vec3 centre = mc.player.getEyePosition(1F).add(look.scale(ChargeCircles.AHEAD));
+		// Where the circle is really drawn: centred on the crosshair in first person, ChargeCircles.BELOW lower in third person.
+		Vec3 centre = ChargeCircles.heldCentre(mc.player.getEyePosition(1F), look, mc.options.getCameraType().isFirstPerson());
 		Vec3 right = look.cross(new Vec3(0, 1, 0)).normalize();
 		Vec3 up = right.cross(look).normalize();
-		double radius = MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS);
+		double radius = MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS) * ChargeCircles.scale(1F);
 		int w = mc.getWindow().getWidth(), h = mc.getWindow().getHeight();
 		double x0 = w, y0 = h, x1 = 0, y1 = 0;
 		for (int i = 0; i < 32; i++) {

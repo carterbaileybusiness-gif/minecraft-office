@@ -25,6 +25,7 @@ import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Motion;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.spell.lightning.ChidoriGeometry.Column;
 import local.carter.office.magic.terrain.EditBatch;
@@ -38,7 +39,6 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
@@ -60,7 +60,8 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p><b>End.</b> The target, if within {@link ChidoriGeometry#REACH} of the end and in reach of the blast (nothing solid between),
  * takes {@code 24 × P}; every other creature within {@link ChidoriGeometry#REACH} the blast reaches takes {@code 8 × P}. The target
- * and hostile mobs among them get Slowness V and Weakness for {@link #EFFECT_TICKS} ticks (control effects are for foes only).
+ * and every creature among them a control effect may take ({@link TargetFilter#controllable}: never a boss) get Slowness V and
+ * Weakness for {@link #EFFECT_TICKS} ticks.
  * No vanilla {@code LightningBolt} is made (they boom and flash the sky for everyone in view distance): the strikes from the sky
  * are the client fx's own.
  *
@@ -229,7 +230,7 @@ public final class ChidoriStrike implements Spell {
 				if (e == target || !Arcs.reaches(ctx, core, e.getBoundingBox())) continue;
 				hits++;
 				Hurt.damage(ctx, e, BLAST_DAMAGE * ctx.power());
-				if (e instanceof Enemy) weaken(e);
+				if (TargetFilter.controllable(ctx.caster(), e)) weaken(e);
 			}
 		}
 

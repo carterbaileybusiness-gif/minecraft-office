@@ -2,12 +2,14 @@ package local.carter.office.magic.spell.water;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
 /**
  * Bubble Shield's pure geometry (no world access), shared by the server spell and the client fx: a sphere of
- * {@link #RADIUS} about the caster's middle, lasting {@link #duration}. A projectile is stopped when it is inside the bubble
+ * {@link #radius} about the caster's middle ({@link #RADIUS} at a tap, twice that at full charge), lasting {@link #duration}. A projectile is stopped when it is inside the bubble
  * or its next move ({@code pos → pos + velocity}) would cross into it, so even a fast arrow never reaches the caster.
  */
 public final class BubbleShieldGeometry {
@@ -17,9 +19,14 @@ public final class BubbleShieldGeometry {
 
 	private BubbleShieldGeometry() {}
 
-	/** How long the bubble lasts: 120 + 60 × charge ticks. */
+	/** How long the bubble lasts: 120 + 120 × charge ticks. */
 	public static int duration(float charge) {
-		return 120 + Math.round(60 * Mth.clamp(charge, 0F, 1F));
+		return 120 + Math.round(120 * Mth.clamp(charge, 0F, 1F));
+	}
+
+	/** The bubble's radius at {@code charge}: {@code RADIUS × ChargeMath.size(charge)}, 2.5 at a tap and 5 at full charge. */
+	public static double radius(float charge) {
+		return RADIUS * ChargeMath.size(charge);
 	}
 
 	/** The bubble's centre for a caster standing at {@code feet}, {@code height} tall. */
@@ -27,17 +34,28 @@ public final class BubbleShieldGeometry {
 		return feet.add(0, height / 2, 0);
 	}
 
-	/** Whether a projectile at {@code pos} moving {@code velocity} a tick is inside the bubble at {@code centre} or about to enter it. */
+	/** Whether a projectile at {@code pos} moving {@code velocity} a tick is inside a tap's bubble at {@code centre} or about to enter it. */
 	public static boolean threatens(Vec3 centre, Vec3 pos, Vec3 velocity) {
-		return entry(centre, pos, velocity) != null;
+		return threatens(centre, pos, velocity, RADIUS);
+	}
+
+	/** {@link #threatens(Vec3, Vec3, Vec3)} for a bubble of {@code radius}. */
+	public static boolean threatens(Vec3 centre, Vec3 pos, Vec3 velocity, double radius) {
+		return entry(centre, pos, velocity, radius) != null;
+	}
+
+	/** {@link #entry(Vec3, Vec3, Vec3, double)} for a tap's bubble. */
+	public static @Nullable Vec3 entry(Vec3 centre, Vec3 pos, Vec3 velocity) {
+		return entry(centre, pos, velocity, RADIUS);
 	}
 
 	/**
-	 * Where a projectile at {@code pos} moving {@code velocity} meets the bubble at {@code centre} on its next move: {@code pos}
-	 * when it is already inside, the first point on the surface it crosses, or null when it misses the bubble this tick.
+	 * Where a projectile at {@code pos} moving {@code velocity} meets the bubble of {@code radius} at {@code centre} on its next
+	 * move: {@code pos} when it is already inside, the first point on the surface it crosses, or null when it misses the bubble
+	 * this tick.
 	 */
-	public static @Nullable Vec3 entry(Vec3 centre, Vec3 pos, Vec3 velocity) {
-		double r2 = RADIUS * RADIUS;
+	public static @Nullable Vec3 entry(Vec3 centre, Vec3 pos, Vec3 velocity, double radius) {
+		double r2 = radius * radius;
 		Vec3 m = pos.subtract(centre);
 		double c = m.lengthSqr() - r2;
 		if (c <= 0) return pos;

@@ -49,11 +49,15 @@ public class ShadowGameTests {
 	// ---- Shadow Bolt ----
 
 	private static void assertWeakened(GameTestHelper h, LivingEntity e, String who) {
+		assertWeakened(h, e, who, ShadowBolt.WEAKNESS_TICKS);
+	}
+
+	/** {@code e} has Weakness I with at most {@code ticks} (and more than {@code ticks − 20}) left. */
+	private static void assertWeakened(GameTestHelper h, LivingEntity e, String who, int ticks) {
 		MobEffectInstance w = e.getEffect(MobEffects.WEAKNESS);
 		h.assertTrue(w != null, who + " is weakened");
 		h.assertValueEqual(w.getAmplifier(), 0, who + ": Weakness I");
-		h.assertTrue(w.getDuration() <= ShadowBolt.WEAKNESS_TICKS && w.getDuration() > ShadowBolt.WEAKNESS_TICKS - 20,
-				who + ": weakness for 60 ticks, left " + w.getDuration());
+		h.assertTrue(w.getDuration() <= ticks && w.getDuration() > ticks - 20, who + ": weakness for " + ticks + " ticks, left " + w.getDuration());
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
@@ -84,9 +88,9 @@ public class ShadowGameTests {
 		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_BOLT, 1f), Result.CAST, "result");
 		h.runAfterDelay(8, () -> {
-			// Level 1, full charge: P = 2, so 8 damage.
+			// Level 1, full charge: P = 2, so 8 damage, and twice a tap's weakness.
 			h.assertTrue(z.getHealth() <= 12f, "zombie health " + z.getHealth());
-			assertWeakened(h, z, "zombie");
+			assertWeakened(h, z, "zombie", 2 * ShadowBolt.WEAKNESS_TICKS);
 			h.succeed();
 		});
 	}
@@ -173,7 +177,7 @@ public class ShadowGameTests {
 		});
 	}
 
-	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 150)
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 200)
 	public void gravityWellChangesNoBlocks(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 2);
 		// Loose things round where the well opens (off the aim line): flowers, grass, sand, a torch, snow.
@@ -234,26 +238,32 @@ public class ShadowGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 60)
-	public void gravityWellSparesLivestock(GameTestHelper h) {
+	public void gravityWellPullsAnimalsButSparesNamedOnes(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 2);
 		Vec3 c = wellOnTheFloor(h, p, 0f);
-		// Friends' animals: a chicken 3 out (in the pull) and a sheep 2 out (in the 2-block hurt zone, but clear of where the
-		// dragged zombie lands, so it is never shoved by it). AI on, goals removed, so a pull would really move them.
+		// Animals are fair game (Carter's ruling, 2026-10-24): a chicken 3 out is dragged in, a sheep 2 out (in the hurt zone)
+		// is hurt; a named chicken (a friend's) 4 out is never moved or hurt. AI on, goals removed, so a pull really moves them.
 		Chicken chicken = still(h, EntityTypes.CHICKEN, floor(c, 3, 0));
 		Sheep sheep = still(h, EntityTypes.SHEEP, floor(c, -2, 0));
+		Chicken named = still(h, EntityTypes.CHICKEN, floor(c, 0, 4));
+		named.setCustomName(net.minecraft.network.chat.Component.literal("Henrietta"));
 		// Positive controls: a zombie 3 out (from the caster's side) is dragged, a NoAI zombie by the core is hurt.
 		Zombie pulled = MagicTestKit.movableDummy(h, floor(c, 0, -3));
 		Zombie core = MagicTestKit.dummy(h, floor(c, 0, 1));
 		Vec3 chickenAt = chicken.position();
-		Vec3 sheepAt = sheep.position();
+		Vec3 namedAt = named.position();
 		double pulledStart = MagicTestKit.dist(pulled, c);
+		double chickenStart = chickenAt.distanceTo(h.absoluteVec(c));
+		// The chicken (4 hp) may die in the core before the checks: its nearest approach is what counts.
+		double[] chickenNearest = {chickenStart};
+		h.onEachTick(() -> chickenNearest[0] = Math.min(chickenNearest[0], chicken.position().distanceTo(h.absoluteVec(c))));
 		h.runAfterDelay(45, () -> {
 			h.assertTrue(MagicTestKit.dist(pulled, c) < pulledStart - 1, "zombie dragged in: " + MagicTestKit.dist(pulled, c));
-			h.assertTrue(core.getHealth() <= 18f, "zombie in the core hurt twice: " + core.getHealth());
-			h.assertTrue(chicken.position().subtract(chickenAt).horizontalDistance() < 0.1, "chicken moved to " + chicken.position());
-			h.assertTrue(sheep.position().subtract(sheepAt).horizontalDistance() < 0.1, "sheep moved to " + sheep.position());
-			h.assertValueEqual(chicken.getHealth(), chicken.getMaxHealth(), "chicken health");
-			h.assertValueEqual(sheep.getHealth(), sheep.getMaxHealth(), "sheep health");
+			h.assertTrue(core.getHealth() <= 18f, "zombie in the core hurt: " + core.getHealth());
+			h.assertTrue(chickenNearest[0] < chickenStart - 1, "chicken dragged in: " + chickenStart + " -> " + chickenNearest[0]);
+			h.assertTrue(sheep.getHealth() < sheep.getMaxHealth(), "sheep in the core hurt: " + sheep.getHealth());
+			h.assertTrue(named.position().subtract(namedAt).horizontalDistance() < 0.1, "named chicken moved to " + named.position());
+			h.assertValueEqual(named.getHealth(), named.getMaxHealth(), "named chicken health");
 			h.succeed();
 		});
 	}
@@ -262,15 +272,16 @@ public class ShadowGameTests {
 	public void gravityWellHurtsOnlyNearTheCore(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 2);
 		Vec3 c = wellOnTheFloor(h, p, 0f);
-		// NoAI dummies never move, so they stay where they are put: one in the core, one outside the 2-block hurt zone.
+		// NoAI dummies never move, so they stay where they are put: one in the core, one outside the 2.5-block hurt zone. The core
+		// hurts 2 every 10 ticks at a tap, so a creature dragged in feels it within a second.
 		Zombie core = MagicTestKit.dummy(h, floor(c, 0, 0));
 		Zombie outside = MagicTestKit.dummy(h, floor(c, 4, 0));
 		h.runAfterDelay(25, () -> {
-			h.assertTrue(core.getHealth() <= 19f && core.getHealth() >= 18.9f, "one hit by tick 25: " + core.getHealth());
+			h.assertTrue(core.getHealth() <= 16f && core.getHealth() >= 15.9f, "two hits by tick 25: " + core.getHealth());
 			h.assertValueEqual(outside.getHealth(), 20f, "outside the hurt zone");
 		});
 		h.runAfterDelay(45, () -> {
-			h.assertTrue(core.getHealth() <= 18f && core.getHealth() >= 17.9f, "two hits by tick 45: " + core.getHealth());
+			h.assertTrue(core.getHealth() <= 12f && core.getHealth() >= 11.9f, "four hits by tick 45: " + core.getHealth());
 			h.assertValueEqual(outside.getHealth(), 20f, "outside the hurt zone");
 			h.succeed();
 		});
@@ -509,7 +520,8 @@ public class ShadowGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 60)
-	public void shadowBindOnlyRootsFoes(GameTestHelper h) {
+	public void shadowBindRootsAnimalsButNeverNamedOnes(GameTestHelper h) {
+		// Lane A: a sheep is fair game (Carter's ruling, 2026-10-24): hurt and rooted.
 		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 5);
 		MagicTestKit.recorder(h); // installed before the cast, so it sees the fx
 		Sheep sheep = still(h, EntityTypes.SHEEP, new BlockPos(16, 4, 12));
@@ -517,13 +529,28 @@ public class ShadowGameTests {
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_BIND, 0f), Result.CAST, "result");
 		FxEvent fx = MagicTestKit.recorder(h).fx(p).getLast();
 		h.assertValueEqual(fx.entities()[0], sheep.getId(), "the sheep was the target");
-		h.assertValueEqual(fx.data()[0], 0f, "not rooted");
-		h.assertTrue(sheep.getHealth() < sheep.getMaxHealth(), "the damage goes through TargetFilter: " + sheep.getHealth());
-		h.assertTrue(!sheep.hasEffect(MobEffects.SLOWNESS), "no slowness on livestock");
+		h.assertValueEqual(fx.data()[0], 1f, "rooted");
+		h.assertTrue(sheep.getHealth() < sheep.getMaxHealth(), "the sheep is hurt: " + sheep.getHealth());
+		h.assertTrue(sheep.hasEffect(MobEffects.SLOWNESS), "and slowed");
+		// Lane B: a named sheep is a friend's: the ray passes it by, nothing is bound.
+		ServerPlayer q = MagicTestKit.caster(h, Element.SHADOW, 5);
+		MagicTestKit.teleportTo(q, new BlockPos(6, 4, 4));
+		Sheep named = still(h, EntityTypes.SHEEP, new BlockPos(6, 4, 12));
+		named.setCustomName(net.minecraft.network.chat.Component.literal("Dolly"));
+		MagicTestKit.aim(q, new BlockPos(6, 4, 12));
+		h.assertValueEqual(MagicTestKit.cast(q, SpellIds.SHADOW_BIND, 0f), Result.CAST, "result B");
+		FxEvent fq = MagicTestKit.recorder(h).fx(q).getLast();
+		h.assertValueEqual(fq.entities().length, 0, "nothing bound in lane B");
+		h.assertValueEqual(named.getHealth(), named.getMaxHealth(), "the named sheep is unhurt");
 		Vec3 at = sheep.position();
-		h.onEachTick(() -> sheep.setDeltaMovement(0.25, sheep.getDeltaMovement().y, 0));
+		Vec3 namedAt = named.position();
+		h.onEachTick(() -> {
+			sheep.setDeltaMovement(0.25, sheep.getDeltaMovement().y, 0);
+			named.setDeltaMovement(0.25, named.getDeltaMovement().y, 0);
+		});
 		h.runAfterDelay(40, () -> {
-			h.assertTrue(sheep.position().subtract(at).horizontalDistance() > 2, "not held: " + sheep.position().subtract(at));
+			h.assertTrue(sheep.position().subtract(at).horizontalDistance() < 0.1, "the sheep is held: " + sheep.position().subtract(at));
+			h.assertTrue(named.position().subtract(namedAt).horizontalDistance() > 2, "the named sheep is not: " + named.position().subtract(namedAt));
 			h.succeed();
 		});
 	}
@@ -675,18 +702,23 @@ public class ShadowGameTests {
 		ItemEntity item = MagicTestKit.item(h, floor(c, 0, 8));
 		ServerPlayer other = MagicTestKit.otherPlayer(h, floor(c, 8, 0));
 		Villager villager = MagicTestKit.villager(h, floor(c, -7, 4));
+		// Animals are fair game (Carter's ruling, 2026-10-24): the sheep is dragged in; the named one is a friend's.
 		Sheep sheep = still(h, EntityTypes.SHEEP, floor(c, 7, -4));
+		Sheep named = still(h, EntityTypes.SHEEP, floor(c, -7, -4));
+		named.setCustomName(net.minecraft.network.chat.Component.literal("Dolly"));
+		Vec3 namedAt = named.position();
+		double sheepStart = MagicTestKit.dist(h, sheep, c);
 		double zStart = MagicTestKit.dist(z, c);
 		double itemStart = MagicTestKit.dist(item, c);
 		Vec3 otherAt = other.position();
 		Vec3 villagerAt = villager.position();
-		Vec3 sheepAt = sheep.position();
 		h.runAtTickTime(t0 + 40, () -> {
 			h.assertTrue(MagicTestKit.dist(z, c) < zStart - 2.5, "zombie dragged in: " + zStart + " -> " + MagicTestKit.dist(z, c));
 			h.assertTrue(MagicTestKit.dist(item, c) < itemStart - 2.5, "item dragged in: " + itemStart + " -> " + MagicTestKit.dist(item, c));
 			h.assertTrue(other.position().distanceTo(otherAt) < 1.0E-6, "player not moved: " + other.position());
 			h.assertTrue(villager.position().distanceTo(villagerAt) < 1.0E-6, "villager not moved");
-			h.assertTrue(sheep.position().subtract(sheepAt).horizontalDistance() < 0.1, "sheep not moved");
+			h.assertTrue(MagicTestKit.dist(h, sheep, c) < sheepStart - 2.5, "sheep dragged in: " + sheepStart + " -> " + MagicTestKit.dist(h, sheep, c));
+			h.assertTrue(named.position().subtract(namedAt).horizontalDistance() < 0.1, "named sheep not moved");
 		});
 		h.runAtTickTime(t0 + BlackHoleGeometry.LIFE - 5, () -> {
 			h.assertTrue(MagicTestKit.dist(item, c) < 1.5, "the item reached the core: " + MagicTestKit.dist(item, c));

@@ -35,8 +35,8 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Bubble Shield (Water, slot 2, small, lingering): a bubble that stops arrows and softens blows.
  *
- * <p>For {@link BubbleShieldGeometry#duration} ticks (120 + 60 × charge) the caster has Resistance I, and a bubble of
- * {@link BubbleShieldGeometry#RADIUS} about their middle follows them: every tick, each projectile not the caster's own that
+ * <p>For {@link BubbleShieldGeometry#duration} ticks (120 + 120 × charge) the caster has Resistance I, and a bubble of
+ * {@link BubbleShieldGeometry#radius} (2.5 at a tap, 5 at full charge) about their middle follows them: every tick, each projectile not the caster's own that
  * is inside it or about to cross into it ({@link BubbleShieldGeometry#threatens}) is stopped. Stopped projectiles are
  * removed, except a thrown trident, which is turned back and drops by the bubble so nobody loses it. Arrows stuck in the
  * ground, firework rockets boosting someone's elytra, ender pearls, thrown potions and bottles o' enchanting pass through (a
@@ -77,7 +77,8 @@ public final class BubbleShield implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		ServerPlayer caster = ctx.caster();
 		int life = BubbleShieldGeometry.duration(ctx.charge());
-		Bubble bubble = new Bubble(ctx, life);
+		double radius = BubbleShieldGeometry.radius(ctx.charge());
+		Bubble bubble = new Bubble(ctx, life, radius);
 		// at the per-caster cap, the bubble being refreshed frees its own slot first
 		Bubble current = ACTIVE.get(caster.getUUID());
 		if (current != null && ActiveEffects.count(caster.getUUID()) >= ActiveEffects.MAX_PER_CASTER) ActiveEffects.remove(current);
@@ -86,7 +87,7 @@ public final class BubbleShield implements Spell {
 		if (old != null) ActiveEffects.remove(old);
 		caster.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, life, RESISTANCE_AMPLIFIER, false, false, true), caster);
 		Vec3 centre = BubbleShieldGeometry.centre(caster.position(), caster.getBbHeight());
-		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withData((float) BubbleShieldGeometry.RADIUS));
+		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withData((float) radius));
 	}
 
 	/** Whether {@code caster} has a bubble up (the game tests read it). */
@@ -141,11 +142,13 @@ public final class BubbleShield implements Spell {
 	static final class Bubble implements LingeringEffect {
 		private final CastContext ctx;
 		private final int life;
+		private final double radius;
 		int stopped;
 
-		Bubble(CastContext ctx, int life) {
+		Bubble(CastContext ctx, int life, double radius) {
 			this.ctx = ctx;
 			this.life = life;
+			this.radius = radius;
 		}
 
 		@Override
@@ -153,9 +156,9 @@ public final class BubbleShield implements Spell {
 			ServerPlayer p = ctx.caster();
 			if (p.isRemoved() || !p.isAlive() || p.level() != level) return false;
 			Vec3 centre = BubbleShieldGeometry.centre(p.position(), p.getBbHeight());
-			AABB near = new AABB(centre, centre).inflate(BubbleShieldGeometry.RADIUS + BubbleShieldGeometry.SEARCH);
+			AABB near = new AABB(centre, centre).inflate(radius + BubbleShieldGeometry.SEARCH);
 			for (Projectile pr : level.getEntitiesOfClass(Projectile.class, near, pr -> !pr.isRemoved() && pr.getOwner() != p)) {
-				if (stops(pr) && BubbleShieldGeometry.threatens(centre, pr.position(), pr.getDeltaMovement())) {
+				if (stops(pr) && BubbleShieldGeometry.threatens(centre, pr.position(), pr.getDeltaMovement(), radius)) {
 					stop(pr);
 					stopped++;
 				}

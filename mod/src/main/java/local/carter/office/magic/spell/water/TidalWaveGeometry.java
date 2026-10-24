@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
 
+import local.carter.office.magic.core.ChargeMath;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
@@ -15,14 +17,17 @@ import net.minecraft.world.phys.Vec3;
  * client fx, so the picture and the push follow the same wave.
  *
  * <p><b>Wave.</b> A front {@link #WIDTH} cells wide starts at the caster's feet and advances along the horizontal look one
- * block every {@link #TICKS_PER_BLOCK} ticks for {@link #LENGTH} blocks: at tick {@code t} (1..{@link #FRONT_TICKS}) it stands at
- * distance {@code t / 2}. It is {@link #height} cells tall (1 at the feet, then 3, 2 and 1 as it spends itself). Each cell it
+ * block every {@link #TICKS_PER_BLOCK} ticks for {@link #length()} blocks ({@link #LENGTH} at a tap, as far as the cone reaches
+ * at full charge: 16): at tick {@code t} (1..{@link #frontTicks()}) it stands at distance {@code t / 2}. It is {@link #height} cells tall (1 at the feet, then 3, 2 and 1 as it spends itself). Each cell it
  * passes lives {@link #CELL_LIFE} ticks (on the client: only in air). The path is cut into {@link #SEGMENT}-block segments,
  * each with its own origin on the axis, so every cell is within the medium radius (6) of its segment's origin. The front
  * follows the ground column by column ({@link #step}): it climbs one-block steps, pours down drops and breaks on walls; the
  * server and the client run the same rule on their own view of the world.
  *
- * <p><b>Cone.</b> The instant shove reaches {@link #range} = 8 + 4 × charge from the eye within {@link #HALF_ANGLE}° of the
+ * <p>The static {@code FRONT_TICKS}, {@code DURATION}, {@code SEGMENTS}, {@link #frontActive} and {@link #distance} are a tap's
+ * wave; a charged one asks its own instance ({@link #frontTicks()}, {@link #duration()}, {@link #active}, {@link #at}).
+ *
+ * <p><b>Cone.</b> The instant shove reaches {@link #range} = 8 × (1 + charge) from the eye within {@link #HALF_ANGLE}° of the
  * look. Fire blocks in it are grouped into {@link #FIRE_SEGMENT}-block cubes, one edit batch per cube, origin at the cube's
  * middle cell (no cell farther than √27 ≈ 5.2 from it).
  */
@@ -48,15 +53,52 @@ public final class TidalWaveGeometry {
 	private final Vec3 start;
 	private final Vec3 dir;
 	private final Vec3 side;
+	private final int length;
+
+	/** A tap's wave ({@link #LENGTH} blocks); see {@link #TidalWaveGeometry(Vec3, Vec3, int)}. */
+	public TidalWaveGeometry(Vec3 start, Vec3 look) {
+		this(start, look, LENGTH);
+	}
 
 	/**
 	 * @param start the wave's start: the bottom centre of the caster's feet cell
 	 * @param look the caster's look; only its horizontal part is used (straight up or down → +Z)
+	 * @param length how far the wave runs, in blocks ({@link #length(double)} of the cone's range)
 	 */
-	public TidalWaveGeometry(Vec3 start, Vec3 look) {
+	public TidalWaveGeometry(Vec3 start, Vec3 look, int length) {
 		this.start = start;
 		this.dir = horizontal(look);
 		this.side = new Vec3(-dir.z, 0, dir.x);
+		this.length = Math.max(1, length);
+	}
+
+	/** How far a wave runs for a cone of {@code range}: as far as the cone reaches (8 at a tap, 16 at full charge). */
+	public static int length(double range) {
+		return (int) Math.round(range);
+	}
+
+	/** This wave's length in blocks. */
+	public int length() { return length; }
+
+	/** Ticks this wave's front runs ({@link #FRONT_TICKS} for a tap's). */
+	public int frontTicks() { return length * TICKS_PER_BLOCK; }
+
+	/** This wave's whole life, including its last cells' lifetime ({@link #DURATION} for a tap's). */
+	public int duration() { return frontTicks() + CELL_LIFE; }
+
+	/** Whether this wave's front exists at {@code tick} (1..{@link #frontTicks()}). */
+	public boolean active(int tick) {
+		return tick >= 1 && tick <= frontTicks();
+	}
+
+	/** Distance of this wave's front from the start at {@code tick}: {@code tick / 2}, clamped to 0..{@link #length()}. */
+	public double at(int tick) {
+		return Mth.clamp(tick / (double) TICKS_PER_BLOCK, 0, length);
+	}
+
+	/** The segment (0..) a front of this wave at distance {@code d} is in: (0, 4] → 0, (4, 8] → 1, and on. */
+	public int segmentOf(double d) {
+		return Mth.clamp((int) Math.ceil(d / SEGMENT) - 1, 0, (length + SEGMENT - 1) / SEGMENT - 1);
 	}
 
 	/** The horizontal unit direction of {@code look} (+Z if it has none). */
@@ -73,9 +115,9 @@ public final class TidalWaveGeometry {
 	/** Unit vector to the wave's right, horizontal. */
 	public Vec3 side() { return side; }
 
-	/** Cone reach for a charge 0..1. */
+	/** Cone reach for a charge 0..1: {@code 8 × ChargeMath.size(charge)}, 8 at a tap and 16 at full charge. */
 	public static double range(float charge) {
-		return 8 + 4 * Mth.clamp(charge, 0F, 1F);
+		return LENGTH * ChargeMath.size(charge);
 	}
 
 	/** Whether the front exists at {@code tick} (1..{@link #FRONT_TICKS}). */
@@ -98,7 +140,7 @@ public final class TidalWaveGeometry {
 
 	/** The middle of the front line at {@code tick} (at the start's height). */
 	public Vec3 frontCentre(int tick) {
-		return start.add(dir.scale(distance(tick)));
+		return start.add(dir.scale(at(tick)));
 	}
 
 	/** The point {@code lateral} blocks to the right of the front's middle at {@code tick}. */
@@ -133,7 +175,7 @@ public final class TidalWaveGeometry {
 	 * @return a bit mask of the columns that broke this tick (bit {@code i} = column {@code i})
 	 */
 	public int step(int tick, int[] colY, boolean[] broken, Predicate<BlockPos> free) {
-		if (!frontActive(tick)) return 0;
+		if (!active(tick)) return 0;
 		int startY = startY();
 		int brokeNow = 0;
 		for (int i = 0; i < WIDTH; i++) {
@@ -165,8 +207,8 @@ public final class TidalWaveGeometry {
 	 * cell (no duplicates).
 	 */
 	public List<BlockPos> front(int tick, int[] colY, boolean[] broken) {
-		if (!frontActive(tick)) return List.of();
-		int h = height(distance(tick));
+		if (!active(tick)) return List.of();
+		int h = height(at(tick));
 		Set<BlockPos> out = new LinkedHashSet<>();
 		for (int i = 0; i < WIDTH; i++) {
 			if (broken[i]) continue;
@@ -204,14 +246,14 @@ public final class TidalWaveGeometry {
 	 * line, in a standing column's width, and from a block below that column's lowest row to its top.
 	 */
 	public boolean inFront(int tick, Vec3 p, int[] colY, boolean[] broken) {
-		if (!frontActive(tick)) return false;
+		if (!active(tick)) return false;
 		Vec3 rel = p.subtract(start);
 		double axial = rel.dot(dir);
 		double lateral = rel.dot(side);
-		if (Math.abs(axial - distance(tick)) > FRONT_DEPTH || Math.abs(lateral) > WIDTH / 2.0 + 0.5) return false;
+		if (Math.abs(axial - at(tick)) > FRONT_DEPTH || Math.abs(lateral) > WIDTH / 2.0 + 0.5) return false;
 		int i = Mth.clamp((int) Math.round(lateral), -(WIDTH / 2), WIDTH / 2) + WIDTH / 2;
 		if (broken[i]) return false;
-		return p.y >= colY[i] - 1 && p.y <= colY[i] + height(distance(tick));
+		return p.y >= colY[i] - 1 && p.y <= colY[i] + height(at(tick));
 	}
 
 	// ---- cone -------------------------------------------------------------------------------------------------------------

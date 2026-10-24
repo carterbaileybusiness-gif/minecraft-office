@@ -30,8 +30,9 @@ public final class ShadowStepFx implements SpellFx {
 		boolean own = mc.player != null && mc.player.getId() == e.casterId();
 		boolean firstPerson = own && mc.options.getCameraType().isFirstPerson();
 
-		// Where they left: a pool of shadow and the column sinking into it.
-		kit.circle(from.add(0, 0.04, 0), UP, ShadowFx.ARGB, 0.85F, 2, 14);
+		// Where they left: a pool of shadow and the column sinking into it (wider for a charged step).
+		float pool = 0.85F * (1F + Mth.clamp(e.charge(), 0F, 1F));
+		kit.circle(from.add(0, 0.04, 0), UP, ShadowFx.ARGB, pool, 2, 14);
 		spawn(kit, new Column(level, from, false, 12), 20);
 		kit.burst(from.add(0, 0.9, 0), ParticleTypes.REVERSE_PORTAL, 10, 0.12);
 		kit.motes(from.add(0, 0.1, 0), ShadowFx.VIOLET, 8, 0.45, Vec3.ZERO, 0.03, GlowMote.Drift.SINK, 0.12F, 14);
@@ -40,7 +41,7 @@ public final class ShadowStepFx implements SpellFx {
 		if (from.distanceToSqr(land) > 1) spawn(kit, new Smear(level, from.add(0, 1, 0), land.add(0, 1, 0), 7), 180);
 
 		// Where they arrive: a pool, and (seen from outside) the column rising out of it.
-		kit.circle(land.add(0, 0.04, 0), UP, ShadowFx.ARGB, 0.85F, 2, 16);
+		kit.circle(land.add(0, 0.04, 0), UP, ShadowFx.ARGB, pool, 2, 16);
 		if (!firstPerson) spawn(kit, new Column(level, land, true, 12), 20);
 		kit.motes(land.add(0, 0.15, 0), ShadowFx.PALE, 6, 0.4, new Vec3(0, 0.04, 0), 0.03, GlowMote.Drift.RISE, 0.1F, 12);
 		kit.motes(land.add(0, 0.1, 0), ShadowFx.MAGENTA, 6, 0.5, Vec3.ZERO, 0.04, GlowMote.Drift.SINK, 0.12F, 14);

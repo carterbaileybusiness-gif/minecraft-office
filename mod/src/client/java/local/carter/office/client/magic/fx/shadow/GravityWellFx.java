@@ -24,10 +24,6 @@ import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.ExperienceOrb;
-import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -61,14 +57,14 @@ public final class GravityWellFx implements SpellFx {
 
 		// The cast: a circle before the caster and a streak of sparks to the spot.
 		Vec3 muzzle = e.origin().add(dir.scale(1.7)).add(0, -0.15, 0);
-		kit.circle(muzzle, dir.reverse(), ShadowFx.ARGB, 0.45F + 0.25F * c, 2 + Math.round(2 * c), 10);
+		kit.circle(muzzle, dir.reverse(), ShadowFx.ARGB, 0.45F * (1F + c), 2 + Math.round(2 * c), 10);
 		kit.trail(muzzle.add(dir.scale(1.0)), centre, ParticleTypes.REVERSE_PORTAL, 12);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.ILLUSIONER_CAST_SPELL, SoundSource.PLAYERS, 0.5F, 0.55F, false);
 
 		// The well: a sigil on the ground under it for its whole life, and the core.
 		Vec3 floor = new Vec3(centre.x, centre.y - WellGeometry.HEIGHT + 0.06, centre.z);
-		kit.circle(floor, new Vec3(0, 1, 0), ShadowFx.ARGB, 1.7F + 0.5F * c, 3 + Math.round(2 * c), life);
-		float core = 0.7F + 0.2F * c;
+		kit.circle(floor, new Vec3(0, 1, 0), ShadowFx.ARGB, 1.7F * (1F + c), 3 + Math.round(2 * c), life);
+		float core = 0.7F * (1F + 0.5F * c);
 		Core well = new Core(level, centre, core, life, r.nextFloat() * Mth.TWO_PI);
 		if (kit.budget().particles(Core.cost()) >= Core.cost()) Minecraft.getInstance().particleEngine.add(well);
 		kit.burst(centre, ParticleTypes.REVERSE_PORTAL, 6, 0.2);
@@ -121,10 +117,10 @@ public final class GravityWellFx implements SpellFx {
 	private static void wisps(ClientLevel level, FxKit kit, Vec3 centre, double reach, int n) {
 		int made = 0;
 		int looked = 0;
-		// What the server drags (items, orbs, hostile mobs), and only what the core can see: no wisps through walls.
+		// What the server drags (TargetFilter.controllable: items, orbs, hostile mobs and animals, never a boss), and only what the
+		// core can see: no wisps through walls.
 		for (Entity en : level.getEntities((Entity) null, new AABB(centre, centre).inflate(reach),
-				x -> (x instanceof Enemy && x instanceof LivingEntity || x instanceof ItemEntity || x instanceof ExperienceOrb)
-						&& !TargetFilter.isProtected(x) && x.getBoundingBox().getCenter().distanceToSqr(centre) <= reach * reach)) {
+				x -> TargetFilter.controllable(null, x) && x.getBoundingBox().getCenter().distanceToSqr(centre) <= reach * reach)) {
 			if (made >= n || looked++ >= 2 * n) break;
 			Vec3 at = en.getBoundingBox().getCenter();
 			if (level.clip(new ClipContext(centre, at, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()))

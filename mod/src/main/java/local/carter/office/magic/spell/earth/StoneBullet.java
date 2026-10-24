@@ -1,5 +1,6 @@
 package local.carter.office.magic.spell.earth;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.CastContext;
@@ -23,8 +24,8 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 /**
  * Stone Bullet (Earth, slot 0, small): a heavy stone flung from the hand. An entity-free projectile from the eye along the look
  * ({@link #SPEED} blocks a tick, gravity {@link #GRAVITY}, radius {@link #RADIUS}, at most {@link #MAX_TICKS} ticks), so it arcs
- * down over a long throw. The first entity it hits takes 5 × P damage and is knocked {@link #KNOCK} along the throw (plus a
- * little lift). No block changes.
+ * down over a long throw; its size is {@link #radius} ({@link #RADIUS} at a tap, twice that at full charge). The first entity it
+ * hits takes 5 × P damage and is knocked {@code KNOCK × (1 + charge)} along the throw (plus a little lift). No block changes.
  *
  * <p>Fx: {@code origin} = the eye, {@code dir} = the unit look, {@code target} = where the arc meets a block (or where it ends),
  * {@code duration} = ticks to get there; {@code data} = {speed, gravity, radius}. The client flies the same arc ({@link #path},
@@ -60,18 +61,28 @@ public final class StoneBullet implements Spell {
 	@Override
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 dir = ctx.look().normalize();
-		ProjectileSpec spec = spec(ctx.eye(), dir);
+		ProjectileSpec spec = spec(ctx.eye(), dir, ctx.charge());
 		float damage = DAMAGE * ctx.power();
-		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, spec, damage, hit))) return CastOutcome.fizzle("magic.office.busy");
+		double knock = KNOCK * ChargeMath.size(ctx.charge());
+		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, spec, damage, knock, hit))) return CastOutcome.fizzle("magic.office.busy");
 
 		// Where the arc meets a block, tick by tick as the projectile clips, so every client stops the stone at the same wall.
 		Stop stop = stop(ctx.level(), spec);
 		return CastOutcome.cast(ctx.fx().withTarget(stop.at()).withDuration(Math.max(1, stop.ticks()))
-				.withData((float) SPEED, (float) GRAVITY, (float) RADIUS));
+				.withData((float) SPEED, (float) GRAVITY, (float) spec.radius()));
+	}
+
+	/** The stone's size at {@code charge}: {@code RADIUS × ChargeMath.size(charge)}. */
+	public static double radius(float charge) {
+		return RADIUS * ChargeMath.size(charge);
 	}
 
 	public static ProjectileSpec spec(Vec3 origin, Vec3 dir) {
-		return new ProjectileSpec(origin, dir.scale(SPEED), GRAVITY, RADIUS, MAX_TICKS, false);
+		return spec(origin, dir, 0F);
+	}
+
+	public static ProjectileSpec spec(Vec3 origin, Vec3 dir, float charge) {
+		return new ProjectileSpec(origin, dir.scale(SPEED), GRAVITY, radius(charge), MAX_TICKS, false);
 	}
 
 	/**
@@ -119,12 +130,12 @@ public final class StoneBullet implements Spell {
 		return Math.max(0, Math.min(spec.maxTicks(), t));
 	}
 
-	private static void hit(CastContext ctx, ProjectileSpec spec, float damage, ProjectileHit hit) {
+	private static void hit(CastContext ctx, ProjectileSpec spec, float damage, double knock, ProjectileHit hit) {
 		LivingEntity e = hit.entity();
 		if (e == null) return;
 		// The direction the stone was travelling when it struck.
 		Vec3 dir = heading(spec, timeAt(spec, hit.pos()));
 		Hurt.damage(ctx, e, damage);
-		Hurt.knock(e, dir, KNOCK, Math.min(MAX_UP, LIFT + KNOCK * Math.max(0, dir.y)));
+		Hurt.knock(e, dir, knock, Math.min(MAX_UP, LIFT + knock * Math.max(0, dir.y)));
 	}
 }

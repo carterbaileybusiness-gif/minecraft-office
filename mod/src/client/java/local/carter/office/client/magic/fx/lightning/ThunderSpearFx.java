@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.SpellFx;
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ProjectileSpec;
@@ -50,7 +51,7 @@ public final class ThunderSpearFx implements SpellFx {
 		Allowance all = Allowance.unlimited();
 		long seed = e.seed();
 
-		kit.circle(hand, dir.reverse(), Element.LIGHTNING.argb(), 0.5F + 0.2F * c, 3 + Math.round(2 * c), 12);
+		kit.circle(hand, dir.reverse(), Element.LIGHTNING.argb(), 0.5F * (1F + c), 3 + Math.round(2 * c), 12);
 		kit.motes(hand, LightningLook.CORE, 8, 0.14, dir.scale(0.12), 0.08, GlowMote.Drift.FLICKER, 0.09F, 7);
 		Volts.crackle(kit, level, all, hand, seed + 5);
 		level.playLocalSound(hand.x, hand.y, hand.z, SoundEvents.TRIDENT_THROW.value(), SoundSource.PLAYERS, 0.9F, 1.3F, false);
@@ -98,24 +99,26 @@ public final class ThunderSpearFx implements SpellFx {
 	/** The impact at {@code at} (facing {@code normal}): flash, ground cracks, sparks and smoke, thunder, a shake. */
 	private static void land(FxKit kit, ClientLevel level, Allowance a, Vec3 at, Vec3 normal, long seed, float c) {
 		Vec3 p = at.add(normal.scale(0.15));
-		Volts.zap(kit, level, a, p, 2F + 0.4F * c);
+		// A full charge blasts twice as wide (ThunderSpear.blast): the cracks, the ring and the flash grow with it.
+		float size = ChargeMath.size(c);
+		Volts.zap(kit, level, a, p, 2F * size);
 		Vec3 top = LightningLook.skyTop(at, LightningLook.SPEAR_PILLAR_HEIGHT, seed + 3);
 		Volts.channel(kit, level, a, top, at, seed + 3, LightningLook.SPEAR_PILLAR, LightningLook.SPEAR_PILLAR_STRAND);
 		Volts.glow(kit, level, p, LightningLook.BLUE, 1.6F, 5);
 		Vec3 ground = new Vec3(at.x, at.y + 0.08, at.z);
 		for (int i = 0; i < CRACKS; i++) {
 			double ang = Mth.TWO_PI * i / CRACKS + (Math.floorMod(seed + 7L * i, 100) / 100.0) * 0.8;
-			double len = CRACK_LENGTH * (0.7 + 0.3 * Math.floorMod(seed * 3 + i, 10) / 10.0);
+			double len = CRACK_LENGTH * size * (0.7 + 0.3 * Math.floorMod(seed * 3 + i, 10) / 10.0);
 			Vec3 tip = ground.add(Math.cos(ang) * len, 0, Math.sin(ang) * len);
 			Volts.arc(kit, level, a, ground, tip, seed + 41L * i, LightningLook.SPEAR_CRACK);
 		}
-		kit.ring(ground, 1.1, ParticleTypes.ELECTRIC_SPARK, 18);
+		kit.ring(ground, 1.1 * size, ParticleTypes.ELECTRIC_SPARK, Math.round(18 * size));
 		kit.motes(ground, LightningLook.YELLOW, 10, 0.6, new Vec3(0, 0.03, 0), 0.05, GlowMote.Drift.FLICKER, 0.09F, 14);
 		kit.burst(p, ParticleTypes.LARGE_SMOKE, 6, 0.06);
 		level.playLocalSound(at.x, at.y, at.z, SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.PLAYERS, 1.1F, 0.9F, false);
 		level.playLocalSound(at.x, at.y, at.z, SoundEvents.TRIDENT_THUNDER.value(), SoundSource.PLAYERS, 0.7F, 1.2F, false);
 		level.playLocalSound(at.x, at.y, at.z, SoundEvents.LIGHTNING_BOLT_THUNDER, SoundSource.PLAYERS, 1.2F, 1.15F, false);
-		kit.shake(0.4F, 10);
+		kit.shake(0.4F * size, 10);
 	}
 
 	/** Where the step {@code from} → {@code end} first meets a creature the server would hit (never the caster), or null. */

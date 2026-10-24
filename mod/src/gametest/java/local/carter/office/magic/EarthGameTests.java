@@ -350,20 +350,44 @@ public class EarthGameTests {
 		});
 	}
 
+	/**
+	 * An allay is neither fair game (spells never lift it) nor protected: the wall must still leave its cell open, never wall it in
+	 * (a creature outside both lists, a mannequin or a modded mob, is treated the same).
+	 */
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 40)
-	public void earthWallFullChargeIsSevenByFour(GameTestHelper h) {
+	public void earthWallNeverEntombsAnAllay(GameTestHelper h) {
+		ServerPlayer p = wallCaster(h);
+		net.minecraft.world.entity.animal.allay.Allay allay = h.spawn(EntityTypes.ALLAY, cell(17, 4));
+		allay.setNoAi(true);
+		allay.setPersistenceRequired();
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.EARTH_WALL, 0f), Result.CAST, "result");
+		h.runAfterDelay(20, () -> {
+			for (int y = 4; y <= 6; y++) {
+				h.assertBlockPresent(Blocks.AIR, cell(17, y));
+				// Positive control: the rest of the wall stands.
+				assertWall(h, cell(16, y), Blocks.STONE);
+				assertWall(h, cell(18, y), Blocks.STONE);
+			}
+			h.assertFalse(allay.isInWall(), "the allay is not inside the wall");
+			h.assertValueEqual(allay.getHealth(), allay.getMaxHealth(), "the allay is unhurt");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 40)
+	public void earthWallFullChargeIsNineByFour(GameTestHelper h) {
 		ServerPlayer p = wallCaster(h);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		int before = stoneAndTuff(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.EARTH_WALL, 1f), Result.CAST, "result");
 		float[] d = rec.fx(p).get(0).data();
-		h.assertTrue(d.length == 4 && d[0] == 1 && d[1] == 0 && d[2] == 7 && d[3] == 4, "fx data {1, 0, 7, 4}");
+		h.assertTrue(d.length == 4 && d[0] == 1 && d[1] == 0 && d[2] == 9 && d[3] == 4, "fx data {1, 0, 9, 4}");
 		h.runAfterDelay(10, () -> {
-			for (int x = 13; x <= 19; x++) {
+			for (int x = 12; x <= 20; x++) {
 				for (int y = 4; y <= 7; y++) assertWall(h, cell(x, y), Blocks.STONE);
 				h.assertBlockPresent(Blocks.AIR, cell(x, 8));
 			}
-			h.assertValueEqual(stoneAndTuff(h), before + 28, "28 cells");
+			h.assertValueEqual(stoneAndTuff(h), before + 36, "36 cells");
 			h.succeed();
 		});
 	}

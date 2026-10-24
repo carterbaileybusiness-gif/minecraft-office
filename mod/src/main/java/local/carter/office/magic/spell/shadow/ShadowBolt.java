@@ -1,5 +1,6 @@
 package local.carter.office.magic.spell.shadow;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.CastContext;
@@ -24,8 +25,9 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
  * Shadow Bolt (Shadow, slot 0, small): a bolt of shadow that saps strength. An entity-free projectile from the eye along the
- * look ({@link #SPEED} blocks a tick, radius {@link #RADIUS}, at most {@link #MAX_TICKS} ticks, no gravity). The first entity it
- * hits takes 4 × P damage and Weakness I for {@link #WEAKNESS_TICKS} ticks. It stops at the first block. No block changes.
+ * look ({@link #SPEED} blocks a tick, radius {@link #radius}: {@link #RADIUS} at a tap, twice that at full charge; at most
+ * {@link #MAX_TICKS} ticks, no gravity). The first entity it hits takes 4 × P damage and Weakness I for
+ * {@code WEAKNESS_TICKS × (1 + charge)} ticks. It stops at the first block. No block changes.
  *
  * <p>Fx: {@code origin} = the projectile's start (the eye), {@code dir} = its unit direction, {@code target} = where it would
  * meet a block (or its end of range), {@code duration} = ticks to get there; {@code data} = {speed, radius}. The client flies
@@ -59,7 +61,7 @@ public final class ShadowBolt implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		Vec3 dir = ctx.look().normalize();
 		Vec3 origin = ctx.eye();
-		ProjectileSpec spec = spec(origin, dir);
+		ProjectileSpec spec = spec(origin, dir, ctx.charge());
 		float damage = DAMAGE * ctx.power();
 		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, damage, hit))) return CastOutcome.fizzle("magic.office.busy");
 
@@ -69,17 +71,27 @@ public final class ShadowBolt implements Spell {
 				CollisionContext.empty()));
 		Vec3 stop = block.getType() == HitResult.Type.MISS ? end : block.getLocation();
 		int ticks = Math.min(MAX_TICKS, (int) Math.ceil(stop.distanceTo(origin) / SPEED));
-		return CastOutcome.cast(ctx.fx().withTarget(stop).withDuration(Math.max(1, ticks)).withData((float) SPEED, (float) RADIUS));
+		return CastOutcome.cast(ctx.fx().withTarget(stop).withDuration(Math.max(1, ticks)).withData((float) SPEED, (float) spec.radius()));
+	}
+
+	/** The bolt's size at {@code charge}: {@code RADIUS × ChargeMath.size(charge)}. */
+	public static double radius(float charge) {
+		return RADIUS * ChargeMath.size(charge);
 	}
 
 	public static ProjectileSpec spec(Vec3 origin, Vec3 dir) {
-		return new ProjectileSpec(origin, dir.scale(SPEED), 0, RADIUS, MAX_TICKS, false);
+		return spec(origin, dir, 0F);
+	}
+
+	public static ProjectileSpec spec(Vec3 origin, Vec3 dir, float charge) {
+		return new ProjectileSpec(origin, dir.scale(SPEED), 0, radius(charge), MAX_TICKS, false);
 	}
 
 	private static void hit(CastContext ctx, float damage, ProjectileHit hit) {
 		LivingEntity e = hit.entity();
 		if (e == null || !TargetFilter.affects(ctx.caster(), e)) return;
 		Hurt.damage(ctx, e, damage);
-		if (e.isAlive()) e.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, WEAKNESS_TICKS, WEAKNESS_AMPLIFIER), ctx.caster());
+		int weak = Math.round(WEAKNESS_TICKS * ChargeMath.size(ctx.charge()));
+		if (e.isAlive()) e.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, weak, WEAKNESS_AMPLIFIER), ctx.caster());
 	}
 }

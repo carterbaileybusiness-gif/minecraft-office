@@ -51,7 +51,8 @@ public final class WaterPrisonFx implements SpellFx {
 
 		// The cast: a circle before the caster, a jet of water to the target.
 		Vec3 front = eye.add(look.scale(1.5)).add(0, -0.25, 0);
-		kit.circle(front, look.reverse(), WaterFx.ARGB, 0.75F, 3, 12);
+		float c0 = Mth.clamp(e.charge(), 0F, 1F);
+		kit.circle(front, look.reverse(), WaterFx.ARGB, 0.75F * (1F + c0), 3 + Math.round(2 * c0), 12);
 		Vec3 from = front.add(look.scale(0.4));
 		kit.trail(from, centre, ParticleTypes.FALLING_WATER, 10);
 		int jet = (int) Math.min(18, Math.max(6, from.distanceTo(centre) * 1.2));
@@ -66,7 +67,7 @@ public final class WaterPrisonFx implements SpellFx {
 
 		// The ball: ghost water in its air cells, and the membrane.
 		List<WaterPrisonGeometry.Cell> cells = new ArrayList<>();
-		for (WaterPrisonGeometry.Cell c : WaterPrisonGeometry.fill(centre)) {
+		for (WaterPrisonGeometry.Cell c : WaterPrisonGeometry.fill(centre, radius)) {
 			if (open(level, c.pos())) cells.add(c);
 		}
 		WaterSphere skin = new WaterSphere(level, partial -> centre, radius + 0.15F, life, WaterSphere.Style.PRISON);

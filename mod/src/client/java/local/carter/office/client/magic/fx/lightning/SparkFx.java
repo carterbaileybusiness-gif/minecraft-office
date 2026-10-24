@@ -29,7 +29,7 @@ public final class SparkFx implements SpellFx {
 		Vec3 end = struck.length > 0 ? Volts.centre(level, struck[0], e.target()) : e.target();
 		Allowance all = Allowance.unlimited();
 
-		kit.circle(hand, dir.reverse(), Element.LIGHTNING.argb(), 0.32F + 0.12F * c, 2 + Math.round(c), 6);
+		kit.circle(hand, dir.reverse(), Element.LIGHTNING.argb(), 0.32F * (1F + c), 2 + Math.round(2 * c), 6 + Math.round(4 * c));
 		kit.motes(hand, LightningLook.CORE, 5, 0.08, dir.scale(0.08), 0.06, GlowMote.Drift.FLICKER, 0.08F, 5);
 		Volts.crackle(kit, level, all, hand, e.seed() + 5);
 		Volts.channel(kit, level, all, hand, end, e.seed(), c >= 0.5F ? LightningLook.SPARK_CHARGED : LightningLook.SPARK,
@@ -40,16 +40,20 @@ public final class SparkFx implements SpellFx {
 
 		if (struck.length == 0) return;
 		Volts.crawl(kit, level, all, struck[0], e.seed() + 1);
-		if (struck.length < 2) return;
-		int arcId = struck[1];
-		kit.simulate(1, 2, t -> {
-			if (t != 1) return;
-			Vec3 from = Volts.centre(level, struck[0], end);
-			Vec3 to = Volts.centre(level, arcId, from);
-			Volts.channel(kit, level, all, from, to, e.seed() + 2, LightningLook.SPARK, LightningLook.SPARK_STRAND);
-			Volts.zap(kit, level, all, to, 0.75F);
-			Volts.crawl(kit, level, all, arcId, e.seed() + 3);
-			level.playLocalSound(to.x, to.y, to.z, SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.PLAYERS, 0.3F, 2F, false);
-		});
+		// Each arc leaps a tick after the one before, from the last creature struck.
+		for (int k = 1; k < struck.length; k++) {
+			int fromId = struck[k - 1];
+			int arcId = struck[k];
+			int at = k;
+			kit.simulate(k, k + 1, t -> {
+				if (t != at) return;
+				Vec3 from = Volts.centre(level, fromId, end);
+				Vec3 to = Volts.centre(level, arcId, from);
+				Volts.channel(kit, level, all, from, to, e.seed() + 2L * at, LightningLook.SPARK, LightningLook.SPARK_STRAND);
+				Volts.zap(kit, level, all, to, 0.75F);
+				Volts.crawl(kit, level, all, arcId, e.seed() + 2L * at + 1);
+				level.playLocalSound(to.x, to.y, to.z, SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.PLAYERS, 0.3F, 2F, false);
+			});
+		}
 	}
 }

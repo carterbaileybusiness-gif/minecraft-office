@@ -20,16 +20,18 @@ class FireWallGeometryTest {
 
 	@Test
 	void widthHeightAndDurationFollowCharge() {
-		assertEquals(5, FireWallGeometry.width(0F));
-		assertEquals(5, FireWallGeometry.width(0.49F));
-		assertEquals(7, FireWallGeometry.width(0.5F));
-		assertEquals(7, FireWallGeometry.width(1F));
+		// A full charge's wall is twice a tap's wide, a block taller and stands twice as long.
+		assertEquals(5, FireWallGeometry.width(0F), 1e-9);
+		assertEquals(7.5, FireWallGeometry.width(0.5F), 1e-6);
+		assertEquals(10, FireWallGeometry.width(1F), 1e-9);
+		assertEquals(3, FireWallGeometry.height(0F), 1e-9);
+		assertEquals(4, FireWallGeometry.height(1F), 1e-9);
 		assertEquals(100, FireWallGeometry.duration(0F));
-		assertEquals(130, FireWallGeometry.duration(0.5F));
-		assertEquals(160, FireWallGeometry.duration(1F));
+		assertEquals(150, FireWallGeometry.duration(0.5F));
+		assertEquals(200, FireWallGeometry.duration(1F));
 		FireWallGeometry g = FireWallGeometry.of(BASES[0], new Vec3(0, 0, 1), 1F);
-		assertEquals(3, g.height());
-		assertEquals(160, g.duration());
+		assertEquals(4, g.height(), 1e-9);
+		assertEquals(200, g.duration());
 	}
 
 	@Test

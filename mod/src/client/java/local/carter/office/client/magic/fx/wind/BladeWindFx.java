@@ -66,7 +66,7 @@ public final class BladeWindFx implements SpellFx {
 		Vec3 eye = e.origin();
 
 		// The circle the blades leave from: in front, facing the caster.
-		kit.circle(eye.add(dir.scale(2.0)).add(0, -0.1, 0), dir.reverse(), 0xFF000000 | WIND, 0.4F + 0.3F * c, 2 + Math.round(3 * c), 9);
+		kit.circle(eye.add(dir.scale(2.0)).add(0, -0.1, 0), dir.reverse(), 0xFF000000 | WIND, 0.4F * (1F + c), 2 + Math.round(3 * c), 9);
 		kit.motes(eye.add(dir.scale(1.6)), PALE, 10 + Math.round(8 * c), 0.35, dir.scale(0.12), 0.08, GlowMote.Drift.SWIRL, 0.11F, 10);
 		level.playLocalSound(eye.x, eye.y, eye.z, SoundEvents.PLAYER_ATTACK_SWEEP, SoundSource.PLAYERS, 1.0F, 1.3F - 0.25F * c, false);
 		level.playLocalSound(eye.x, eye.y, eye.z, SoundEvents.WIND_CHARGE_THROW, SoundSource.PLAYERS, 0.8F, 1.5F - 0.3F * c, false);

@@ -23,13 +23,16 @@ class BladeWindGeometryTest {
 	private static final Vec3 SOUTH = new Vec3(0, 0, 1);
 
 	@Test
-	void fanHasThreeBladesUnderHalfChargeAndFiveFromIt() {
+	void fullChargeFanIsTwiceAsWideWithMoreBlades() {
 		assertArrayEquals(new double[] {-15, 0, 15}, BladeWindGeometry.angles(0F), EPS);
-		assertArrayEquals(new double[] {-15, 0, 15}, BladeWindGeometry.angles(0.49F), EPS);
-		assertArrayEquals(new double[] {-25, -12.5, 0, 12.5, 25}, BladeWindGeometry.angles(0.5F), EPS);
-		assertArrayEquals(new double[] {-25, -12.5, 0, 12.5, 25}, BladeWindGeometry.angles(1F), EPS);
+		assertArrayEquals(new double[] {-16.8, 0, 16.8}, BladeWindGeometry.angles(0.12F), 1.0E-5);
+		assertArrayEquals(new double[] {-22.5, -11.25, 0, 11.25, 22.5}, BladeWindGeometry.angles(0.5F), 1.0E-5);
+		assertArrayEquals(new double[] {-30, -20, -10, 0, 10, 20, 30}, BladeWindGeometry.angles(1F), 1.0E-5);
 		assertEquals(3, BladeWindGeometry.specs(EYE, SOUTH, 0F).size());
-		assertEquals(5, BladeWindGeometry.specs(EYE, SOUTH, 1F).size());
+		assertEquals(5, BladeWindGeometry.specs(EYE, SOUTH, 0.25F).size());
+		assertEquals(7, BladeWindGeometry.specs(EYE, SOUTH, 0.75F).size());
+		assertEquals(7, BladeWindGeometry.specs(EYE, SOUTH, 1F).size());
+		assertEquals(2 * BladeWindGeometry.spread(0F), BladeWindGeometry.spread(1F), EPS, "a full charge's fan is twice as wide");
 	}
 
 	@Test

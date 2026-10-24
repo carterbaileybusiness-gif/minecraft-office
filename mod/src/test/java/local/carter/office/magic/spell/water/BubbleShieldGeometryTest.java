@@ -16,8 +16,9 @@ class BubbleShieldGeometryTest {
 	@Test
 	void durationAndCentre() {
 		assertEquals(120, BubbleShieldGeometry.duration(0));
-		assertEquals(150, BubbleShieldGeometry.duration(0.5F));
-		assertEquals(180, BubbleShieldGeometry.duration(1));
+		assertEquals(180, BubbleShieldGeometry.duration(0.5F));
+		assertEquals(240, BubbleShieldGeometry.duration(1));
+		assertEquals(2 * BubbleShieldGeometry.radius(0), BubbleShieldGeometry.radius(1), 1.0E-9, "a full charge's bubble is twice as wide");
 		assertEquals(0, new Vec3(0.5, 65.9, 0.5).distanceTo(BubbleShieldGeometry.centre(new Vec3(0.5, 65, 0.5), 1.8)), 1.0E-9);
 	}
 

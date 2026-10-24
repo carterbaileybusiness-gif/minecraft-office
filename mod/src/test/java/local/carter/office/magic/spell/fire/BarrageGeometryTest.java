@@ -20,8 +20,8 @@ class BarrageGeometryTest {
 	@Test
 	void countFollowsCharge() {
 		assertEquals(3, BarrageGeometry.count(0F));
-		assertEquals(4, BarrageGeometry.count(0.5F));
-		assertEquals(5, BarrageGeometry.count(1F));
+		assertEquals(5, BarrageGeometry.count(0.5F)); // round(4.5)
+		assertEquals(6, BarrageGeometry.count(1F)); // a full charge throws twice a tap's
 	}
 
 	@Test
@@ -33,7 +33,7 @@ class BarrageGeometryTest {
 				assertEquals(a, b, "same seed, same points");
 				assertEquals(5, a.size());
 				for (Vec3 p : a) {
-					assertTrue(p.distanceTo(point) <= BarrageGeometry.SPREAD + 1e-9, "within 1.5 of the aim: " + p.distanceTo(point));
+					assertTrue(p.distanceTo(point) <= BarrageGeometry.spread(5) + 1e-9, "within 2.5 of the aim: " + p.distanceTo(point));
 				}
 				// A volley built from the same numbers aims at exactly those points.
 				List<BarrageGeometry.Ball> v = BarrageGeometry.volley(point, DIRS[0], seed, 5, new float[0]);

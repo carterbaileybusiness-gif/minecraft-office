@@ -32,7 +32,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -44,11 +43,11 @@ import net.minecraft.world.phys.Vec3;
  * <p>It opens {@link BlackHoleGeometry#HEIGHT} above the ground under the look ray's point within
  * {@link BlackHoleGeometry#RANGE} ({@link GravityWell#hover}) and lasts {@link BlackHoleGeometry#LIFE} ticks.
  * <ul>
- * <li><b>Pull</b>, every tick: hostile mobs, items and XP orbs ({@link GravityWell#pulls}: never players, pets, villagers or
- * livestock) within {@link BlackHoleGeometry#PULL_RADIUS} that the centre can see get {@link BlackHoleGeometry#pull} as their
+ * <li><b>Pull</b>, every tick: hostile mobs, animals, items and XP orbs ({@link GravityWell#pulls}: never players, pets,
+ * villagers, golems, named mobs or a boss) within {@link BlackHoleGeometry#PULL_RADIUS} that the centre can see get {@link BlackHoleGeometry#pull} as their
  * velocity (0.08 → 0.25 a tick over its life), scaled by knockback resistance; at most 64 of them and {@link #MAX_CLIPS} sight
  * checks a tick. Velocities are synced on even ticks only, and not at all for a pull under {@link #MIN_SYNC}.</li>
- * <li><b>Hurt</b>, every {@link BlackHoleGeometry#HURT_EVERY} ticks: hostile mobs within {@link BlackHoleGeometry#HURT_RADIUS}
+ * <li><b>Hurt</b>, every {@link BlackHoleGeometry#HURT_EVERY} ticks: every creature spells may hurt within {@link BlackHoleGeometry#HURT_RADIUS}
  * that it can see take {@link BlackHoleGeometry#HURT}.</li>
  * <li><b>Devour</b>, permanent: one {@link EditTier#ULTIMATE} batch at the centre, open for its whole life (so the edit log and
  * {@code /magic undo} see one cast). Every tick it eats the blocks the growing sphere ({@link BlackHoleGeometry#radius}, 1 → {@code
@@ -168,7 +167,7 @@ public final class BlackHole implements Spell {
 
 		private void hurt(ServerLevel level, int clips) {
 			for (LivingEntity l : Targets.radius(ctx, centre, BlackHoleGeometry.HURT_RADIUS)) {
-				if (!(l instanceof Enemy) || clips >= MAX_CLIPS) continue;
+				if (clips >= MAX_CLIPS) break;
 				clips++;
 				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) Hurt.damage(ctx, l, BlackHoleGeometry.HURT);
 			}

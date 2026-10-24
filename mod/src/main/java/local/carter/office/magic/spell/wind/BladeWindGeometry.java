@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 
@@ -15,7 +16,8 @@ import net.minecraft.world.phys.Vec3;
  * Blade Wind's shared math (pure: vectors only, no world). The server effect ({@link BladeWind}) and the client fx both call it,
  * so the blades they move and draw are the same blades:
  * <ul>
- *   <li>the fan: 3 blades over ±15°, or 5 over ±25° at charge ≥ 0.5, turned about the look's own "up";</li>
+ *   <li>the fan: {@link #blades} blades (3 at a tap, 5 from charge 0.25, 7 from 0.75) evenly over ±{@link #spread} (15° at a tap,
+ *       30° at full charge: twice as wide), turned about the look's own "up";</li>
  *   <li>each blade's path: a {@link ProjectileSpec} (speed 2.0, radius 0.6, pierce, 14 ticks, no gravity) walked with
  *       {@link Projectiles#step};</li>
  *   <li>the swath a blade cuts: cells whose centre lies within 1.1 sideways of its centre line, from 0.7 above it down to the
@@ -39,21 +41,22 @@ public final class BladeWindGeometry {
 	public static final double CUT_DOWN = 1.62;
 	/** Most blocks one cast cuts, over all its blades. */
 	public static final int MAX_CUTS = 64;
-	/** Charge from which the fan has 5 blades at ±25° instead of 3 at ±15°. */
-	public static final float WIDE_CHARGE = 0.5F;
+	/** Half the fan's spread at a tap, in degrees (twice that at full charge). */
+	public static final double SPREAD = 15;
 
 	private BladeWindGeometry() {}
 
 	/** A blade's own axes: {@code forward} along its flight, {@code side} level and to its right, {@code up} completing them. */
 	public record Frame(Vec3 forward, Vec3 side, Vec3 up) {}
 
+	/** Blades in the fan: {@code 3 + 2 × round(2 × charge)}, so 3 at a tap, 5 from charge 0.25 and 7 from 0.75 (always one along the look). */
 	public static int blades(float charge) {
-		return charge >= WIDE_CHARGE ? 5 : 3;
+		return 3 + 2 * Math.round(2 * Mth.clamp(charge, 0F, 1F));
 	}
 
-	/** Half the fan's spread, in degrees. */
+	/** Half the fan's spread, in degrees: {@code 15 × ChargeMath.size(charge)}, 15 at a tap and 30 at full charge. */
 	public static double spread(float charge) {
-		return charge >= WIDE_CHARGE ? 25 : 15;
+		return SPREAD * ChargeMath.size(charge);
 	}
 
 	/** Each blade's turn from the look, in degrees, left to right, evenly over ±{@link #spread}. */

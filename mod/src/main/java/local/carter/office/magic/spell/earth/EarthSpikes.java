@@ -24,7 +24,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
@@ -33,11 +32,11 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Earth Spikes (Earth, slot 2, small, lingering): a line of stone spikes bursts from the ground ahead, one a tick.
  *
- * <p>The line ({@link EarthSpikesGeometry}) starts just ahead of the caster's feet and runs {@code 8 + 4 × charge} cells along the
- * flat look, following the ground (a step up, a drop down) and ending at a wall or a pit. Spike {@code i} bursts on tick
- * {@code i}: every creature standing in its cell (up to {@link EarthSpikesGeometry#HEIGHT}) takes {@code 4 × P} once; hostile mobs
- * ({@link Enemy}) and items are also thrown {@link #UP} up (lifts move only enemies and items). Small spell: no block changes,
- * the spikes are the client's ghost blocks.
+ * <p>The line ({@link EarthSpikesGeometry}) starts just ahead of the caster's feet and runs {@code 8 × (1 + charge)} cells along
+ * the flat look (8 at a tap, 16 at full charge), following the ground (a step up, a drop down) and ending at a wall or a pit.
+ * Spike {@code i} bursts on tick {@code i}: every creature standing in its cell (up to {@link EarthSpikesGeometry#HEIGHT}) takes
+ * {@code 4 × P} once; creatures a control effect may take (hostile mobs and animals, never a boss), items and XP orbs are also
+ * thrown {@link #UP} up ({@link #liftable}). Small spell: no block changes, the spikes are the client's ghost blocks.
  *
  * <p>Fx: {@code target} = bottom centre of the first cell, {@code dir} = the flat look, {@code duration} = the line's length in
  * ticks, {@code data} = {length}. The client follows the same ground rule on its own world.
@@ -90,8 +89,8 @@ public final class EarthSpikes implements Spell {
 	}
 
 	/**
-	 * Whether a spike also throws {@code e} up: hostile mobs, items and XP orbs, never players, pets, villagers or a boss
-	 * ({@link TargetFilter#controllable}; a boss is still hurt).
+	 * Whether a spike also throws {@code e} up: hostile mobs, animals, items and XP orbs, never players, pets, villagers, golems,
+	 * named mobs or a boss ({@link TargetFilter#controllable}; a boss is still hurt).
 	 */
 	public static boolean liftable(ServerPlayer caster, Entity e) {
 		return TargetFilter.controllable(caster, e);

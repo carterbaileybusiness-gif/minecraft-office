@@ -11,6 +11,7 @@ import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
@@ -22,7 +23,6 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -41,7 +41,8 @@ import net.minecraft.world.phys.Vec3;
  * {@link DragonGeometry} for {@link DragonGeometry#FLIGHT} ticks; the server only waits for it. At the impact:
  * <ul>
  * <li>everything spells may touch within {@link DragonGeometry#DAMAGE_RADIUS} takes {@link DragonGeometry#DAMAGE} × P, and
- * foes ({@link Enemy}: the lanes' control ruling) are thrown {@link DragonGeometry#KNOCK} outward + {@link DragonGeometry#KNOCK_UP} up;
+ * creatures a control effect may take ({@link TargetFilter#controllable}: never a boss) are thrown {@link DragonGeometry#KNOCK}
+ * outward + {@link DragonGeometry#KNOCK_UP} up;
  * whatever burns there is put out;</li>
  * <li><b>permanent flood</b>: real water sources in the cells {@link DragonGeometry#flood} picks (radius
  * {@code min(12, 6 + (level − 7))}, air or plants and snow water washes away, no higher than the impact, each on solid ground
@@ -123,7 +124,7 @@ public final class WaterDragon implements Spell {
 			float damage = DragonGeometry.DAMAGE * ctx.power();
 			for (LivingEntity e : Targets.radius(ctx, impact, DragonGeometry.DAMAGE_RADIUS)) {
 				Hurt.damage(ctx, e, damage);
-				if (e instanceof Enemy && e.isAlive()) {
+				if (e.isAlive() && TargetFilter.controllable(ctx.caster(), e)) {
 					Vec3 away = e.position().subtract(impact);
 					Hurt.knock(e, away.horizontalDistanceSqr() < 1.0E-4 ? ctx.look() : away, DragonGeometry.KNOCK, DragonGeometry.KNOCK_UP);
 				}

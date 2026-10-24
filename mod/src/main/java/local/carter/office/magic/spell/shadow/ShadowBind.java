@@ -2,6 +2,8 @@ package local.carter.office.magic.spell.shadow;
 
 import java.util.Optional;
 
+import org.jspecify.annotations.Nullable;
+
 import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
@@ -22,7 +24,6 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -30,16 +31,18 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>The target is the first creature the look ray meets within {@link BindGeometry#RANGE} (forgiveness
  * {@link BindGeometry#FORGIVENESS}) that the caster can see ({@link ShadowStep#seen}). It takes {@code 4 × P} ({@link Hurt}, so
- * behind {@link TargetFilter}). A hostile mob ({@link Enemy}) is also rooted for {@link BindGeometry#life} = 60 + 40 × charge
- * ticks: Slowness VI (amplifier {@link BindGeometry#SLOWNESS_AMPLIFIER}) and, every tick, held where it stood with its velocity
- * zeroed ({@link BindGeometry#hold}, {@link BindGeometry#rooted}: it may fall, never step or jump; its pathing is stopped). The
- * lane rule: control effects touch only hostile mobs, so livestock and the like are hurt but never held. A teleport (a move of
- * more than {@link BindGeometry#BREAK_DISTANCE} in one tick) breaks the root. No block changes.
+ * behind {@link TargetFilter}). A creature a control effect may take ({@link TargetFilter#controllable}: hostile mobs and
+ * animals, never a boss) is also rooted for {@link BindGeometry#life} = 60 + 40 × charge ticks: Slowness VI (amplifier
+ * {@link BindGeometry#SLOWNESS_AMPLIFIER}) and, every tick, held where it stood with its velocity zeroed ({@link BindGeometry#hold},
+ * {@link BindGeometry#rooted}: it may fall, never step or jump; its pathing is stopped). A boss is hurt but never held. A
+ * teleport (a move of more than {@link BindGeometry#BREAK_DISTANCE} in one tick) breaks the root. From half charge the shadows
+ * take a second foe too ({@link BindGeometry#foes}: twice a tap's): the nearest other creature it can root within
+ * {@link BindGeometry#SPREAD} of the first and in its sight, hurt and rooted the same way. No block changes.
  *
  * <p>With nothing to bind the shadows still lash out at the ray point (the cast spends as usual, as Water Prison's does).
  *
- * <p>Fx: {@code target} = the foe's feet (or the ray point), {@code entities} = {the foe} if any, {@code duration} = the life,
- * {@code data} = {1 if rooted else 0}.
+ * <p>Fx: {@code target} = the foe's feet (or the ray point), {@code entities} = {the foe, then the second foe} if any,
+ * {@code duration} = the life, {@code data} = {1 if the first is rooted else 0} (a second foe is always rooted).
  */
 public final class ShadowBind implements Spell {
 	/** Velocity changes are synced every this many ticks (the Gravity Well throttle). */
@@ -72,24 +75,46 @@ public final class ShadowBind implements Spell {
 			return CastOutcome.cast(fx.withTarget(Targets.point(ctx, BindGeometry.RANGE)).withData(0F));
 		}
 		LivingEntity e = target.get();
-		boolean roots = roots(e);
+		boolean roots = roots(ctx, e);
 		// The root is the caster's effect (it counts against their cap), though it holds the foe.
 		if (roots && !ActiveEffects.add(ctx.level(), ctx.caster().getUUID(), new Root(e, life))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		// A charged bind's second foe, picked before the first hit lands (a foe it kills still passes the shadows on).
+		LivingEntity second = BindGeometry.foes(ctx.charge()) > 1 ? second(ctx, e) : null;
+		bind(ctx, e, roots, life);
+		if (second != null && ActiveEffects.add(ctx.level(), ctx.caster().getUUID(), new Root(second, life))) {
+			bind(ctx, second, true, life);
+		} else {
+			second = null;
+		}
+		int[] ids = second == null ? new int[] {e.getId()} : new int[] {e.getId(), second.getId()};
+		return CastOutcome.cast(fx.withTarget(e.position()).withEntities(ids).withData(roots ? 1F : 0F));
+	}
+
+	/** Hurts {@code e} and, when {@code roots}, slows it and cancels the hit's knockback at once. */
+	private static void bind(CastContext ctx, LivingEntity e, boolean roots, int life) {
 		Hurt.damage(ctx, e, BindGeometry.DAMAGE * ctx.power());
 		if (roots && e.isAlive()) {
 			e.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, life, BindGeometry.SLOWNESS_AMPLIFIER), ctx.caster());
-			// The hit's knockback is cancelled at once.
 			Root.hold(e, true);
 		}
-		return CastOutcome.cast(fx.withTarget(e.position()).withEntities(e.getId()).withData(roots ? 1F : 0F));
+	}
+
+	/** The nearest other creature the bind can root within {@link BindGeometry#SPREAD} of {@code first}, in its sight; null if none. */
+	private static @Nullable LivingEntity second(CastContext ctx, LivingEntity first) {
+		Vec3 from = first.getBoundingBox().getCenter();
+		for (LivingEntity e : Targets.radius(ctx, from, BindGeometry.SPREAD)) {
+			if (e == first || !roots(ctx, e)) continue;
+			if (ShadowStep.seen(ctx.level(), from, e)) return e;
+		}
+		return null;
 	}
 
 	/**
-	 * Whether the bind holds {@code e}: hostile mobs only (the lane's control rule), never a boss ({@link TargetFilter#isBoss}). A
-	 * boss still takes the damage.
+	 * Whether the bind holds {@code e}: a creature a control effect may take ({@link TargetFilter#controllable}: hostile mobs and
+	 * animals), never a boss. A boss still takes the damage.
 	 */
-	static boolean roots(LivingEntity e) {
-		return e instanceof Enemy && !TargetFilter.isProtected(e) && !TargetFilter.isBoss(e);
+	static boolean roots(CastContext ctx, LivingEntity e) {
+		return TargetFilter.controllable(ctx.caster(), e);
 	}
 
 	/** The root: holds the foe where it stood for its life, or until it dies, leaves the level or is teleported. */
