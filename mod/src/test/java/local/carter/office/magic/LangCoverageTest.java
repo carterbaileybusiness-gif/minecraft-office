@@ -25,7 +25,7 @@ class LangCoverageTest {
 			"choose", "bind_q", "bind_note", "bind", "back", "level", "home", "no_home_short", "lv", "plus_levels", "hint", "signs",
 			"bound", "no_mana", "cooldown", "locked", "no_levels", "fizzle", "level_up", "unlocked", "stronger", "no_home", "home_marked",
 			"recalling", "recall_interrupted", "protected", "busy", "undo_done", "undo_help", "wrong_element", "spell_failed",
-			"signs_hint", "fizzle_reason", "home_blocked");
+			"signs_hint", "fizzle_reason", "home_blocked", "choose_hint", "mana");
 
 	private static JsonObject lang() throws Exception {
 		try (InputStream in = LangCoverageTest.class.getResourceAsStream("/assets/office/lang/en_us.json")) {
