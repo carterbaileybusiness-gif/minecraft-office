@@ -32,7 +32,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * lightning {@link #LENGTH} long, white-hot at the head, with a blue strand coiling round it and sparks shed behind, flying the
  * server's own path ({@link ThunderSpear#spec} + {@link Projectiles#step}, clipped against blocks and creatures here as the server
  * does). Where it lands: a flash, cracks of lightning running out over the ground, a ring of sparks and smoke, a crack of thunder
- * and a shake (the vanilla visual-only bolt from the sky is the server's, every client sees it).
+ * and a shake; and a strike of lightning from the sky onto it (the fx's own: no vanilla bolt is made). Thunder stays local (volume ≤ 2).
  */
 public final class ThunderSpearFx implements SpellFx {
 	/** Length of the spear's shaft. */
@@ -99,6 +99,8 @@ public final class ThunderSpearFx implements SpellFx {
 	private static void land(FxKit kit, ClientLevel level, Allowance a, Vec3 at, Vec3 normal, long seed, float c) {
 		Vec3 p = at.add(normal.scale(0.15));
 		Volts.zap(kit, level, a, p, 2F + 0.4F * c);
+		Vec3 top = LightningLook.skyTop(at, LightningLook.SPEAR_PILLAR_HEIGHT, seed + 3);
+		Volts.channel(kit, level, a, top, at, seed + 3, LightningLook.SPEAR_PILLAR, LightningLook.SPEAR_PILLAR_STRAND);
 		Volts.glow(kit, level, p, LightningLook.BLUE, 1.6F, 5);
 		Vec3 ground = new Vec3(at.x, at.y + 0.08, at.z);
 		for (int i = 0; i < CRACKS; i++) {
@@ -112,6 +114,7 @@ public final class ThunderSpearFx implements SpellFx {
 		kit.burst(p, ParticleTypes.LARGE_SMOKE, 6, 0.06);
 		level.playLocalSound(at.x, at.y, at.z, SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.PLAYERS, 1.1F, 0.9F, false);
 		level.playLocalSound(at.x, at.y, at.z, SoundEvents.TRIDENT_THUNDER.value(), SoundSource.PLAYERS, 0.7F, 1.2F, false);
+		level.playLocalSound(at.x, at.y, at.z, SoundEvents.LIGHTNING_BOLT_THUNDER, SoundSource.PLAYERS, 1.2F, 1.15F, false);
 		kit.shake(0.4F, 10);
 	}
 

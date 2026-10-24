@@ -1,12 +1,12 @@
 package local.carter.office.magic;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.Motion;
 import local.carter.office.magic.spell.Spell;
@@ -386,18 +386,11 @@ public class LightningGameTests {
 		MagicTestKit.fill(h, new BlockPos(mx, 4, 0), new BlockPos(mx, 20, mz), Blocks.GLASS);
 	}
 
-	/**
-	 * Watches every lightning bolt in this test's arena: their ids go into the returned set, and any bolt that hit an entity or set a
-	 * block on fire is reported in {@code problems}.
-	 */
-	private static Set<Integer> watchBolts(GameTestHelper h, List<String> problems) {
+	/** Watches this test's arena for lightning bolt entities: the ids of every one seen go into the returned set (no spell makes any). */
+	private static Set<Integer> watchBolts(GameTestHelper h) {
 		Set<Integer> seen = new HashSet<>();
 		h.onEachTick(() -> {
-			for (LightningBolt b : h.getLevel().getEntitiesOfClass(LightningBolt.class, h.getBounds())) {
-				seen.add(b.getId());
-				if (b.getHitEntities().findAny().isPresent()) problems.add("bolt " + b.getId() + " hit an entity");
-				if (b.getBlocksSetOnFire() > 0) problems.add("bolt " + b.getId() + " set fire");
-			}
+			for (LightningBolt b : h.getLevel().getEntitiesOfClass(LightningBolt.class, h.getBounds())) seen.add(b.getId());
 		});
 		return seen;
 	}
@@ -457,6 +450,9 @@ public class LightningGameTests {
 		ServerLevel level = h.getLevel();
 		p.hurtServer(level, level.damageSources().fall(), 6);
 		h.assertValueEqual(p.getHealth(), p.getMaxHealth(), "fall damage cancelled");
+		ServerPlayer other = MagicTestKit.otherPlayer(h, MagicTestKit.STAND.offset(4, 0, 0));
+		other.hurtServer(level, level.damageSources().fall(), 6);
+		h.assertTrue(other.getHealth() < other.getMaxHealth(), "the control player, who did not blink, does take fall damage");
 		FxEvent e = rec.fx(p).getFirst();
 		h.assertTrue(e.target().distanceTo(p.position()) < 1.0E-6, "fx target is where the caster landed");
 		h.assertTrue(e.origin().subtract(0, e.data()[0], 0).distanceTo(start) < 1.0E-4, "fx origin less the eye height is the start");
@@ -523,7 +519,7 @@ public class LightningGameTests {
 		// The caster stands in the middle and hurls the spear straight down: it lands at their feet, (16.5, 4, 16.5).
 		MagicTestKit.teleportTo(p, new BlockPos(16, 4, 16));
 		MagicTestKit.aim(p, new BlockPos(16, 3, 16));
-		// Just outside the spear's 2.5 blast, inside the vanilla bolt's reach (3 round it): a bolt that did anything would show here.
+		// Just outside the spear's 2.5 blast, where a vanilla bolt (3 round it) would charge, convert or burn them: none may change.
 		Creeper creeper = h.spawn(EntityTypes.CREEPER, new Vec3(19.6, 4, 16.5));
 		Villager villager = at(h, MagicTestKit.villager(h, new BlockPos(13, 4, 16)), new Vec3(13.4, 4, 16.5));
 		Pig pig = h.spawn(EntityTypes.PIG, new Vec3(16.5, 4, 19.8));
@@ -535,8 +531,7 @@ public class LightningGameTests {
 		MushroomCow.Variant variant = cow.getVariant();
 		// Positive control for the blast: a zombie 1.5 from the impact takes exactly the spear's 10 × P, nothing from the bolt.
 		Zombie z = at(h, MagicTestKit.dummy(h, new BlockPos(18, 4, 16)), new Vec3(18, 4, 16.5));
-		List<String> problems = new ArrayList<>();
-		Set<Integer> bolts = watchBolts(h, problems);
+		Set<Integer> bolts = watchBolts(h);
 		long t0 = HEAVY_START;
 		h.runAtTickTime(t0, () -> {
 			h.assertValueEqual(MagicTestKit.cast(p, SpellIds.THUNDER_SPEAR, 0f), Result.CAST, "result");
@@ -544,8 +539,7 @@ public class LightningGameTests {
 		h.runAtTickTime(t0 + 60, () -> {
 			h.assertValueEqual(MagicTestKit.count(h, Blocks.FIRE), 0, "fire blocks");
 			h.assertValueEqual(MagicTestKit.count(h, Blocks.SOUL_FIRE), 0, "soul fire blocks");
-			h.assertTrue(problems.isEmpty(), "bolts: " + problems);
-			h.assertTrue(!bolts.isEmpty(), "a visual bolt struck");
+			h.assertTrue(bolts.isEmpty(), "no LightningBolt entity was spawned: " + bolts);
 			h.assertTrue(creeper.isAlive() && !creeper.isPowered(), "creeper not charged");
 			assertUnhurt(h, creeper, "creeper");
 			h.assertTrue(villager.isAlive() && !villager.isRemoved(), "villager not turned into a witch");
@@ -561,24 +555,6 @@ public class LightningGameTests {
 		});
 	}
 
-	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
-	public void aRealBoltWouldChargeTheCreeperAndTurnTheMooshroom(GameTestHelper h) {
-		// Positive control for thunderSpearStartsNoFire: the same layout under a bolt that is not visual-only does change them.
-		Creeper creeper = h.spawn(EntityTypes.CREEPER, new Vec3(19.6, 4, 16.5));
-		MushroomCow cow = h.spawn(EntityTypes.MOOSHROOM, new Vec3(16.5, 4, 13.2));
-		creeper.setNoAi(true);
-		cow.setNoAi(true);
-		MushroomCow.Variant variant = cow.getVariant();
-		LightningBolt bolt = EntityTypes.LIGHTNING_BOLT.create(h.getLevel(), EntitySpawnReason.TRIGGERED);
-		bolt.snapTo(h.absoluteVec(new Vec3(16.5, 4.02, 16.5)));
-		h.getLevel().addFreshEntity(bolt);
-		h.runAfterDelay(6, () -> {
-			h.assertTrue(creeper.isPowered(), "a real bolt charges the creeper");
-			h.assertTrue(cow.getVariant() != variant, "a real bolt turns the mooshroom");
-			h.succeed();
-		});
-	}
-
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 90)
 	public void thunderSpearHitsSlowsAndGlassesSand(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.LIGHTNING, 5);
@@ -589,8 +565,7 @@ public class LightningGameTests {
 		maxHealth(sheep, 40);
 		Zombie far = MagicTestKit.dummy(h, new BlockPos(16, 4, 18));
 		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
-		List<String> problems = new ArrayList<>();
-		Set<Integer> bolts = watchBolts(h, problems);
+		Set<Integer> bolts = watchBolts(h);
 		long t0 = HEAVY_START;
 		h.runAtTickTime(t0, () -> {
 			h.assertValueEqual(MagicTestKit.cast(p, SpellIds.THUNDER_SPEAR, 0f), Result.CAST, "result");
@@ -608,8 +583,7 @@ public class LightningGameTests {
 			h.assertTrue(h.getBlockState(new BlockPos(19, 3, 15)).is(Blocks.SAND), "sand beyond 3 is still sand");
 			h.assertTrue(h.getBlockState(new BlockPos(16, 2, 9)).is(Blocks.STONE), "stone stays stone");
 			h.assertValueEqual(MagicTestKit.count(h, Blocks.FIRE), 0, "no fire");
-			h.assertTrue(problems.isEmpty(), "bolts: " + problems);
-			h.assertTrue(!bolts.isEmpty(), "a visual bolt struck");
+			h.assertTrue(bolts.isEmpty(), "no LightningBolt entity was spawned: " + bolts);
 			h.succeed();
 		});
 	}
@@ -626,8 +600,7 @@ public class LightningGameTests {
 		Zombie aside = MagicTestKit.dummy(h, s.offset(6, 0, 12));
 		MagicTestKit.aim(p, s.offset(0, 1, 12));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
-		List<String> problems = new ArrayList<>();
-		Set<Integer> bolts = watchBolts(h, problems);
+		Set<Integer> bolts = watchBolts(h);
 		boolean[] inside = {false};
 		h.onEachTick(() -> inside[0] |= !fits(p));
 		Vec3 start = p.position();
@@ -649,7 +622,7 @@ public class LightningGameTests {
 			h.assertTrue(z.getHealth() <= 0 || !z.isAlive(), "the zombie 12 ahead loses at least 20 health: " + z.getHealth());
 			assertUnhurt(h, aside, "zombie 6 to the side");
 			h.assertTrue(Math.abs(p.getZ() - end.z) < 0.6 && Math.abs(p.getX() - end.x) < 0.6, "the caster ended at the end: " + h.relativeVec(p.position()));
-			h.assertTrue(bolts.size() >= 3, "three visual bolts, saw " + bolts.size());
+			h.assertTrue(bolts.isEmpty(), "no LightningBolt entity was spawned: " + bolts);
 		});
 		h.runAtTickTime(t0 + 14, () -> {
 			h.assertFalse(inside[0], "never inside a block");
@@ -666,7 +639,6 @@ public class LightningGameTests {
 		});
 		h.runAtTickTime(t0 + 60, () -> {
 			h.assertValueEqual(MagicTestKit.count(h, Blocks.FIRE), 0, "no fire");
-			h.assertTrue(problems.isEmpty(), "bolts: " + problems);
 			h.succeed();
 		});
 	}
@@ -749,6 +721,106 @@ public class LightningGameTests {
 			h.assertFalse(sheep.hasEffect(MobEffects.SLOWNESS) || sheep.hasEffect(MobEffects.WEAKNESS), "the sheep is not slowed or weakened");
 			assertUnhurt(h, villager, "villager");
 			h.assertFalse(villager.hasEffect(MobEffects.SLOWNESS), "the villager is not slowed");
+			h.succeed();
+		});
+	}
+
+	// ---- Fix round 1 ----
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void blinkFizzlesFreeWhenHemmedIn(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.LIGHTNING, 3);
+		// A wall right in front: the body could move 0.2 at most.
+		MagicTestKit.fill(h, MagicTestKit.STAND.offset(-1, 0, 1), MagicTestKit.STAND.offset(1, 3, 1), Blocks.STONE);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		Vec3 start = p.position();
+		int mana = MagicAttachments.mana(p);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.BLINK, 0f), Result.FIZZLED, "hemmed in");
+		h.assertValueEqual(MagicAttachments.mana(p), mana, "no mana spent");
+		h.assertTrue(p.position().distanceTo(start) < 1.0E-9, "did not move");
+		h.assertTrue(rec.fx(p).isEmpty(), "no fx");
+		h.assertTrue(rec.messageKeys(p).contains(Blink.BLOCKED_KEY), "told it failed: " + rec.messageKeys(p));
+		// Positive control: with the wall gone it casts at once (the fizzle set no cooldown).
+		MagicTestKit.fill(h, MagicTestKit.STAND.offset(-1, 0, 1), MagicTestKit.STAND.offset(1, 3, 1), Blocks.AIR);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.BLINK, 0f), Result.CAST, "open way");
+		h.assertTrue(p.getZ() - start.z > 9.9, "blinked " + (p.getZ() - start.z));
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 120)
+	public void lightningSpellsNeverSpawnALightningBolt(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.LIGHTNING, 7);
+		fence(h);
+		Zombie z = MagicTestKit.dummy(h, MagicTestKit.STAND.offset(0, 0, 10));
+		maxHealth(z, 400);
+		Set<Integer> bolts = watchBolts(h);
+		long t0 = HEAVY_START;
+		h.runAtTickTime(t0, () -> {
+			MagicTestKit.aim(p, MagicTestKit.STAND.offset(0, 1, 10));
+			h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SPARK, 0f), Result.CAST, "spark");
+			h.assertValueEqual(MagicTestKit.cast(p, SpellIds.CHAIN_LIGHTNING, 0f), Result.CAST, "chain lightning");
+			h.assertValueEqual(MagicTestKit.cast(p, SpellIds.THUNDER_SPEAR, 0f), Result.CAST, "thunder spear");
+		});
+		h.runAtTickTime(t0 + 10, () -> {
+			MagicTestKit.aim(p, MagicTestKit.STAND.offset(0, 1, 10));
+			h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.CHIDORI_STRIKE), Result.CAST, "chidori strike");
+		});
+		h.runAtTickTime(t0 + 30, () -> h.assertValueEqual(MagicTestKit.cast(p, SpellIds.BLINK, 0f), Result.CAST, "blink"));
+		h.runAtTickTime(t0 + 60, () -> {
+			h.assertTrue(z.getHealth() < 400, "the spells landed: " + z.getHealth());
+			h.assertTrue(bolts.isEmpty(), "no LightningBolt entity was ever spawned: " + bolts);
+			// Positive control for the watch: a bolt made here is seen.
+			LightningBolt control = EntityTypes.LIGHTNING_BOLT.create(h.getLevel(), EntitySpawnReason.TRIGGERED);
+			control.setVisualOnly(true);
+			control.snapTo(h.absoluteVec(new Vec3(4.5, 4.02, 28.5)));
+			h.getLevel().addFreshEntity(control);
+		});
+		h.runAtTickTime(t0 + 63, () -> {
+			h.assertValueEqual(bolts.size(), 1, "the watch sees the control bolt");
+			h.succeed();
+		});
+	}
+
+	/** Height (blocks above the floor) of the stepped hill in row {@code z}: 1 for z 9–10, 2 for 11–12, 3 from 13 on, 0 before. */
+	private static int hill(int z) {
+		return z < 9 ? 0 : Math.min(3, (z - 9) / 2 + 1);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
+	public void chidoriRunsUpAStepHillWithoutTunnelling(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.LIGHTNING, 7);
+		fence(h);
+		for (int zz = 9; zz <= 24; zz++) {
+			for (int y = 0; y < hill(zz); y++) MagicTestKit.fill(h, new BlockPos(12, 4 + y, zz), new BlockPos(20, 4 + y, zz), Blocks.STONE);
+		}
+		// On the hill top, 12 ahead: the straight line from the caster's feet to it runs inside the hill.
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 7, 16));
+		boolean[] inside = {false};
+		h.onEachTick(() -> inside[0] |= !fits(p));
+		long t0 = HEAVY_START;
+		h.runAtTickTime(t0, () -> {
+			MagicTestKit.aim(p, new BlockPos(16, 8, 16));
+			h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.CHIDORI_STRIKE), Result.CAST, "result");
+		});
+		h.runAtTickTime(t0 + 8, () -> {
+			h.assertFalse(inside[0], "the caster never overlapped a solid block, on any tick");
+			Vec3 rel = h.relativeVec(p.position());
+			h.assertTrue(Math.abs(rel.z - 18) < 0.8 && rel.y >= 6.9, "ran up onto the hill top: " + rel);
+			h.assertTrue(!z.isAlive() || z.getHealth() <= 0, "the zombie on top is struck: " + z.getHealth());
+		});
+		h.runAtTickTime(t0 + 12, () -> {
+			// Before the bowl (radius 4 round z 18) and before any debris lands: the trench follows the slope.
+			for (int zz = 9; zz <= 13; zz++) {
+				int top = 3 + hill(zz);
+				h.assertTrue(h.getBlockState(new BlockPos(16, top, zz)).isAir(), "the trench cut the hill's surface at z " + zz + " (y " + top + ")");
+				boolean air = false;
+				for (int y = 1; y <= 9; y++) {
+					boolean isAir = h.getBlockState(new BlockPos(16, y, zz)).isAir();
+					h.assertFalse(air && !isAir, "no tunnel inside the slope: solid at y " + y + " over air, z " + zz);
+					air |= isAir;
+				}
+			}
+			h.assertFalse(inside[0], "the caster never overlapped a solid block");
 			h.succeed();
 		});
 	}

@@ -42,8 +42,6 @@ import net.minecraft.world.phys.Vec3;
  * <ul>
  * <li>every creature within {@link #BLAST} that the blast reaches (nothing solid between; the one it struck always) takes
  * {@code 10 × P}; the one it struck, and hostile mobs, are slowed (Slowness II, {@link #SLOW_TICKS} ticks);</li>
- * <li>a visual-only vanilla {@code LightningBolt} strikes the ground there ({@link VisualBolts}: no fire, no damage, no mob
- * conversions);</li>
  * <li>minor permanent change, one MEDIUM batch whose origin is the block struck (for a creature, the ground under it if within
  * {@link #GROUND_DEPTH}, else none): a bowl of radius {@link #BOWL} is blasted out, and sand or red sand within {@link #GLASS} of
  * the origin fuses to glass.</li>
@@ -51,7 +49,8 @@ import net.minecraft.world.phys.Vec3;
  * A spear that runs out of time ends in the air with nothing.
  *
  * <p>Fx: the cast's default event (origin = eye, dir = look); the client rebuilds the flight with {@link #spec} and
- * {@code Projectiles.step}, clipping it as the server does. No data.
+ * {@code Projectiles.step}, clipping it as the server does, and draws its own strike from the sky (no vanilla {@code LightningBolt}:
+ * those boom for everyone in view distance). No data.
  */
 public final class ThunderSpear implements Spell {
 	public static final double SPEED = 3.0;
@@ -103,9 +102,8 @@ public final class ThunderSpear implements Spell {
 		Vec3 at = hit.pos();
 		LivingEntity direct = hit.entity();
 		BlockHitResult block = hit.block();
-		// The crater's origin and the bolt's ground, read before the blast (a creature it kills still leaves its crater).
+		// The crater's origin, read before the blast (a creature it kills still leaves its crater).
 		BlockPos origin = block != null ? block.getBlockPos() : direct != null ? groundUnder(level, direct) : null;
-		Vec3 boltAt = direct != null ? Targets.ground(level, direct.position()) : Targets.ground(level, at.add(block.getDirection().getUnitVec3().scale(0.1)));
 
 		Vec3 from = at.subtract(dir.scale(0.3));
 		float damage = DAMAGE * ctx.power();
@@ -117,7 +115,6 @@ public final class ThunderSpear implements Spell {
 			}
 		}
 
-		VisualBolts.strike(level, boltAt);
 		if (origin != null) crater(ctx, origin);
 	}
 

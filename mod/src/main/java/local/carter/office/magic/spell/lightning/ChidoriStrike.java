@@ -4,9 +4,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
+import java.util.TreeMap;
 
 import org.jspecify.annotations.Nullable;
 
@@ -50,19 +52,20 @@ import net.minecraft.world.phys.Vec3;
  * off the face it hits), down to the ground there. The way is walked first ({@link BlinkPath}, the caster's own body): the charge
  * stops at the first solid block it can't step over (a one-block bump is stepped over), so it never passes through a wall.
  *
- * <p><b>Charge.</b> The caster moves along {@link ChidoriGeometry#point} over {@link ChidoriGeometry#TICKS} ticks, put there each
- * tick with {@link Motion#teleportSafe} (never inside a block), velocity zeroed, no fall damage until
- * {@link #NO_FALL_TICKS} ticks after it ends. A caster who leaves, dies or is teleported away mid-charge is no longer moved; the
- * strike still lands.
+ * <p><b>Charge.</b> The caster moves toward {@link ChidoriGeometry#point} over {@link ChidoriGeometry#TICKS} ticks: each tick the
+ * body walks ({@link BlinkPath}, {@link Blink#fits}) from where it was put last tick toward that tick's point, and
+ * {@link Motion#teleportSafe} puts it where the walk ends, so it never passes through a block, not even between ticks, and it runs
+ * up and over the ground rather than through it. Velocity zeroed, no fall damage until {@link #NO_FALL_TICKS} ticks after it ends.
+ * A caster who leaves, dies or is teleported away mid-charge is no longer moved; the strike still lands.
  *
  * <p><b>End.</b> The target, if within {@link ChidoriGeometry#REACH} of the end and in reach of the blast (nothing solid between),
  * takes {@code 24 × P}; every other creature within {@link ChidoriGeometry#REACH} the blast reaches takes {@code 8 × P}. The target
  * and hostile mobs among them get Slowness V and Weakness for {@link #EFFECT_TICKS} ticks (control effects are for foes only).
- * Three visual-only vanilla bolts strike round the end, {@link #FLANK} from it: ahead and to either side ({@link VisualBolts}; never on the
- * caster, whose own view would be inside the bolt).
+ * No vanilla {@code LightningBolt} is made (they boom and flash the sky for everyone in view distance): the strikes from the sky
+ * are the client fx's own.
  *
  * <p><b>Permanent.</b> A trench along the path ({@link ChidoriGeometry#trench}: 2 wide, {@link ChidoriGeometry#DEPTH} deep below
- * the ground's surface) whose edges (the lips beside it and its floor) turn 30 % blackstone and sand to glass, one ULTIMATE batch
+ * the ground's surface under the path the caster really walked, so over a hill it follows the slope) whose edges (the lips beside it and its floor) turn 30 % blackstone and sand to glass, one ULTIMATE batch
  * per {@link ChidoriGeometry#SEGMENT}-block segment, cut as the caster passes it; and at the end a bowl of radius
  * {@code min(12, 4 + (level − 7))}: {@link ChidoriGeometry#DEBRIS} rim blocks are {@code launch}ed outward, the rest removed, and its
  * floor scorched the same way. All of it respects claims, spawn protection and immune blocks through the batches.
@@ -79,9 +82,6 @@ public final class ChidoriStrike implements Spell {
 	public static final int SLOW_AMPLIFIER = 4;
 	public static final int WEAKNESS_AMPLIFIER = 0;
 	public static final int NO_FALL_TICKS = 20;
-	/** How far from the end the three bolts strike (ahead, and {@link #BOLT_SPREAD} radians either side of ahead). */
-	public static final double FLANK = 4;
-	public static final double BOLT_SPREAD = 1.2;
 	/** How far down from the path the ground's surface is looked for, per column. */
 	public static final int SURFACE_SCAN = 4;
 	/** Moved further than this between two ticks of the charge: someone else teleported the caster, so the charge lets go. */
@@ -111,9 +111,10 @@ public final class ChidoriStrike implements Spell {
 		Optional<LivingEntity> hit = Targets.ray(ctx, ChidoriGeometry.RANGE, ChidoriGeometry.FORGIVENESS);
 		Vec3 aim = hit.map(e -> through(start, e.position(), p.getYRot())).orElseGet(() -> point(ctx));
 		Vec3 way = aim.subtract(start);
-		BlinkPath.Walk w = BlinkPath.walk(start, way, way.length(), at -> Blink.fits(p, at));
+		List<Vec3> planned = new ArrayList<>();
+		BlinkPath.Walk w = BlinkPath.walk(start, way, way.length(), at -> Blink.fits(p, at), planned::add);
 		ChidoriGeometry g = new ChidoriGeometry(start, w.end(), ChidoriGeometry.radius(ctx.grimoireLevel()));
-		Charge charge = new Charge(ctx, g, hit.orElse(null));
+		Charge charge = new Charge(ctx, g, hit.orElse(null), planned);
 		if (!ActiveEffects.add(level, charge)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Motion.dash(p, Vec3.ZERO, ChidoriGeometry.TICKS + NO_FALL_TICKS);
 		int[] ids = hit.map(e -> new int[] {e.getId()}).orElse(new int[0]);
@@ -149,13 +150,39 @@ public final class ChidoriStrike implements Spell {
 		/** Cells already queued for removal or launch, and cells already scorched (no cell is queued twice). */
 		private final Set<BlockPos> removed = new HashSet<>();
 		private final Set<BlockPos> scorched = new HashSet<>();
+		/**
+		 * The feet's height along the path (seen from above): where the body really stood, tick by tick ({@code walked}), and where
+		 * the cast's walk said it would ({@code planned}, for stretches it never reached). The trench is cut under these.
+		 */
+		private final TreeMap<Double, Double> walked = new TreeMap<>();
+		private final TreeMap<Double, Double> planned = new TreeMap<>();
 
-		Charge(CastContext ctx, ChidoriGeometry g, @Nullable LivingEntity target) {
+		Charge(CastContext ctx, ChidoriGeometry g, @Nullable LivingEntity target, List<Vec3> plannedSteps) {
 			this.ctx = ctx;
 			this.g = g;
 			this.target = target;
 			this.random = new Random(ctx.seed());
 			this.placed = g.start();
+			record(planned, g.start());
+			for (Vec3 at : plannedSteps) record(planned, at);
+		}
+
+		private void record(TreeMap<Double, Double> into, Vec3 feet) {
+			into.put(g.along(feet.x, feet.z), feet.y);
+		}
+
+		/** The feet's height {@code along} the path: the nearest place the body really stood within half a block, else the plan. */
+		private double heightAt(double along) {
+			Double h = nearest(walked, along, 0.5);
+			if (h == null) h = nearest(planned, along, Double.MAX_VALUE);
+			return h == null ? g.heightAt(along) : h;
+		}
+
+		private static @Nullable Double nearest(TreeMap<Double, Double> m, double key, double within) {
+			Map.Entry<Double, Double> lo = m.floorEntry(key);
+			Map.Entry<Double, Double> hi = m.ceilingEntry(key);
+			Map.Entry<Double, Double> best = lo == null ? hi : hi == null ? lo : key - lo.getKey() <= hi.getKey() - key ? lo : hi;
+			return best == null || Math.abs(best.getKey() - key) > within ? null : best.getValue();
 		}
 
 		@Override
@@ -176,7 +203,10 @@ public final class ChidoriStrike implements Spell {
 				moving = false;
 				return;
 			}
-			placed = Motion.teleportSafe(p, g.point(age));
+			// Walk from where the body is toward this tick's point, and put it where the walk ends: it never crosses a block.
+			Vec3 way = g.point(age).subtract(placed);
+			BlinkPath.Walk w = BlinkPath.walk(placed, way, way.length(), at -> Blink.fits(p, at), at -> record(walked, at));
+			placed = Motion.teleportSafe(p, w.end());
 			p.setDeltaMovement(Vec3.ZERO);
 			p.syncVelocity = true;
 			p.resetFallDistance();
@@ -197,15 +227,6 @@ public final class ChidoriStrike implements Spell {
 				Hurt.damage(ctx, e, BLAST_DAMAGE * ctx.power());
 				if (e instanceof Enemy) weaken(e);
 			}
-			// The bolts ring the caster, ahead and to either side, never on them: a vanilla bolt is a wide column, and from inside it
-			// (the caster's own view) it would fill the screen.
-			Vec3 f = g.flatDir();
-			for (int k = -1; k <= 1; k++) {
-				double a = k * BOLT_SPREAD + (random.nextDouble() - 0.5) * 0.3;
-				Vec3 dir = new Vec3(f.x * Math.cos(a) - f.z * Math.sin(a), 0, f.x * Math.sin(a) + f.z * Math.cos(a));
-				Vec3 at = end.add(dir.scale(FLANK * (0.9 + 0.2 * random.nextDouble())));
-				VisualBolts.strike(level, Targets.ground(level, at.add(0, 0.5, 0)));
-			}
 		}
 
 		private void weaken(LivingEntity e) {
@@ -218,12 +239,13 @@ public final class ChidoriStrike implements Spell {
 
 		private void cutSegment(ServerLevel level, int k) {
 			Vec3 mid = g.segmentMiddle(k);
-			int sy = surface(level, Mth.floor(mid.x), Mth.floor(mid.z), mid.y, false);
-			BlockPos origin = BlockPos.containing(mid.x, sy == Integer.MIN_VALUE ? mid.y - 1 : sy, mid.z);
+			double midY = heightAt(g.along(mid.x, mid.z));
+			int sy = surface(level, Mth.floor(mid.x), Mth.floor(mid.z), midY);
+			BlockPos origin = BlockPos.containing(mid.x, sy == Integer.MIN_VALUE ? midY - 1 : sy, mid.z);
 			try (EditBatch b = ctx.kit().terrain().begin(ctx, origin, EditTier.ULTIMATE)) {
 				for (Column c : g.trench()) {
 					if (g.segment(c) != k) continue;
-					int top = surface(level, c.x(), c.z(), g.heightAt(c.along()), c.along() < g.flatLength() - 1);
+					int top = surface(level, c.x(), c.z(), heightAt(c.along()));
 					if (top == Integer.MIN_VALUE) continue;
 					for (int d = 0; d < ChidoriGeometry.DEPTH; d++) {
 						BlockPos pos = new BlockPos(c.x(), top - d, c.z());
@@ -233,7 +255,7 @@ public final class ChidoriStrike implements Spell {
 				}
 				for (Column c : g.lips()) {
 					if (g.segment(c) != k) continue;
-					int top = surface(level, c.x(), c.z(), g.heightAt(c.along()), false);
+					int top = surface(level, c.x(), c.z(), heightAt(c.along()));
 					if (top == Integer.MIN_VALUE) continue;
 					for (int d = 0; d < ChidoriGeometry.DEPTH; d++) scorch(level, b, new BlockPos(c.x(), top - d, c.z()));
 				}
@@ -257,7 +279,7 @@ public final class ChidoriStrike implements Spell {
 			Vec3 end = g.end();
 			int fx = Mth.floor(end.x);
 			int fz = Mth.floor(end.z);
-			int sy = surface(level, fx, fz, end.y, false);
+			int sy = surface(level, fx, fz, end.y);
 			if (sy == Integer.MIN_VALUE) return;
 			BlockPos origin = new BlockPos(fx, sy, fz);
 			List<Cell> bowl = g.bowl();
@@ -285,13 +307,12 @@ public final class ChidoriStrike implements Spell {
 		// ---- ground ----
 
 		/**
-		 * The ground's surface in column {@code (x, z)} under feet height {@code y}: the first solid block below the feet, searched
-		 * down {@link #SURFACE_SCAN} blocks ({@code Integer.MIN_VALUE} if none, over a drop). With {@code bumps}, a block at the
-		 * feet' own level counts too (a bump the charge stepped over is cut away with the trench); without, the trench never cuts
-		 * into anything standing at the feet' level, such as the wall the charge ran up against.
+		 * The ground's surface in column {@code (x, z)} under feet height {@code y} (the walked path's, so it follows the ground the
+		 * body ran over): the first solid block below the feet, searched down {@link #SURFACE_SCAN} blocks ({@code Integer.MIN_VALUE}
+		 * if none, over a drop). Never at the feet' own level or above, so the trench never cuts into a wall the charge ran up against.
 		 */
-		private static int surface(ServerLevel level, int x, int z, double y, boolean bumps) {
-			BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos(x, Mth.floor(y - 0.01) + (bumps ? 1 : 0), z);
+		private static int surface(ServerLevel level, int x, int z, double y) {
+			BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos(x, Mth.floor(y - 0.01), z);
 			for (int i = 0; i <= SURFACE_SCAN + 1; i++, m.move(0, -1, 0)) {
 				if (m.getY() < level.getMinY()) break;
 				if (solid(level.getBlockState(m))) return m.getY();

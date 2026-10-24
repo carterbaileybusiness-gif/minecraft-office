@@ -29,7 +29,7 @@ import net.minecraft.world.phys.Vec3;
  * <li><b>Charge</b> (six ticks): the hand drives along the path, dragging a heavy yellow channel of lightning with a blue strand
  * round it, throwing arcs into the ground either side; blue afterimages flicker where the body was, sparks skid along the ground,
  * the chirp rises in pitch tick by tick.</li>
- * <li><b>Impact:</b> a white flash, three great arcs from the sky onto the end (beside the server's three visual-only vanilla bolts),
+ * <li><b>Impact:</b> a white flash, three great arcs from the sky onto the end (the fx's own: the server makes no vanilla bolt),
  * cracks of lightning racing out over the ground past the bowl's edge with a second blue wave a moment later, a ring of light
  * rushing outward, sparks, rock dust and smoke, arcs crawling over the target, deep thunder; the camera shakes hard (at least
  * 0.8 within 32 blocks of the impact), the view kicks wide and the caster and the struck hit-stop for three ticks.</li>

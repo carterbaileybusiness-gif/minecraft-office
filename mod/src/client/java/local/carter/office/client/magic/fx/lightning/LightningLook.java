@@ -47,6 +47,10 @@ final class LightningLook {
 	static final Style SPEAR = new Style(YELLOW, 0.24F, 0.07, 1, 2, true);
 	static final Style SPEAR_STRAND = new Style(BLUE, 0.08F, 0.3, 0, 2, false);
 	static final Style SPEAR_CRACK = new Style(YELLOW, 0.09F, 0.3, 1, 7, true);
+	// Thunder Spear: the strike from the sky onto the impact (our own: no vanilla bolt, which booms for everyone in view distance).
+	static final Style SPEAR_PILLAR = new Style(CORE, 0.32F, 0.16, 2, 8, true);
+	static final Style SPEAR_PILLAR_STRAND = new Style(BLUE, 0.12F, 0.26, 1, 7, false);
+	static final double SPEAR_PILLAR_HEIGHT = 16;
 	// Tiny arcs: the crackle at the hand and the crawl over a struck body.
 	static final Style CRACKLE = new Style(CORE, 0.04F, 0.4, 0, 3, false);
 	static final Style CRAWL = new Style(BLUE, 0.045F, 0.35, 0, 3, false);

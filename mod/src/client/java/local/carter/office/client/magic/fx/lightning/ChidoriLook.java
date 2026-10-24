@@ -57,7 +57,7 @@ final class ChidoriLook {
 	static final int CRACKS = 10;
 	static final int CRACKS_BLUE = 7;
 	static final int SECOND_WAVE = 2;
-	/** Arcs from the sky at the impact (beside the server's three visual-only bolts). */
+	/** Arcs from the sky at the impact (the only strikes from the sky: the server makes no vanilla bolt). */
 	static final int PILLARS = 3;
 	static final double PILLAR_HEIGHT = 22;
 	/** The chirp: tiny arcs round the hand each tick of the charge, and at the cast. */

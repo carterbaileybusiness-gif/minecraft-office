@@ -1,5 +1,6 @@
 package local.carter.office.magic.spell.lightning;
 
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import net.minecraft.world.phys.Vec3;
@@ -29,6 +30,11 @@ public final class BlinkPath {
 	 * there. {@code from} itself is not checked: the body is already standing there.
 	 */
 	public static Walk walk(Vec3 from, Vec3 dir, double distance, Predicate<Vec3> fits) {
+		return walk(from, dir, distance, fits, at -> {});
+	}
+
+	/** As {@link #walk(Vec3, Vec3, double, Predicate)}; {@code onStep} gets every place the body stands on the way, in order. */
+	public static Walk walk(Vec3 from, Vec3 dir, double distance, Predicate<Vec3> fits, Consumer<Vec3> onStep) {
 		double len = dir.length();
 		if (!(len > 1.0E-9) || !(distance > 0) || !Double.isFinite(distance)) return new Walk(from, 0, false);
 		Vec3 d = dir.scale(1 / len);
@@ -47,6 +53,7 @@ public final class BlinkPath {
 			}
 			if (ok == null) return new Walk(at, done, true);
 			at = ok;
+			onStep.accept(at);
 			done += step;
 		}
 		return new Walk(at, done, false);

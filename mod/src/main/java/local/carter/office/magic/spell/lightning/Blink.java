@@ -2,6 +2,7 @@ package local.carter.office.magic.spell.lightning;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.net.FxEvent;
@@ -27,7 +28,8 @@ import net.minecraft.world.phys.Vec3;
  * instant. The way is walked first ({@link BlinkPath}: it slides along ground it is aimed into, steps over a one-block bump, and
  * stops at the last place the caster's body fits before anything solid, lava or fire), then {@link Motion#teleportSafe} puts
  * them there, so a blink never passes through a wall or ends inside a block. Velocity is zeroed and there is no fall damage for
- * {@link #NO_FALL_TICKS} ticks. No block changes, nothing hurt.
+ * {@link #NO_FALL_TICKS} ticks. No block changes, nothing hurt. A blink that
+ * would travel less than {@link #MIN_TRAVEL} fizzles before anything happens (nothing spent).
  *
  * <p>Fx: {@code origin} = the eye where the blink started, {@code target} = where the caster's feet ended, {@code data} =
  * {@code {eyeHeight, travelled}} (the feet started at {@code origin − (0, eyeHeight, 0)}).
@@ -36,6 +38,9 @@ public final class Blink implements Spell {
 	public static final double BASE_RANGE = 10;
 	public static final double CHARGE_RANGE = 4;
 	public static final int NO_FALL_TICKS = 20;
+	/** A blink that would travel less than this fizzles at no cost, with {@link #BLOCKED_KEY} ("The spell failed"). */
+	public static final double MIN_TRAVEL = 0.5;
+	public static final String BLOCKED_KEY = CastService.SPELL_FAILED_KEY;
 
 	@Override
 	public Identifier id() {
@@ -64,6 +69,8 @@ public final class Blink implements Spell {
 		FxEvent fx = ctx.fx();
 		Vec3 from = p.position();
 		BlinkPath.Walk w = BlinkPath.walk(from, ctx.look(), range(ctx.charge()), at -> fits(p, at));
+		// Hemmed in (a wall right in front, a ceiling overhead): no blink, and nothing spent.
+		if (w.travelled() < MIN_TRAVEL) return CastOutcome.fizzle(BLOCKED_KEY);
 		Vec3 end = Motion.teleportSafe(p, w.end());
 		Motion.dash(p, Vec3.ZERO, NO_FALL_TICKS);
 		float eye = p.getEyeHeight();
