@@ -184,10 +184,27 @@ while IFS= read -r f; do
   case "$f" in *-sources.jar|*-dev.jar|*-javadoc.jar) continue;; esac
   OURJAR="$f"; break
 done < <(ls -t "$REPO"/build/libs/office-*.jar 2>/dev/null)
+# A local build older than the newest commit is stale: keep the release jar the pack just installed instead.
+if [ -n "$OURJAR" ] && [ "$(stat -f %m "$OURJAR")" -lt "$(git -C "$REPO" log -1 --format=%ct)" ]; then
+  info "NOTE: $(basename "$OURJAR") is older than the latest commit - using the modpack's release jar"
+  OURJAR=""
+  OURJAR_STALE=1
+fi
 if [ -n "$OURJAR" ]; then
   rm -f "$GAME"/mods/office-*.jar
   cp "$OURJAR" "$GAME/mods/"
   info "installed $(basename "$OURJAR")"
+elif [ -n "${OURJAR_STALE:-}" ]; then
+  # An earlier run may have swapped the release jar for a local one (packwiz won't notice it is gone): put it back.
+  PW="$REPO/pack/mods/office.pw.toml"
+  PACKJAR="$(sed -n 's/^filename = "\(.*\)"/\1/p' "$PW")"
+  for f in "$GAME"/mods/office-*.jar; do [ "$(basename "$f")" = "$PACKJAR" ] || rm -f "$f"; done
+  if [ ! -f "$GAME/mods/$PACKJAR" ]; then
+    curl -fsSL -o "$GAME/mods/$PACKJAR" "$(sed -n 's/^url = "\(.*\)"/\1/p' "$PW")" || die "could not download $PACKJAR"
+    [ "$(shasum -a 512 "$GAME/mods/$PACKJAR" | cut -d' ' -f1)" = "$(sed -n 's/^hash = "\(.*\)"/\1/p' "$PW")" ] \
+      || { rm -f "$GAME/mods/$PACKJAR"; die "$PACKJAR failed its hash check"; }
+  fi
+  info "using $PACKJAR from the modpack"
 else
   info "NOTE: no built mod jar in build/libs/ yet - launching with the modpack only."
   info "      (build one with: scripts/heavy.sh ./gradlew build)"
