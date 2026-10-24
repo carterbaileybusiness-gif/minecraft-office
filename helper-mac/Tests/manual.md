@@ -93,21 +93,31 @@ then grant again.
 3. Repeat and press Esc twice during the sleep instead of waiting for `zoomout`: `EXIT_ZOOM`, window restored.
 4. Repeat and close the TextEdit window while zoomed: `ENDED {"reason":"window closed"}` then `EXIT_ZOOM`.
 
-## 6b. Mirror: the main display minus Minecraft (view-only)
+## 6b. Mirror: the main display minus Minecraft, used in-world (spec 5.10)
 
 Best done with the mod (step 7): devclient's own process has no windows, so nothing is excluded by it.
 1. `helper; dev capture 3 main 1920 5 sleep 2` → FRAME of the main display (≤ 1920 wide) with the cursor.
-2. In game: switch a hologram to Mirror in its settings. It shows your desktop **without** the Minecraft window (no
-   Minecraft-inside-Minecraft). Clicking it only says it is view-only (zoom is retired on a Mac, spec 5.9).
+2. In game: your first hologram is a Mirror. It shows your desktop **without** the Minecraft window (no
+   Minecraft-inside-Minecraft), and you use it like the Extend screens: Minecraft floats above your other windows and
+   is click-through while you click, drag, scroll or type on the Mirror.
+3. Automated, no Minecraft needed: `bash helper-mac/Tools/inputprobe.sh` (part M: the probe's own window stands in for
+   Minecraft — borderless, floating, covering the main display — over a TextEdit window; a slot-0 CLICK with it
+   click-through reaches TextEdit at the click point and types, without click-through it hits the stand-in, a head-turn
+   drag selects text, a title-bar drag carries TextEdit from the main display onto Office Display 2, a scroll with a
+   click-through moment scrolls it). Minecraft's side (the mod's real `MacWindow` on a real SDL3 window: borderless
+   fill, floating level 3, click-through by the window server's own hit test, and back): `JAVA_HOME=<JDK 25>
+   helper-mac/Tools/windowprobe/run.sh` after building the mod.
 
-## 6c. In-world use (the crosshair is the mouse)
+## 6c. In-world use (the crosshair is the mouse) and the mini Dock
 
-Automated, no Minecraft needed: `bash helper-mac/Tools/inputprobe.sh` (builds the probe, compares the delivery routes,
-then drives the signed helper end to end: windows onto a display, a click into typing mode, Esc back, a head-turn text
-selection, a window dragged from display 1 to display 2, scrolling, windows back, quit). By hand with devclient:
-`helper; dev create 1 1920 1080 windowsto 1 com.apple.TextEdit sleep 1 click 1 400 300 sleep 5 windowsback` → TextEdit
-(open a document first) moves onto Office Display 1, gets clicked and the keyboard; press Esc → `TYPING_EXIT esc` and
-the terminal comes back to the front; at the end the window returns to where it was.
+Automated: `bash helper-mac/Tools/inputprobe.sh` (builds the probe, compares the delivery routes, then drives the signed
+helper end to end: the Dock's app list, icons and OPEN_APP onto a display, a click into typing mode, Esc back, a
+head-turn text selection, a window dragged from display 1 to display 2, scrolling, the Mirror (6b), quit). Windows never
+move on join or leave any more. By hand with devclient:
+`helper; dev create 1 1920 1080 apps icons 64 com.apple.Notes com.google.Chrome open 1 com.apple.TextEdit sleep 1 click 1 400 300 sleep 5`
+→ the app list and icons arrive; TextEdit (open a document first) moves onto Office Display 1 filling it, gets clicked
+(caret where you clicked) and the keyboard; press Esc → `TYPING_EXIT esc` and the terminal comes back to the front.
+`open 1 https://www.youtube.com` opens YouTube in the default browser on that display.
 
 ## 7. With the mod (after Task 9)
 

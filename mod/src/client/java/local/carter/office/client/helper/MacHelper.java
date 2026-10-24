@@ -1,6 +1,10 @@
 package local.carter.office.client.helper;
 
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,8 +52,14 @@ import local.carter.office.client.helper.HelperProtocol.PointerMove;
 import local.carter.office.client.helper.HelperProtocol.PointerUp;
 import local.carter.office.client.helper.HelperProtocol.Scroll;
 import local.carter.office.client.helper.HelperProtocol.TypingExit;
-import local.carter.office.client.helper.HelperProtocol.WindowsBack;
-import local.carter.office.client.helper.HelperProtocol.WindowsToDisplay;
+import local.carter.office.client.helper.HelperProtocol.AppIcon;
+import local.carter.office.client.helper.HelperProtocol.AppIcons;
+import local.carter.office.client.helper.HelperProtocol.AppInfo;
+import local.carter.office.client.helper.HelperProtocol.AppResult;
+import local.carter.office.client.helper.HelperProtocol.Apps;
+import local.carter.office.client.helper.HelperProtocol.Icons;
+import local.carter.office.client.helper.HelperProtocol.ListApps;
+import local.carter.office.client.helper.HelperProtocol.OpenApp;
 import local.carter.office.client.pointer.PointerPoint;
 
 /**
@@ -102,19 +112,15 @@ public final class MacHelper implements HelperConnection.Listener {
 	private volatile @Nullable Welcome welcome;
 	private volatile boolean permissionDenied;
 	private volatile List<WindowInfo> windows = List.of();
-	/** Move the player's windows onto the first display of each connection (spec 5.9); off in tests unless asked. */
-	private volatile boolean moveWindowsOnJoin;
-	/** This connection moved the player's windows (so leaving sends WINDOWS_BACK). */
-	private volatile boolean windowsMoved;
-	/** A window move is scheduled for this connection ({@link #WINDOWS_MOVE_DELAY_MS} after its first display). */
-	private volatile boolean windowsMoveScheduled;
-	/** Bumped by every WELCOME and stop, so a window move scheduled for an earlier connection does nothing. */
-	private final AtomicInteger connection = new AtomicInteger();
-	/**
-	 * Holograms' displays come online as their chunks load, in any order: the windows move this long after the first one,
-	 * onto the lowest slot online by then (slot 1, the player's first hologram, when it is there).
-	 */
-	public static final long WINDOWS_MOVE_DELAY_MS = 1_000;
+	/** The installed apps (bundle id → name, A–Z), asked for on every connect; null until the first APPS. */
+	private volatile @Nullable Map<String, String> apps;
+	/** App icons (PNG) by bundle id, and the ones asked for (each once per helper launch). */
+	private final Map<String, byte[]> icons = new ConcurrentHashMap<>();
+	private final Set<String> iconsAsked = ConcurrentHashMap.newKeySet();
+	private final List<Consumer<AppResult>> appResultListeners = new CopyOnWriteArrayList<>();
+	private final List<Consumer<Boolean>> secureInputListeners = new CopyOnWriteArrayList<>();
+	/** Icon size asked of the helper (pixels): crisp on a big hologram. */
+	public static final int ICON_PX = 128;
 
 	/**
 	 * @param channelFactory makes the connection (a {@link HelperConnection} in the game) for this helper's listener
@@ -236,16 +242,11 @@ public final class MacHelper implements HelperConnection.Listener {
 			return;
 		}
 		if (connected) {
-			if (windowsMoved) {
-				ch.send(new WindowsBack()); // before the displays go, so every window lands exactly where it was
-			}
-			connection.incrementAndGet();
 			for (int slot : slots) {
-				ch.send(new RemoveDisplay(slot));
+				ch.send(new RemoveDisplay(slot)); // nothing moved on join, so nothing moves back (spec 5.10)
 			}
 		}
-		windowsMoved = false;
-		windowsMoveScheduled = false;
+		iconsAsked.clear();
 		ch.close();
 		boolean was = connected;
 		connected = false;
@@ -374,31 +375,87 @@ public final class MacHelper implements HelperConnection.Listener {
 		}
 	}
 
-	// ---------------------------------------------------------------- in-world use (spec 5.9)
+	// ---------------------------------------------------------------- in-world use (spec 5.9, 5.10)
 
-	/** Whether joining moves the player's windows onto their first hologram's display (and leaving moves them back). */
-	public void setMoveWindowsOnJoin(final boolean value) {
-		moveWindowsOnJoin = value;
+	/** The picture size of a Mirror point (slot 0, the main display); null for a virtual display's pixel. */
+	private static @Nullable Integer w(final PointerPoint p) {
+		return p.onMain() ? p.w() : null;
+	}
+
+	private static @Nullable Integer h(final PointerPoint p) {
+		return p.onMain() ? p.h() : null;
 	}
 
 	public boolean pointerDown(final PointerPoint p) {
-		return send(new PointerDown(p.slot(), p.x(), p.y(), PointerButton.LEFT));
+		return send(new PointerDown(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p)));
 	}
 
 	public boolean pointerMove(final PointerPoint p) {
-		return send(new PointerMove(p.slot(), p.x(), p.y()));
+		return send(new PointerMove(p.slot(), p.x(), p.y(), w(p), h(p)));
 	}
 
 	public boolean pointerUp(final PointerPoint p) {
-		return send(new PointerUp(p.slot(), p.x(), p.y(), PointerButton.LEFT));
+		return send(new PointerUp(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p)));
 	}
 
 	public boolean click(final PointerPoint p, final PointerButton button) {
-		return send(new Click(p.slot(), p.x(), p.y(), button));
+		return send(new Click(p.slot(), p.x(), p.y(), button, w(p), h(p)));
 	}
 
 	public boolean scroll(final PointerPoint p, final int dx, final int dy) {
-		return send(new Scroll(p.slot(), p.x(), p.y(), dx, dy));
+		return send(new Scroll(p.slot(), p.x(), p.y(), dx, dy, w(p), h(p)));
+	}
+
+	// ---------------------------------------------------------------- the mini Dock (spec 5.10)
+
+	/** The installed apps (bundle id → name), or null until the helper has listed them. */
+	public @Nullable Map<String, String> apps() {
+		return apps;
+	}
+
+	/** PNG bytes of an app icon, or null until it arrived. */
+	public byte @Nullable [] icon(final String bundle) {
+		return icons.get(bundle);
+	}
+
+	/** Asks for the icons not asked for yet (in batches the helper accepts). */
+	public void requestIcons(final List<String> bundles) {
+		if (!connected) {
+			return;
+		}
+		List<String> ask = new ArrayList<>();
+		for (String b : bundles) {
+			if (HelperProtocol.isBundleId(b) && iconsAsked.add(b)) {
+				ask.add(b);
+			}
+		}
+		for (int i = 0; i < ask.size(); i += 64) {
+			send(new AppIcons(List.copyOf(ask.subList(i, Math.min(ask.size(), i + 64))), ICON_PX));
+		}
+	}
+
+	/**
+	 * Opens an app ({@code bundle}) or a web page ({@code url}) onto slot's display, its window stopping {@code bottom}
+	 * display pixels above the bottom (the in-world Dock's band; null: none); false when refused locally.
+	 */
+	public boolean openApp(final int slot, final @Nullable String bundle, final @Nullable String url, final @Nullable Integer bottom) {
+		OpenApp m = new OpenApp(slot, bundle, url, bottom);
+		String problem = HelperProtocol.openAppProblem(m);
+		if (problem != null) {
+			LOGGER.warn("Office: not opening {}: {}", bundle != null ? bundle : url, problem);
+			return false;
+		}
+		return send(m);
+	}
+
+	/** Called on the client thread with every APP_RESULT. */
+	public void onAppResult(final Consumer<AppResult> listener) {
+		appResultListeners.add(listener);
+	}
+
+	/** Called on the client thread when secure input goes on / off while typing (and off when the helper is gone). */
+	public void onSecureInput(final Consumer<Boolean> listener) {
+		secureInputListeners.add(listener);
 	}
 
 	public boolean exitTyping() {
@@ -424,19 +481,6 @@ public final class MacHelper implements HelperConnection.Listener {
 	/** Called on the client thread with DRAG_ENDED's reason. */
 	public void onDragEnded(final Consumer<String> listener) {
 		dragEndedListeners.add(listener);
-	}
-
-	/** The player's windows onto the lowest-slot display online, once per connection. */
-	private void moveWindows(final int conn) {
-		int slot;
-		synchronized (this) {
-			if (conn != connection.get() || !connected || windowsMoved || online.isEmpty()) {
-				return;
-			}
-			slot = online.keySet().stream().mapToInt(Integer::intValue).min().getAsInt();
-			windowsMoved = true;
-		}
-		send(new WindowsToDisplay(slot, null));
 	}
 
 	// ---------------------------------------------------------------- windows and zoom
@@ -494,13 +538,12 @@ public final class MacHelper implements HelperConnection.Listener {
 		}
 		welcome = w;
 		permissionDenied = false;
-		windowsMoved = false; // a new helper: windows of an earlier one went back when its displays vanished
-		windowsMoveScheduled = false;
-		connection.incrementAndGet();
 		connected = true;
+		iconsAsked.clear(); // a new helper: ask again for what the Dock needs
 		for (Map.Entry<Integer, Size> e : displays) {
 			send(new CreateDisplay(e.getKey(), e.getValue().w(), e.getValue().h()));
 		}
+		send(new ListApps()); // for the Dock: which of its apps are installed, and the "All apps" search
 		for (MacHelperSource s : attached) {
 			s.helperConnected();
 		}
@@ -513,11 +556,6 @@ public final class MacHelper implements HelperConnection.Listener {
 			case Display d -> {
 				synchronized (this) {
 					online.put(d.slot(), new Size(d.w(), d.h()));
-				}
-				if (moveWindowsOnJoin && !windowsMoved && !windowsMoveScheduled) {
-					windowsMoveScheduled = true;
-					int conn = connection.get();
-					scheduler.schedule(() -> moveWindows(conn), WINDOWS_MOVE_DELAY_MS);
 				}
 				for (MacHelperSource s : attached) {
 					s.displayOnline(d.slot(), d.w(), d.h());
@@ -567,6 +605,36 @@ public final class MacHelper implements HelperConnection.Listener {
 			case TypingExit t -> {
 				for (Consumer<String> l : typingExitListeners) {
 					clientThread.execute(() -> l.accept(t.reason()));
+				}
+			}
+			case Apps a -> {
+				Map<String, String> byBundle = new LinkedHashMap<>();
+				for (AppInfo i : a.apps()) {
+					byBundle.putIfAbsent(i.bundle(), i.name());
+				}
+				apps = Collections.unmodifiableMap(byBundle);
+			}
+			case Icons i -> {
+				for (AppIcon icon : i.icons()) {
+					try {
+						byte[] png = Base64.getDecoder().decode(icon.png());
+						if (png.length > 0 && png.length <= 512 * 1024) {
+							icons.put(icon.bundle(), png);
+						}
+					} catch (IllegalArgumentException e) {
+						LOGGER.debug("Office helper: bad icon for {}", icon.bundle());
+					}
+				}
+			}
+			case HelperProtocol.SecureInput s -> {
+				for (Consumer<Boolean> l : secureInputListeners) {
+					clientThread.execute(() -> l.accept(s.on()));
+				}
+			}
+			case AppResult r -> {
+				LOGGER.info("Office Dock: {} → {} ({})", r.target(), r.ok() ? "ok" : "failed", r.message());
+				for (Consumer<AppResult> l : appResultListeners) {
+					clientThread.execute(() -> l.accept(r));
 				}
 			}
 			case HelperError e -> {

@@ -1,5 +1,6 @@
 package local.carter.office.client.pointer;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -7,6 +8,13 @@ import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import local.carter.office.client.dock.AppSearchScreen;
+import local.carter.office.client.dock.Dock;
+import local.carter.office.client.dock.DockItem;
+import local.carter.office.client.dock.DockLayout;
+import local.carter.office.client.render.HologramLook;
+import local.carter.office.client.render.ScreenTexture;
+import local.carter.office.client.render.ScreenTextureRegistry;
 import local.carter.office.client.helper.HelperProtocol.PointerButton;
 import local.carter.office.client.interact.HologramPicker;
 import local.carter.office.client.interact.HologramPicker.Picked;
@@ -25,15 +33,20 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 
 /**
- * In-world use of your own holograms (spec 5.9, Mac): the crosshair is the mouse. Client thread only.
+ * In-world use of your own holograms (spec 5.9, 5.10, Mac): the crosshair is the mouse — Minecraft's own crosshair, no
+ * cursor is drawn (Carter). Client thread only. Works on Extend holograms (virtual displays) and on the Mirror (the
+ * laptop's main display): there Minecraft's window floats above the other apps and is click-through while you use it
+ * ({@link MirrorWindow}), so the helper's events reach the app under it.
  *
  * <ul>
- * <li>Aimed at your own Extend hologram with no emitter in the main hand, a small cursor is drawn on it at the
- * crosshair ({@link #cursorOn}; only you see it).</li>
+ * <li>Aimed at your own Extend or Mirror hologram with no emitter in the main hand: the crosshair is the pointer.</li>
+ * <li>The mini Dock along the bottom of each Extend hologram ({@link Dock}) takes clicks before the screen behind it:
+ * an icon opens its app onto that screen, "All apps" opens a search ({@link AppSearchScreen}).</li>
  * <li>Left button: a click there, or, once the crosshair moves while it is held, a drag ({@link PointerGesture}): the
  * helper drives it and sends the physical mouse motion back, which turns your head here ({@link #frame}); a drag
  * carries on across holograms. Blocks are never broken while aimed at a hologram or during a press or drag
@@ -41,7 +54,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * <li>Right button: a right-click there. Wheel: scrolls the app there (Fabric's hotbar-scroll event; the slot stays).</li>
  * <li>A click enters typing mode ({@link TypingMode}, {@link TypingScreen}): the app has the keyboard, Minecraft stands
  * still and says "Typing — Esc to return"; Esc (swallowed by the helper) or clicking back into Minecraft returns.</li>
- * <li>Mirror and one-window holograms are view-only: a click says so. An emitter in the main hand keeps editing.</li>
+ * <li>One-window holograms are view-only: a click says so. An emitter in the main hand keeps editing.</li>
  * </ul>
  * While typing or dragging, Minecraft keeps running unfocused (pauseOnLostFocus off in memory, AFK limit kept awake).
  */
@@ -49,7 +62,6 @@ public final class PointerClient {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 	/** Wheel notches → pixels of scrolling (a notch scrolls about three lines). */
 	static final double SCROLL_PIXELS_PER_NOTCH = 48;
-	public static final String MIRROR_VIEW_ONLY = "Mirror is view-only — switch this screen to Extend to use it here";
 	public static final String WINDOW_VIEW_ONLY = "One-window screens are view-only here — switch to Extend to use it";
 
 	private static final PointerClient INSTANCE = new PointerClient();
@@ -61,6 +73,9 @@ public final class PointerClient {
 		public void down(final PointerPoint p) {
 			PointerPort port = port();
 			if (port != null) {
+				if (p.onMain()) {
+					throughMirror(); // before the helper posts its down at the main display
+				}
 				port.pointerDown(p);
 			}
 		}
@@ -69,6 +84,9 @@ public final class PointerClient {
 		public void move(final PointerPoint p) {
 			PointerPort port = port();
 			if (port != null) {
+				if (p.onMain() && !mirror.clickThrough(Util.getMillis())) {
+					throughMirror(); // a drag from an Extend screen onto the Mirror: drops land in the app under Minecraft
+				}
 				port.pointerMove(p);
 			}
 		}
@@ -125,13 +143,19 @@ public final class PointerClient {
 
 	private @Nullable TypingScreen screen;
 	private final PauseGuard pause = new PauseGuard();
+	private final MirrorWindow mirror = new MirrorWindow();
+	/** The layer last applied to Minecraft's window (null: none yet, or the last try failed), and the focus it was for. */
+	private MirrorWindow.@Nullable Layer applied;
+	private boolean appliedFocus;
+	/** This typing session is in an app on the Mirror (the hint says ⌘-Tab works too); secure input is on in it. */
+	private boolean typingOnMirror;
+	private boolean secureInput;
 	private boolean regrabWhenFocused;
 	private double scrollX;
 	private double scrollY;
-	// cursor drawn this frame
-	private @Nullable UUID cursorHologram;
-	private double cursorU;
-	private double cursorV;
+	// the Dock icon under the crosshair this frame
+	private @Nullable UUID dockHologram;
+	private int dockHover = -1;
 	private @Nullable Aim aim;
 
 	/** The own hologram under the crosshair, in front of whatever vanilla aims at, and its display pixel (null: none). */
@@ -142,6 +166,7 @@ public final class PointerClient {
 	public static void register() {
 		ClientTickEvents.END_CLIENT_TICK.register(INSTANCE::tick);
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(INSTANCE::abort));
+		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> INSTANCE.abort()); // never leave the window click-through
 		INSTANCE.listen(Platform.current().pointer());
 	}
 
@@ -161,6 +186,7 @@ public final class PointerClient {
 		port.onTypingExit(reason -> {
 			boolean was = typing.active();
 			typing.helperExited();
+			mirror.interactionEnded();
 			if (was) {
 				LOGGER.info("Typing: back to the game ({})", reason);
 				if (HELPER_GONE.equals(reason)) {
@@ -171,11 +197,63 @@ public final class PointerClient {
 		port.onDragEnded(reason -> {
 			boolean was = gesture.state() == PointerGesture.State.DRAGGING;
 			dragEnded();
+			mirror.interactionEnded();
 			if (was && "cancelled".equals(reason)) {
 				bringBack(); // a drag cancelled (helper gone, or the mod's POINTER_UP): make sure Minecraft has the mouse
 			}
 		});
+		port.onSecureInput(on -> {
+			secureInput = on && typing.active();
+			if (secureInput) {
+				LocalPlayer player = Minecraft.getInstance().player;
+				if (player != null) {
+					player.sendOverlayMessage(Component.literal(PASSWORD_HINT));
+				}
+			}
+		});
+		port.onAppProblem(message -> {
+			LocalPlayer player = Minecraft.getInstance().player;
+			if (player != null) {
+				player.sendOverlayMessage(Component.literal(message));
+			}
+		});
 	}
+
+	/** A click or drag on the Mirror is about to reach the helper: Minecraft's window lets it through, now. */
+	private void throughMirror() {
+		mirror.mirrorPressed();
+		applyWindow(Util.getMillis());
+	}
+
+	/**
+	 * Minecraft's window layer for now (floating / click-through), applied when it changed or Minecraft's focus changed
+	 * (macOS / SDL may reorder or reset the window then), and tried again next frame when applying failed.
+	 */
+	private void applyWindow(final long now) {
+		PointerPort port = port();
+		if (port == null) {
+			return;
+		}
+		Minecraft mc = Minecraft.getInstance();
+		boolean focused = mc.isWindowActive();
+		MirrorWindow.Layer layer = mirror.layer(now, focused, gesture.busy() || typing.active());
+		if (!layer.equals(applied) || focused != appliedFocus) {
+			applied = port.windowLayerApplied(layer.floating(), layer.clickThrough()) ? layer : null;
+			appliedFocus = focused;
+		}
+	}
+
+	/** The typing hint: Mirror typing says ⌘-Tab works too; a password field (secure input) hides Esc. */
+	public static String typingHint() {
+		PointerClient c = INSTANCE;
+		if (c.secureInput) {
+			return PASSWORD_HINT;
+		}
+		return c.typingOnMirror ? MIRROR_TYPING_HINT : TypingScreen.HINT;
+	}
+
+	public static final String MIRROR_TYPING_HINT = "Typing — Esc or ⌘-Tab to return";
+	public static final String PASSWORD_HINT = "Password field: press ⌘-Tab to return";
 
 	/** TYPING_EXIT reason the mod reports for itself when the helper disconnects mid-typing. */
 	public static final String HELPER_GONE = "helper";
@@ -190,6 +268,11 @@ public final class PointerClient {
 
 	static @Nullable PointerPort port() {
 		return INSTANCE.override != null ? INSTANCE.override : Platform.current().pointer();
+	}
+
+	/** The pointer port in use (the platform's, or a test's), or null. */
+	public static @Nullable PointerPort currentPort() {
+		return port();
 	}
 
 	/** In-world use is available on this computer. */
@@ -216,7 +299,7 @@ public final class PointerClient {
 		Minecraft mc = Minecraft.getInstance();
 		PointerPort port = port();
 		if (port == null || mc.player == null || mc.level == null) {
-			cursorHologram = null;
+			dockHologram = null;
 			aim = null;
 			return;
 		}
@@ -232,16 +315,57 @@ public final class PointerClient {
 		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(true);
 		Aim a = typing.active() ? null : computeAim(mc, partial);
 		aim = a;
-		gesture.aim(a == null ? null : a.point(), Util.getMillis());
-		if (typing.active()) {
-			cursorHologram = null; // the real cursor is on the display now, and the capture shows it
-		} else if (a != null && a.point() != null) {
-			cursorHologram = a.be().hologramId();
-			cursorU = a.picked().hit().u();
-			cursorV = a.picked().hit().v();
-		} else if (!gesture.busy()) {
-			cursorHologram = null; // during a drag the cursor stays at the last point between holograms
+		long now = Util.getMillis();
+		gesture.aim(a == null ? null : a.point(), now);
+		int hover = a == null || gesture.busy() ? -1 : dockIndex(a, port);
+		dockHologram = hover >= 0 ? a.be().hologramId() : null;
+		dockHover = hover;
+		applyWindow(now);
+	}
+
+	/** The Dock icon of aim {@code a}'s hologram under the crosshair, or -1 (only on a live screen: the Dock is drawn there). */
+	private static int dockIndex(final Aim a, final PointerPort port) {
+		return Dock.hit(a.spec(), true, live(a), Dock.items(port), a.picked().hit().u(), a.picked().hit().v());
+	}
+
+	/** The hologram shows the owner's live screen (what the renderer draws the Dock on). */
+	private static boolean live(final Aim a) {
+		HologramBlockEntity be = a.be();
+		boolean frames = ScreenTextureRegistry.get(be.hologramId()).map(ScreenTexture::hasFrame).orElse(false);
+		LocalPlayer player = Minecraft.getInstance().player;
+		return player != null && HologramLook.forViewer(a.spec(), player.getUUID(), be.ownerOnline(), frames,
+				HologramLook.ownSource(be.hologramId())) == HologramLook.State.LIVE;
+	}
+
+	/** The Dock icon under the crosshair on hologram {@code id} this frame, or -1 (the renderer highlights it). */
+	public static int dockHover(final UUID id) {
+		PointerClient c = INSTANCE;
+		return id.equals(c.dockHologram) ? c.dockHover : -1;
+	}
+
+	/** A click on the Dock: the app opens on that screen, or "All apps" opens the search. */
+	private static void dockClicked(final Minecraft mc, final Aim a, final int index, final PointerPort port) {
+		List<DockItem> items = Dock.items(port);
+		LocalPlayer player = mc.player;
+		if (items == null || index < 0 || index >= items.size() || player == null) {
+			return;
 		}
+		DockItem item = items.get(index);
+		int slot = a.spec().displaySlot();
+		DockLayout layout = Dock.layout(a.spec(), items.size());
+		int bottom = (int) Math.ceil((1 - layout.bar().v0()) * a.spec().shape().pxH()); // the Dock's band, display pixels
+		if (item.allApps()) {
+			mc.gui.setScreen(new AppSearchScreen(port, slot, bottom));
+			return;
+		}
+		String problem = port.problem();
+		if (problem != null) {
+			player.sendOverlayMessage(Component.literal(problem));
+			return;
+		}
+		port.openApp(slot, item, bottom);
+		player.sendOverlayMessage(Component.literal("Opening " + item.name() + " on this screen…"));
+		LOGGER.info("Dock: {} onto display {}", item.bundle() != null ? item.bundle() : item.url(), slot);
 	}
 
 	/** Vanilla's mouse-look with the helper's deltas (points, like SDL's relative motion). */
@@ -286,12 +410,6 @@ public final class PointerClient {
 		return player.getItemInHand(InteractionHand.MAIN_HAND).getItem() == OfficeBlocks.HOLOGRAM_EMITTER_ITEM;
 	}
 
-	/** Where to draw the cursor on hologram {@code id} this frame: {u, v}, or null. */
-	public static double @Nullable [] cursorOn(final UUID id) {
-		PointerClient c = INSTANCE;
-		return id.equals(c.cursorHologram) ? new double[] {c.cursorU, c.cursorV} : null;
-	}
-
 	// ---------------------------------------------------------------- input hooks
 
 	/**
@@ -317,6 +435,11 @@ public final class PointerClient {
 		}
 		Aim a = computeAim(mc, partial);
 		if (a == null) {
+			return true;
+		}
+		int dock = dockIndex(a, port);
+		if (dock >= 0) {
+			dockClicked(mc, a, dock, port); // the Dock is in front of the screen behind it
 			return true;
 		}
 		PointerPoint p = usable(player, a, port);
@@ -348,8 +471,8 @@ public final class PointerClient {
 			return true;
 		}
 		Aim a = computeAim(mc, mc.getDeltaTracker().getGameTimeDeltaPartialTick(true));
-		if (a == null || a.be() != be) {
-			return true;
+		if (a == null || a.be() != be || dockIndex(a, port) >= 0) {
+			return true; // a right-click on the Dock does nothing
 		}
 		PointerPoint p = usable(player, a, port);
 		if (p != null) {
@@ -361,15 +484,14 @@ public final class PointerClient {
 	/** The pixel to use, or null after telling the player (action bar) why this hologram can't be used now. */
 	private static @Nullable PointerPoint usable(final LocalPlayer player, final Aim a, final PointerPort port) {
 		Mode mode = a.spec().mode();
-		if (mode == Mode.MIRROR) {
-			player.sendOverlayMessage(Component.literal(MIRROR_VIEW_ONLY));
-			return null;
-		}
 		if (mode == Mode.WINDOW) {
 			player.sendOverlayMessage(Component.literal(WINDOW_VIEW_ONLY));
 			return null;
 		}
 		String problem = port.problem();
+		if (problem == null && mode == Mode.MIRROR) {
+			problem = port.mirrorProblem(); // in macOS's own full-screen Space the other apps aren't there
+		}
 		if (problem != null) {
 			player.sendOverlayMessage(Component.literal(problem));
 			return null;
@@ -385,11 +507,14 @@ public final class PointerClient {
 		PointerClient c = INSTANCE;
 		PointerPort port = port();
 		Aim a = c.aim;
-		if (port == null || c.typing.active() || a == null || a.point() == null || a.spec().mode() != Mode.EXTEND) {
+		if (port == null || c.typing.active() || a == null || a.point() == null || a.spec().mode() == Mode.WINDOW) {
 			return false;
 		}
-		if (port.problem() != null) {
+		if (port.problem() != null || (a.point().onMain() && port.mirrorProblem() != null)) {
 			return false;
+		}
+		if (dockIndex(a, port) >= 0) {
+			return true; // over the Dock: nothing scrolls, the hotbar stays
 		}
 		c.scrollX += xoffset * SCROLL_PIXELS_PER_NOTCH;
 		c.scrollY += yoffset * SCROLL_PIXELS_PER_NOTCH;
@@ -398,6 +523,10 @@ public final class PointerClient {
 		c.scrollX -= dx;
 		c.scrollY -= dy;
 		if (dx != 0 || dy != 0) {
+			if (a.point().onMain()) {
+				c.mirror.mirrorScrolled(Util.getMillis()); // a moment of click-through so the scroll reaches the app under Minecraft
+				c.applyWindow(Util.getMillis());
+			}
 			port.scroll(a.point(), dx, dy);
 		}
 		return true;
@@ -411,6 +540,11 @@ public final class PointerClient {
 		// The hint screen first: it releases the mouse (Minecraft centres the cursor), then the helper's real click puts
 		// the cursor on the display and brings the app forward with the keyboard.
 		typing.enter(Util.getMillis());
+		typingOnMirror = p.onMain();
+		secureInput = false;
+		if (p.onMain()) {
+			throughMirror(); // typing in an app under Minecraft: click-through until Esc / back in Minecraft
+		}
 		port.click(p, button);
 		LOGGER.info("Typing: {} click on display {} at {},{}", button.wire, p.slot(), p.x(), p.y());
 	}
@@ -435,6 +569,7 @@ public final class PointerClient {
 			abort();
 			return;
 		}
+		mirror.enterWorld();
 		boolean active = mc.isWindowActive();
 		typing.focus(active, now); // focus left → typing; came back (the player clicked Minecraft) → back to the game
 		typing.tick(now);
@@ -445,6 +580,12 @@ public final class PointerClient {
 			gesture.release(active, now);
 		}
 		gesture.tick(now);
+		if (!gesture.busy() && !typing.active()) {
+			mirror.interactionEnded(); // every other way a drag or typing ended (timeouts, the hint replaced, focus back)
+			typingOnMirror = false;
+			secureInput = false;
+		}
+		applyWindow(now);
 		pause.hold(mc, typing.active() || gesture.state() == PointerGesture.State.DRAGGING);
 		if (regrabWhenFocused && active && !typing.active() && !gesture.busy()) {
 			regrabWhenFocused = false;
@@ -456,12 +597,18 @@ public final class PointerClient {
 		}
 	}
 
-	/** World left / port changed: release a drag, leave typing, restore pause-on-focus-loss. */
+	/** World left / port changed / game closing: release a drag, leave typing, restore pause-on-focus-loss and the window. */
 	private void abort() {
 		gesture.cancel();
 		typing.leave();
 		pause.hold(Minecraft.getInstance(), false);
-		cursorHologram = null;
+		mirror.leaveWorld();
+		PointerPort port = port();
+		if (port != null && !MirrorWindow.Layer.NORMAL.equals(applied)) {
+			port.windowLayer(false, false); // never left floating or click-through outside a world
+		}
+		applied = MirrorWindow.Layer.NORMAL;
+		dockHologram = null;
 		aim = null;
 		regrabWhenFocused = false;
 	}

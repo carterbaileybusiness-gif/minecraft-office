@@ -173,6 +173,13 @@ if [ -f "$OPTS" ] && grep -q '^exclusiveFullscreen:true' "$OPTS"; then
   /usr/bin/sed -i '' -e 's/^exclusiveFullscreen:true$/exclusiveFullscreen:false/' -e 's/^fullscreen:true$/fullscreen:false/' "$OPTS"
   info "options.txt: exclusive fullscreen off (starts windowed; fn+F11 or Options > Video Settings > Fullscreen gives macOS fullscreen)"
 fi
+# Laptop + monitors (spec 5.10): Minecraft starts as a window, which the mod turns into a borderless window filling the
+# main display (not macOS's separate full-screen Space, where your other windows - the ones the Mirror hologram shows -
+# would be on another desktop). -Doffice.borderless=false keeps a normal window.
+if [ -f "$OPTS" ] && grep -q '^fullscreen:true' "$OPTS"; then
+  /usr/bin/sed -i '' -e 's/^fullscreen:true$/fullscreen:false/' "$OPTS"
+  info "options.txt: starts windowed; the mod makes the window fill the screen without a separate Space"
+fi
 # Sodium only forces exclusive mode while its "has edited fullscreen option" flag is unset. The pack ships that flag
 # (config/sodium-options.json, preserve = true), but an instance that already has the file keeps its own copy: set it.
 /usr/bin/python3 -I - "$GAME/config/sodium-options.json" <<'PY'

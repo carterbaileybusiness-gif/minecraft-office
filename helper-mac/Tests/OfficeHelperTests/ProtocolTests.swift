@@ -24,9 +24,13 @@ enum ProtocolTests {
         ("scroll", .scroll(ScrollPayload(slot: 1, x: 100, y: 200, dx: 0, dy: -120))),
         ("click", .click(PointerPayload(slot: 1, x: 300, y: 400, button: .right))),
         ("exit_typing", .exitTyping),
-        ("windows_to_display", .windowsToDisplay(WindowsToDisplayPayload(slot: 1, apps: nil))),
-        ("windows_to_display_apps", .windowsToDisplay(WindowsToDisplayPayload(slot: 1, apps: ["com.apple.TextEdit"]))),
-        ("windows_back", .windowsBack),
+        ("pointer_down_main", .pointerDown(PointerPayload(slot: 0, x: 960, y: 540, button: .left, w: 1920, h: 1080))),
+        ("click_main", .click(PointerPayload(slot: 0, x: 100, y: 50, button: .left, w: 1920, h: 1080))),
+        ("scroll_main", .scroll(ScrollPayload(slot: 0, x: 100, y: 200, dx: 0, dy: -48, w: 1920, h: 1080))),
+        ("list_apps", .listApps),
+        ("app_icons", .appIcons(AppIconsPayload(bundles: ["com.apple.Notes", "com.google.Chrome"], size: 64))),
+        ("open_app", .openApp(OpenAppPayload(slot: 2, bundle: "com.apple.Notes", url: nil, bottom: 96))),
+        ("open_app_url", .openApp(OpenAppPayload(slot: 1, bundle: nil, url: "https://www.youtube.com"))),
         ("welcome", .welcome(WelcomePayload(version: 1, screenRecording: true, accessibility: false))),
         ("windows", .windows([
             WindowInfo(windowKey: "com.apple.Notes|4321", app: "Notes", title: "Groceries — List", w: 800, h: 600),
@@ -46,6 +50,11 @@ enum ProtocolTests {
         ("typing_exit", .typingExit(ReasonPayload(reason: "esc"))),
         ("drag_delta", .dragDelta(DeltaPayload(dx: 12, dy: -3))),
         ("drag_ended", .dragEnded(ReasonPayload(reason: "released"))),
+        ("apps", .apps(AppsPayload(apps: [AppInfo(bundle: "com.google.Chrome", name: "Google Chrome"),
+                                          AppInfo(bundle: "com.apple.Notes", name: "Notes")]))),
+        ("icons", .icons(IconsPayload(icons: [AppIcon(bundle: "com.apple.Notes", png: "iVBORw0KGgo=")]))),
+        ("app_result", .appResult(AppResultPayload(target: "com.apple.Notes", ok: true, message: "Notes is on screen 2"))),
+        ("secure_input", .secureInput(SecureInputPayload(on: true))),
     ]
 
     static func decodeAll(_ bytes: Data) throws -> [Message] {

@@ -14,6 +14,7 @@ swiftc -swift-version 5 -O -parse-as-library -target arm64-apple-macos14.0 \
   "$here/Sources/OfficeHelper/DisplaySpec.swift" \
   "$here/Sources/OfficeHelper/VirtualDisplays.swift" \
   "$here/Sources/OfficeHelper/Pointer.swift" \
+  "$here/Sources/OfficeHelper/Apps.swift" \
   "$here/Sources/OfficeHelper/HotkeyLogic.swift" \
   "$here/Sources/OfficeHelper/EventInjector.swift" \
   "$here/Sources/OfficeHelper/Protocol.swift" \

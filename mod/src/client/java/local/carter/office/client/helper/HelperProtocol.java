@@ -55,9 +55,11 @@ public final class HelperProtocol {
     public static final int SCROLL = 14;
     public static final int CLICK = 15;
     public static final int EXIT_TYPING = 16;
-    /** Joining / leaving a world: the player's windows move onto a hologram's display and back. */
-    public static final int WINDOWS_TO_DISPLAY = 17;
-    public static final int WINDOWS_BACK = 18;
+    // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK (windows never move by themselves any more, spec 5.10).
+    /** The mini Dock (spec 5.10): the installed apps, their icons, opening an app onto a hologram's display. */
+    public static final int LIST_APPS = 19;
+    public static final int APP_ICONS = 20;
+    public static final int OPEN_APP = 21;
     // Helper -> mod
     public static final int WELCOME = 64;
     public static final int WINDOWS = 65;
@@ -70,6 +72,13 @@ public final class HelperProtocol {
     public static final int TYPING_EXIT = 72;
     public static final int DRAG_DELTA = 73;
     public static final int DRAG_ENDED = 74;
+    public static final int APPS = 75;
+    public static final int ICONS = 76;
+    public static final int APP_RESULT = 77;
+    /** While typing: secure input (a password field) went on / off; Esc can't be seen then, ⌘-Tab still returns. */
+    public static final int SECURE_INPUT = 78;
+    /** Pointer slot 0: the main display (a Mirror hologram); x, y are then a pixel of a w x h picture of it. */
+    public static final int MAIN_SLOT = 0;
 
     private static final int IMAGE_HEADER = 20; // u32 surface, u64 generation, u32 width, u32 height
     private static final int PATCH_HEADER = IMAGE_HEADER + 4; // + u32 count
@@ -86,8 +95,8 @@ public final class HelperProtocol {
 
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
             ZoomIn, ZoomOut, RequestPermissions, PointerDown, PointerMove, PointerUp, Scroll, Click, ExitTyping,
-            WindowsToDisplay, WindowsBack, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
-            DragDelta, DragEnded {
+            ListApps, AppIcons, OpenApp, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
+            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -107,8 +116,9 @@ public final class HelperProtocol {
                 case Scroll m -> SCROLL;
                 case Click m -> CLICK;
                 case ExitTyping m -> EXIT_TYPING;
-                case WindowsToDisplay m -> WINDOWS_TO_DISPLAY;
-                case WindowsBack m -> WINDOWS_BACK;
+                case ListApps m -> LIST_APPS;
+                case AppIcons m -> APP_ICONS;
+                case OpenApp m -> OPEN_APP;
                 case Welcome m -> WELCOME;
                 case Windows m -> WINDOWS;
                 case Display m -> DISPLAY;
@@ -120,6 +130,10 @@ public final class HelperProtocol {
                 case TypingExit m -> TYPING_EXIT;
                 case DragDelta m -> DRAG_DELTA;
                 case DragEnded m -> DRAG_ENDED;
+                case Apps m -> APPS;
+                case Icons m -> ICONS;
+                case AppResult m -> APP_RESULT;
+                case SecureInput m -> SECURE_INPUT;
             };
         }
     }
@@ -209,30 +223,61 @@ public final class HelperProtocol {
 
     public record RequestPermissions() implements Message {}
 
-    // In-world use: (x, y) is a pixel of slot's virtual display (0..w-1, 0..h-1).
+    // In-world use: (x, y) is a pixel of slot's virtual display (0..w-1, 0..h-1). Slot 0 (MAIN_SLOT) is the main display
+    // (a Mirror hologram): (x, y) is then a pixel of a w x h picture of it, and w, h are required; else they are null.
     /** Start a drag the helper drives at the press point; it ends when the physical button is released (DRAG_ENDED). */
-    public record PointerDown(int slot, int x, int y, PointerButton button) implements Message {}
+    public record PointerDown(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {
+        public PointerDown(int slot, int x, int y, PointerButton button) {
+            this(slot, x, y, button, null, null);
+        }
+    }
 
     /** The crosshair is over this pixel now (during a drag; any slot). */
-    public record PointerMove(int slot, int x, int y) implements Message {}
+    public record PointerMove(int slot, int x, int y, Integer w, Integer h) implements Message {
+        public PointerMove(int slot, int x, int y) {
+            this(slot, x, y, null, null);
+        }
+    }
 
     /** Cancel the drag from the mod's side. */
-    public record PointerUp(int slot, int x, int y, PointerButton button) implements Message {}
+    public record PointerUp(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {
+        public PointerUp(int slot, int x, int y, PointerButton button) {
+            this(slot, x, y, button, null, null);
+        }
+    }
 
     /** Scroll there, in pixels of content motion (dy &gt; 0 = up / away). */
-    public record Scroll(int slot, int x, int y, int dx, int dy) implements Message {}
+    public record Scroll(int slot, int x, int y, int dx, int dy, Integer w, Integer h) implements Message {
+        public Scroll(int slot, int x, int y, int dx, int dy) {
+            this(slot, x, y, dx, dy, null, null);
+        }
+    }
 
     /** A real click there: the app comes forward with the keyboard (typing mode). */
-    public record Click(int slot, int x, int y, PointerButton button) implements Message {}
+    public record Click(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {
+        public Click(int slot, int x, int y, PointerButton button) {
+            this(slot, x, y, button, null, null);
+        }
+    }
 
     /** The mod left typing mode (no reply). */
     public record ExitTyping() implements Message {}
 
-    /** Move the player's windows from the main display onto slot's display; {@code apps} (bundle ids) or null = all. */
-    public record WindowsToDisplay(int slot, List<String> apps) implements Message {}
+    /** The installed apps, please (APPS answers). */
+    public record ListApps() implements Message {}
 
-    /** Put every moved window back where it was. */
-    public record WindowsBack() implements Message {}
+    /** PNG icons for these apps, {@code size} pixels square (16..256, at most 64 bundle ids); ICONS answers. */
+    public record AppIcons(List<String> bundles, int size) implements Message {}
+
+    /**
+     * Open {@code bundle}, or the https {@code url} in the default browser, onto slot's display (1..4); exactly one is set.
+     * {@code bottom}: display pixels at the bottom that the in-world Dock covers (the window stops above them), or null.
+     */
+    public record OpenApp(int slot, String bundle, String url, Integer bottom) implements Message {
+        public OpenApp(int slot, String bundle, String url) {
+            this(slot, bundle, url, null);
+        }
+    }
 
     // Helper -> mod
     /** The handshake reply; sent again whenever a permission changes while connected. */
@@ -261,6 +306,21 @@ public final class HelperProtocol {
 
     /** The helper-driven drag ended: {@code "released"} (the physical button came up) or {@code "cancelled"}. */
     public record DragEnded(String reason) implements Message {}
+
+    public record AppInfo(String bundle, String name) {}
+
+    public record Apps(List<AppInfo> apps) implements Message {}
+
+    /** {@code png} is base64. */
+    public record AppIcon(String bundle, String png) {}
+
+    public record Icons(List<AppIcon> icons) implements Message {}
+
+    /** How an OPEN_APP went; {@code target} is its bundle id or url. */
+    public record AppResult(String target, boolean ok, String message) implements Message {}
+
+    /** Secure input on / off while typing. */
+    public record SecureInput(boolean on) implements Message {}
 
     /** ERROR message. Named HelperError so it does not clash with {@link java.lang.Error}. */
     public record HelperError(String code, String message) implements Message {
@@ -372,14 +432,27 @@ public final class HelperProtocol {
                     "surface", m.surface());
             case ZoomOut m -> map();
             case RequestPermissions m -> map();
-            case PointerDown m -> map("button", m.button().wire, "slot", m.slot(), "x", m.x(), "y", m.y());
-            case PointerMove m -> map("slot", m.slot(), "x", m.x(), "y", m.y());
-            case PointerUp m -> map("button", m.button().wire, "slot", m.slot(), "x", m.x(), "y", m.y());
-            case Scroll m -> map("dx", m.dx(), "dy", m.dy(), "slot", m.slot(), "x", m.x(), "y", m.y());
-            case Click m -> map("button", m.button().wire, "slot", m.slot(), "x", m.x(), "y", m.y());
+            case PointerDown m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case PointerMove m -> map("h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case PointerUp m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case Scroll m -> map("dx", m.dx(), "dy", m.dy(), "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case Click m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
             case ExitTyping m -> map();
-            case WindowsToDisplay m -> map("apps", m.apps() == null ? null : List.copyOf(m.apps()), "slot", m.slot());
-            case WindowsBack m -> map();
+            case ListApps m -> map();
+            case AppIcons m -> map("bundles", List.copyOf(m.bundles()), "size", m.size());
+            case OpenApp m -> map("bottom", m.bottom(), "bundle", m.bundle(), "slot", m.slot(), "url", m.url());
+            case SecureInput m -> map("on", m.on());
+            case Apps m -> {
+                List<Object> list = new ArrayList<>();
+                for (AppInfo a : m.apps()) list.add(map("bundle", a.bundle(), "name", a.name()));
+                yield map("apps", list);
+            }
+            case Icons m -> {
+                List<Object> list = new ArrayList<>();
+                for (AppIcon i : m.icons()) list.add(map("bundle", i.bundle(), "png", i.png()));
+                yield map("icons", list);
+            }
+            case AppResult m -> map("message", m.message(), "ok", m.ok(), "target", m.target());
             case TypingExit m -> map("reason", m.reason());
             case DragDelta m -> map("dx", m.dx(), "dy", m.dy());
             case DragEnded m -> map("reason", m.reason());
@@ -450,43 +523,82 @@ public final class HelperProtocol {
                 return new RequestPermissions();
             case POINTER_DOWN: {
                 JsonObject o = object(root);
-                return new PointerDown(integer(o, "slot"), integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")));
+                int slot = integer(o, "slot");
+                Integer[] wh = picture(o, slot);
+                return new PointerDown(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
             }
             case POINTER_MOVE: {
                 JsonObject o = object(root);
-                return new PointerMove(integer(o, "slot"), integer(o, "x"), integer(o, "y"));
+                int slot = integer(o, "slot");
+                Integer[] wh = picture(o, slot);
+                return new PointerMove(slot, integer(o, "x"), integer(o, "y"), wh[0], wh[1]);
             }
             case POINTER_UP: {
                 JsonObject o = object(root);
-                return new PointerUp(integer(o, "slot"), integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")));
+                int slot = integer(o, "slot");
+                Integer[] wh = picture(o, slot);
+                return new PointerUp(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
             }
             case SCROLL: {
                 JsonObject o = object(root);
-                return new Scroll(integer(o, "slot"), integer(o, "x"), integer(o, "y"), integer(o, "dx"), integer(o, "dy"));
+                int slot = integer(o, "slot");
+                Integer[] wh = picture(o, slot);
+                return new Scroll(slot, integer(o, "x"), integer(o, "y"), integer(o, "dx"), integer(o, "dy"), wh[0], wh[1]);
             }
             case CLICK: {
                 JsonObject o = object(root);
-                return new Click(integer(o, "slot"), integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")));
+                int slot = integer(o, "slot");
+                Integer[] wh = picture(o, slot);
+                return new Click(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
             }
             case EXIT_TYPING:
                 return new ExitTyping();
-            case WINDOWS_TO_DISPLAY: {
+            case LIST_APPS:
+                return new ListApps();
+            case APP_ICONS: {
                 JsonObject o = object(root);
-                JsonElement apps = o.get("apps");
-                List<String> list = null;
-                if (apps != null && !apps.isJsonNull()) {
-                    if (!apps.isJsonArray()) throw bad("apps must be an array");
-                    list = new ArrayList<>();
-                    for (JsonElement e : apps.getAsJsonArray()) {
-                        if (!e.isJsonPrimitive() || !e.getAsJsonPrimitive().isString()) throw bad("apps must hold strings");
-                        list.add(e.getAsString());
-                    }
-                    list = Collections.unmodifiableList(list);
+                List<String> bundles = strings(o, "bundles");
+                int size = integer(o, "size");
+                if (size < 16 || size > 256 || bundles.size() > 64 || !bundles.stream().allMatch(HelperProtocol::isBundleId)) {
+                    throw bad("APP_ICONS needs 16...256 px and at most 64 bundle ids");
                 }
-                return new WindowsToDisplay(integer(o, "slot"), list);
+                return new AppIcons(bundles, size);
             }
-            case WINDOWS_BACK:
-                return new WindowsBack();
+            case OPEN_APP: {
+                JsonObject o = object(root);
+                OpenApp m = new OpenApp(integer(o, "slot"), optStr(o, "bundle"), optStr(o, "url"), optInteger(o, "bottom"));
+                String problem = openAppProblem(m);
+                if (problem != null) throw bad(problem);
+                return m;
+            }
+            case APPS: {
+                JsonObject o = object(root);
+                JsonElement arr = required(o, "apps");
+                if (!arr.isJsonArray()) throw bad("apps must be an array");
+                List<AppInfo> list = new ArrayList<>();
+                for (JsonElement e : arr.getAsJsonArray()) {
+                    JsonObject a = object(e);
+                    list.add(new AppInfo(str(a, "bundle"), str(a, "name")));
+                }
+                return new Apps(Collections.unmodifiableList(list));
+            }
+            case ICONS: {
+                JsonObject o = object(root);
+                JsonElement arr = required(o, "icons");
+                if (!arr.isJsonArray()) throw bad("icons must be an array");
+                List<AppIcon> list = new ArrayList<>();
+                for (JsonElement e : arr.getAsJsonArray()) {
+                    JsonObject a = object(e);
+                    list.add(new AppIcon(str(a, "bundle"), str(a, "png")));
+                }
+                return new Icons(Collections.unmodifiableList(list));
+            }
+            case APP_RESULT: {
+                JsonObject o = object(root);
+                return new AppResult(str(o, "target"), bool(o, "ok"), str(o, "message"));
+            }
+            case SECURE_INPUT:
+                return new SecureInput(bool(object(root), "on"));
             case TYPING_EXIT:
                 return new TypingExit(str(object(root), "reason"));
             case DRAG_DELTA: {
@@ -529,6 +641,49 @@ public final class HelperProtocol {
             default:
                 throw new ProtocolException("unknown message type " + type);
         }
+    }
+
+    /** {w, h} of a pointer message: required (positive) for slot 0, the main display; read if present otherwise. */
+    private static Integer[] picture(JsonObject o, int slot) throws ProtocolException {
+        Integer w = optInteger(o, "w");
+        Integer h = optInteger(o, "h");
+        if (slot == MAIN_SLOT && (w == null || h == null || w <= 0 || h <= 0)) {
+            throw bad("slot 0 (the main display) needs w and h");
+        }
+        return new Integer[] {w, h};
+    }
+
+    private static List<String> strings(JsonObject o, String key) throws ProtocolException {
+        JsonElement arr = required(o, key);
+        if (!arr.isJsonArray()) throw bad(key + " must be an array");
+        List<String> list = new ArrayList<>();
+        for (JsonElement e : arr.getAsJsonArray()) {
+            if (!e.isJsonPrimitive() || !e.getAsJsonPrimitive().isString()) throw bad(key + " must hold strings");
+            list.add(e.getAsString());
+        }
+        return Collections.unmodifiableList(list);
+    }
+
+    /** A plausible bundle id (letters, digits, dots, dashes), as the helper accepts. */
+    public static boolean isBundleId(String s) {
+        return s != null && s.matches("[A-Za-z0-9.-]{3,200}");
+    }
+
+    /** Why the helper would refuse this OPEN_APP (null = fine): slot 1..4, exactly one of bundle / url, the url https. */
+    public static String openAppProblem(OpenApp m) {
+        if (m.slot() < 1 || m.slot() > 4) return "OPEN_APP slot must be 1...4";
+        if (m.bottom() != null && (m.bottom() < 0 || m.bottom() > 4096)) return "OPEN_APP bottom must be 0...4096 pixels";
+        if ((m.bundle() == null) == (m.url() == null)) return "OPEN_APP needs exactly one of bundle and url";
+        if (m.bundle() != null) return isBundleId(m.bundle()) ? null : "OPEN_APP bundle is not a bundle id";
+        try {
+            java.net.URI u = new java.net.URI(m.url());
+            if (m.url().length() > 2048 || !"https".equalsIgnoreCase(u.getScheme()) || u.getHost() == null || u.getHost().isEmpty()) {
+                return "OPEN_APP url must be https";
+            }
+        } catch (java.net.URISyntaxException e) {
+            return "OPEN_APP url must be https";
+        }
+        return null;
     }
 
     private static Capture decodeCapture(JsonObject o) throws ProtocolException {
@@ -823,6 +978,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= WINDOWS_BACK) || (t >= WELCOME && t <= DRAG_ENDED);
+        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= OPEN_APP) || (t >= WELCOME && t <= SECURE_INPUT);
     }
 }

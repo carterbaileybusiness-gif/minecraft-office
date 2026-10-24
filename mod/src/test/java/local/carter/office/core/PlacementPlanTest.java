@@ -6,34 +6,43 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-/** Every new hologram is a monitor you plug in: Extend on the next free virtual display. */
+/** Laptop + monitors (spec 5.10): the first hologram mirrors your screen; each further one is a new Extend monitor. */
 class PlacementPlanTest {
     private static PlacementPlan.Existing e(Mode m, int slot) {
         return new PlacementPlan.Existing(m, slot);
     }
 
     @Test
-    void firstHologramIsDisplayOne() {
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 1), PlacementPlan.next(List.of()));
+    void firstHologramMirrors() {
+        assertEquals(Mode.MIRROR, PlacementPlan.next(List.of()).mode());
     }
 
     @Test
-    void eachNewOneTakesTheNextFreeDisplay() {
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 2), PlacementPlan.next(List.of(e(Mode.EXTEND, 1))));
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 3), PlacementPlan.next(List.of(e(Mode.EXTEND, 1), e(Mode.EXTEND, 2))));
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 2), PlacementPlan.next(List.of(e(Mode.EXTEND, 1), e(Mode.EXTEND, 3))),
-                "a gap is filled first");
+    void afterTheMirrorEachNewOneTakesTheNextFreeDisplay() {
+        assertEquals(new PlacementPlan.Choice(Mode.MIRROR, 1), PlacementPlan.next(List.of()), "the Mirror holds slot 1");
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 2), PlacementPlan.next(List.of(e(Mode.MIRROR, 1))),
+                "the Mirror's slot stays free for it, so switching it to Extend later never collides");
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 3), PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.EXTEND, 2))));
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 2),
+                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.EXTEND, 3))), "a gap is filled first");
+    }
+
+    @Test
+    void noMirrorLeftTheNextOneMirrorsAgain() {
+        assertEquals(new PlacementPlan.Choice(Mode.MIRROR, 3), PlacementPlan.next(List.of(e(Mode.EXTEND, 1), e(Mode.EXTEND, 2))),
+                "Extend monitors only: the next one is the laptop's screen (on a free slot for a later switch)");
+        assertEquals(Mode.MIRROR, PlacementPlan.next(List.of(e(Mode.WINDOW, 1))).mode(), "a Window hologram is no mirror");
     }
 
     @Test
     void allDisplaysTakenFallsBackToDisplayOne() {
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 1),
-                PlacementPlan.next(List.of(e(Mode.EXTEND, 1), e(Mode.EXTEND, 2), e(Mode.EXTEND, 3), e(Mode.EXTEND, 4))));
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 1), PlacementPlan.next(List.of(e(Mode.MIRROR, 1),
+                e(Mode.EXTEND, 2), e(Mode.EXTEND, 3), e(Mode.EXTEND, 4))));
     }
 
     @Test
-    void mirrorAndWindowHologramsDontUseDisplays() {
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 1),
-                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.WINDOW, 1), e(Mode.MIRROR, 2))));
+    void windowHologramsDontHoldADisplayMirrorsDo() {
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 3),
+                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.WINDOW, 3), e(Mode.MIRROR, 2))));
     }
 }

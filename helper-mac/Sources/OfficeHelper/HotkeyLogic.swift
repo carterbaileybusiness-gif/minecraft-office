@@ -30,7 +30,7 @@ struct ExitChordDetector {
 }
 
 /// What zooming into a surface does, by what it shows. Extend: the cursor moves onto the virtual display and is
-/// clamped there. Window: the window is placed over Minecraft. Mirror: nothing (view-only on a Mac, spec 5.9). Zoom
+/// clamped there. Window: the window is placed over Minecraft. Mirror: nothing (it is used in-world instead, spec 5.10). Zoom
 /// itself is retired on a Mac; the messages stay for protocol compatibility.
 enum ZoomStyle: Equatable {
     case mirror, display, window

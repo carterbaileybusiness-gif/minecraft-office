@@ -1,4 +1,5 @@
 import AppKit
+import Carbon // IsSecureEventInputEnabled
 import CoreGraphics
 
 /// In-world use for the mod: the player's crosshair is the mouse on their holograms (spec 5.9).
@@ -18,6 +19,8 @@ import CoreGraphics
     var minecraftPid: () -> pid_t? = { nil }
     /// Bounds (global points) and pixel size of a slot's virtual display.
     var display: (Int) -> (bounds: CGRect, width: Int, height: Int)? = { _ in nil }
+    /// The main display's bounds (global points): slot 0, a Mirror hologram.
+    var mainBounds: () -> CGRect = { .zero }
     var activateMinecraft: () -> Void = {}
 
     private var drag = DragMachine()
@@ -26,10 +29,13 @@ import CoreGraphics
     private var keyTap: CFMachPort?
     private var buttonPoll: Timer?
     private var activationWait = 0
+    private var clickWait = 0
     /// Physical motion not sent yet (points; fractions kept, so a slow trackpad drag still turns the head).
     private var pending = DeltaAccumulator()
     private var flushScheduled = false
     private var activationObserver: NSObjectProtocol?
+    private var secure = SecureInputWatch()
+    private var secureTimer: Timer?
 
     /// The one instance the C tap callbacks reach (they can't capture context).
     nonisolated(unsafe) static weak var current: InWorldInput?
@@ -46,7 +52,7 @@ import CoreGraphics
         case .pointerDown(let p):
             guard let point = point(p), let button = p.button else { return }
             if typing.active { perform(typing.exit()) }
-            perform(drag.down(at: point, button: button))
+            whenReachable(point, slot: p.slot) { self.perform(self.drag.down(at: point, button: button)) }
         case .pointerMove(let p):
             if drag.isActive, let point = point(p, quiet: true) { perform(drag.move(to: point)) }
         case .pointerUp:
@@ -54,10 +60,17 @@ import CoreGraphics
         case .click(let p):
             guard let point = point(p), let button = p.button else { return }
             if drag.isActive { perform(drag.cancel()) }
-            click(at: point, button: button)
+            whenReachable(point, slot: p.slot) { self.click(at: point, button: button) }
         case .scroll(let p):
-            guard let point = point(PointerPayload(slot: p.slot, x: p.x, y: p.y, button: nil)) else { return }
-            EventInjector.scrollHID(at: point, dx: Int32(clamping: p.dx), dy: Int32(clamping: p.dy))
+            guard let point = point(PointerPayload(slot: p.slot, x: p.x, y: p.y, button: nil, w: p.w, h: p.h)) else { return }
+            whenReachable(point, slot: p.slot) {
+                if p.slot == PointerTarget.mainSlot {
+                    // Mirror: Minecraft is click-through for a moment; a wheel event of the player's in that moment
+                    // lands where the cursor is, so put the (hidden) cursor at the same point.
+                    CGWarpMouseCursorPosition(point)
+                }
+                EventInjector.scrollHID(at: point, dx: Int32(clamping: p.dx), dy: Int32(clamping: p.dy))
+            }
         case .exitTyping:
             perform(typing.exit())
         default:
@@ -79,21 +92,74 @@ import CoreGraphics
             if !quiet { send(.error(ErrorPayload(code: "no_accessibility", message: "in-world use needs Accessibility"))) }
             return nil
         }
-        guard let d = display(p.slot) else {
-            if !quiet { send(.error(ErrorPayload(code: "not_found", message: "no display for slot \(p.slot)"))) }
+        switch PointerTarget.globalPoint(slot: p.slot, x: p.x, y: p.y, w: p.w, h: p.h, main: mainBounds(), display: display) {
+        case .success(let point):
+            return point
+        case .failure(let failure):
+            if !quiet {
+                let message = failure == .noPictureSize ? "slot 0 (the main display) needs w and h" : "no display for slot \(p.slot)"
+                send(.error(ErrorPayload(code: failure == .noPictureSize ? "bad_request" : "not_found", message: message)))
+            }
             return nil
         }
-        return PointerMapping.globalPoint(x: p.x, y: p.y, width: d.width, height: d.height, bounds: d.bounds)
+    }
+
+    /// Mirror (slot 0): the mod made Minecraft's window click-through just before sending, but the window server applies
+    /// that a moment later (inputprobe M2/M5: a click posted at once still hit Minecraft). Wait until the window that a
+    /// click at `point` would hit is no longer Minecraft's (at most 300 ms), then act. Other slots: at once.
+    private func whenReachable(_ point: CGPoint, slot: Int, _ action: @escaping () -> Void) {
+        guard slot == PointerTarget.mainSlot, let pid = minecraftPid() else { action(); return }
+        let start = Date()
+        func poll() {
+            let hit = EventInjector.hitWindowPid(at: point)
+            let waited = Date().timeIntervalSince(start)
+            if hit != pid || waited > 0.3 {
+                if waited > 0.001 || hit == pid {
+                    log("mirror: \(hit == pid ? "Minecraft still takes clicks after 300 ms; posting anyway" : "click-through after \(Int(waited * 1000)) ms")")
+                }
+                action()
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.005) { MainActor.assumeIsolated { poll() } }
+        }
+        poll()
     }
 
     // MARK: Click → typing mode
 
+    /// The app under the point comes forward first (as for a drag), so the click lands in it — the caret goes where you
+    /// clicked, a button presses — instead of only activating it (inputprobe M2 / E2: without this, a first click into
+    /// an inactive TextEdit left the caret where it was).
     private func click(at point: CGPoint, button: PointerButton) {
-        EventInjector.hidClick(at: point, button: button)
-        let effects = typing.enter()
-        perform(effects)
-        observeMinecraft()
-        log("click \(button) at \(Int(point.x)),\(Int(point.y)): typing")
+        clickWait += 1
+        let wait = clickWait
+        bringForward(under: point, isCurrent: { [weak self] in self?.clickWait == wait }) { [weak self] target in
+            guard let self else { return }
+            EventInjector.hidClick(at: point, button: button)
+            let effects = self.typing.enter(target: target)
+            self.perform(effects)
+            self.observeActivations()
+            self.watchSecureInput()
+            self.log("click \(button) at \(Int(point.x)),\(Int(point.y)): typing")
+        }
+    }
+
+    /// While typing: report secure input going on / off (it hides Esc from the tap), twice a second.
+    private func watchSecureInput() {
+        secureTimer?.invalidate()
+        secure.reset()
+        reportSecureInput()
+        secureTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reportSecureInput() }
+        }
+    }
+
+    private func reportSecureInput() {
+        guard typing.active else { secureTimer?.invalidate(); secureTimer = nil; return }
+        if let on = secure.sample(IsSecureEventInputEnabled()) {
+            log("typing: secure input \(on ? "on" : "off")")
+            send(.secureInput(SecureInputPayload(on: on)))
+        }
     }
 
     private func perform(_ effects: [TypingMachine.Effect]) {
@@ -107,17 +173,21 @@ import CoreGraphics
                 send(.typingExit(ReasonPayload(reason: reason)))
             }
         }
-        if !typing.active { stopObservingMinecraft() }
+        if !typing.active {
+            stopObservingMinecraft()
+            secureTimer?.invalidate(); secureTimer = nil
+        }
     }
 
-    private func observeMinecraft() {
+    /// Typing ends when Minecraft becomes active again, or when some third app does (TypingMachine.appActivated).
+    private func observeActivations() {
         guard activationObserver == nil else { return }
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             MainActor.assumeIsolated {
-                guard let self, let pid = self.minecraftPid(), app?.processIdentifier == pid else { return }
-                self.perform(self.typing.minecraftActivated())
+                guard let self, let pid = app?.processIdentifier, pid != getpid() else { return }
+                self.perform(self.typing.appActivated(pid: pid, isMinecraft: pid == self.minecraftPid()))
             }
         }
     }
@@ -240,11 +310,20 @@ import CoreGraphics
     private func activateApp(under point: CGPoint) {
         activationWait += 1
         let wait = activationWait
+        bringForward(under: point, isCurrent: { [weak self] in self?.activationWait == wait && self?.drag.phase == .activating }) { [weak self] _ in
+            guard let self else { return }
+            self.perform(self.drag.activated())
+        }
+    }
+
+    /// Activates the app whose window is under `point` (not Minecraft, not the helper), then runs `then` once it is
+    /// frontmost (at most 300 ms; at once over the desktop). `isCurrent` false = a newer gesture took over: do nothing.
+    private func bringForward(under point: CGPoint, isCurrent: @escaping () -> Bool, then: @escaping (pid_t?) -> Void) {
         var excluded: Set<pid_t> = [getpid()]
         if let pid = minecraftPid() { excluded.insert(pid) }
         guard let target = EventInjector.window(at: point, excluding: excluded),
               let app = NSRunningApplication(processIdentifier: target.pid) else {
-            perform(drag.activated()) // the desktop: nothing to bring forward
+            then(nil) // the desktop: nothing to bring forward (Finder will take the click: the first app activated)
             return
         }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != target.pid {
@@ -253,9 +332,9 @@ import CoreGraphics
         }
         let start = Date()
         func poll() {
-            guard wait == activationWait, drag.phase == .activating else { return }
+            guard isCurrent() else { return }
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid || Date().timeIntervalSince(start) > 0.3 {
-                perform(drag.activated())
+                then(target.pid)
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { MainActor.assumeIsolated { poll() } }

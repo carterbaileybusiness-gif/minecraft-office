@@ -1,6 +1,11 @@
 package local.carter.office.client.render;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.jspecify.annotations.Nullable;
+
+import local.carter.office.client.dock.DockLayout;
 
 import local.carter.office.core.HologramGeometry.Corner;
 import local.carter.office.core.HologramSpec;
@@ -29,8 +34,10 @@ public class HologramRenderState extends BlockEntityRenderState {
 	public @Nullable Corner dragCorner;
 	/** New size while a corner drag is in progress: drawn as a cyan outline. */
 	public @Nullable HologramSpec outline;
-	/** In-world pointer (owner only): draw the cursor at (cursorU, cursorV) of the picture. */
-	public boolean cursor;
-	public float cursorU;
-	public float cursorV;
+	/** The mini Dock (owner's live Extend holograms only): its layout, each icon's texture (null: not loaded yet). */
+	public @Nullable DockLayout dock;
+	public final List<@Nullable Identifier> dockIcons = new ArrayList<>();
+	/** The icon under the crosshair (-1: none) and its name. */
+	public int dockHover = -1;
+	public String dockLabel = "";
 }

@@ -1,7 +1,9 @@
 package local.carter.office.client.pointer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.UUID;
 
@@ -17,7 +19,7 @@ import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
 import local.carter.office.core.Vec3d;
 
-/** The crosshair's hit on a drawn hologram → the pixel of its virtual display. */
+/** The crosshair's hit on a drawn hologram → the pixel of its virtual display (Extend) or of the main display (Mirror). */
 class PointerPointTest {
 	private static final UUID ME = UUID.fromString("00000000-0000-0000-0000-00000000000a");
 
@@ -36,8 +38,25 @@ class PointerPointTest {
 	}
 
 	@Test
-	void onlyExtendHologramsAndOnlyThePicture() {
-		assertNull(PointerPoint.of(spec(Mode.MIRROR, Shape.WIDE_16_9, 1), new Hit(0.5, 0.5, 2, null)), "Mirror is view-only");
+	void aMirrorPointsAtTheMainDisplayAsAShareOfItsPicture() {
+		// spec 5.10: the Mirror is the laptop's own screen, slot 0; (x, y) of the shape's picture + its size, which the
+		// helper maps by proportion onto the main display's points (whatever its size or Retina scale)
+		HologramSpec mirror = spec(Mode.MIRROR, Shape.WIDE_16_9, 3);
+		PointerPoint centre = PointerPoint.of(mirror, new Hit(0.5, 0.5, 2, null));
+		assertEquals(new PointerPoint(0, 960, 540, 1920, 1080), centre, "the display slot of a Mirror spec doesn't matter");
+		assertTrue(centre.onMain());
+		assertEquals(new PointerPoint(0, 0, 0, 1920, 1080), PointerPoint.of(mirror, new Hit(0, 0, 2, null)));
+		assertEquals(new PointerPoint(0, 1919, 1079, 1920, 1080), PointerPoint.of(mirror, new Hit(1, 1, 2, null)));
+		assertEquals(new PointerPoint(0, 270, 1440, 1080, 1920), PointerPoint.of(spec(Mode.MIRROR, Shape.TALL_9_16, 1), new Hit(0.25, 0.75, 2, null)),
+				"a tall Mirror: its own picture size");
+		// e.g. the helper then maps (960, 540) of 1920 x 1080 onto a 1440 x 900-point main display at (720.4, 450.4)
+		assertFalse(new PointerPoint(1, 960, 540).onMain());
+		assertFalse(centre.near(new PointerPoint(1, 960, 540), 6), "the Mirror and display 1 are different screens");
+	}
+
+	@Test
+	void onlyExtendAndMirrorHologramsAndOnlyThePicture() {
+		assertNull(PointerPoint.of(spec(Mode.MIRROR, Shape.WIDE_16_9, 1), new Hit(1.02, 0.5, 2, null)), "just off the Mirror's picture");
 		assertNull(PointerPoint.of(spec(Mode.WINDOW, Shape.WIDE_16_9, 1), new Hit(0.5, 0.5, 2, null)), "one window is view-only");
 		// the owner's corner grab zone reaches just outside the picture: that is not a pixel
 		assertNull(PointerPoint.of(spec(Mode.EXTEND, Shape.WIDE_16_9, 1), new Hit(-0.02, 0.5, 2, HologramGeometry.Corner.TOP_LEFT)));

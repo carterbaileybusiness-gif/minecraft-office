@@ -137,10 +137,12 @@ downloads the small helper (OfficeHelper, a few MB, from this project's GitHub p
   `tccutil reset Accessibility local.carter.office-helper`
 
 Good to know on a Mac:
-- **Extend** (every new hologram) gives it its own brand new virtual screen, like plugging in another monitor. It
-  shows up as "Office Display 1" (2, 3...) in System Settings, Displays, and goes away when you quit Minecraft.
-  **Window** mode shows one app window instead, and **Mirror** (optional, view-only) shows your Mac's screen,
-  everything except Minecraft itself.
+- Like a laptop with monitors: your **first** hologram is **Mirror**, your Mac's own screen (everything except
+  Minecraft itself), and you can use it right there. Every **further** hologram is **Extend**: a brand new virtual
+  screen, like plugging in another monitor. It shows up as "Office Display 1" (2, 3...) in System Settings, Displays,
+  and goes away when you quit Minecraft. **Window** mode shows one app window instead.
+- Minecraft opens as a borderless window filling your screen (not macOS's separate full-screen space, where your
+  other windows wouldn't be on the Mirror). Prefer a normal window? Launch with `-Doffice.borderless=false`.
 - Protected video (Netflix and similar) shows black, and password boxes may not accept typing.
 
 <a id="windows"></a>
@@ -162,8 +164,9 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
 
 1. **Get emitters.** Your first-join starter kit has 4. Need more? Type `/emitter` in chat (limit: 8 holograms each).
 2. **Place it** like a block, on the floor, a desk, anywhere. The hologram appears above it. It can float mid-air.
-   On a Mac each hologram is a new screen (**Extend**), like plugging in monitor #2, #3. On Windows it is your screen
-   (**Mirror**): exactly what you see on your computer, minus Minecraft.
+   On a Mac your first hologram is your own screen (**Mirror**, minus Minecraft), and each further one is a new
+   screen (**Extend**), like plugging monitors #2, #3 into a laptop. On Windows every hologram is your screen
+   (**Mirror**).
 3. **Resize.** Hold the emitter, point at a corner of the hologram, then **hold right-click and drag**. A cyan outline
    shows the new size. Let go to set it. Anything from tiny to wall-sized.
 4. **Settings.** Right-click the emitter itself:
@@ -175,16 +178,26 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
      "Private" panel), or **Show to...** (pick specific players).
    - **Remove** to pick it back up.
 5. **Move it.** Hold **Shift**, then right-click the hologram and drag. **Scroll** while dragging to rotate it.
-6. **Use it (Mac).** With an empty hand (or anything but an emitter), look at your hologram: a small pointer sits
-   where your crosshair is. Your crosshair is the mouse:
+6. **Use it (Mac).** With an empty hand (or anything but an emitter), look at your hologram: Minecraft's crosshair
+   is the mouse, on your Mirror and on every Extend screen:
    - **Left-click** clicks there, **right-click** right-clicks there. Nothing in the world is broken or placed.
    - **Hold left-click and turn your head** to drag: select text, move a window, even carry it over to another
      hologram, like between real monitors.
    - **Scroll** scrolls the app you aim at (your hotbar stays).
    - **Clicking into an app lets you type:** Minecraft stands still and shows "Typing — Esc to return". Press **Esc**
-     (the app never gets it) or click back into Minecraft to look around again.
-   - When you join, your open windows move onto your first hologram; when you leave, they go back where they were.
-   - **Mirror** holograms are view-only on a Mac.
+     (the app never gets it) or click back into Minecraft to look around again. On your **Mirror**, use **Esc** or
+     **⌘-Tab** back to Minecraft (clicks go through Minecraft to your apps while you type there). In a **password
+     field** macOS hides Esc from everyone: Minecraft says so; press **⌘-Tab**. Switching to any other app also ends
+     typing.
+   - The Mirror needs Minecraft in a window: if you turned on Fullscreen in Options → Video, turn it off (Minecraft
+     then fills the screen as a borderless window); chat reminds you.
+   - Your windows stay where they are when you join or leave. To put one on another screen, **drag its title bar**
+     from your Mirror onto an Extend hologram, just like onto a real monitor.
+   - **The mini Dock** along the bottom of each Extend hologram (only you see it): click Chrome, Safari, Finder,
+     Notes, Terminal, Claude, ChatGPT, Music or YouTube and it opens on that screen (only apps you have are shown).
+     **All apps** (the grid) searches every app on your Mac.
+   - While you use your Mirror, Minecraft lets your clicks through to the apps under it and stays on top; if you switch
+     to another app yourself (Cmd-Tab), Minecraft steps back as usual.
 7. **Work on it (Windows).** **Click your hologram.** The camera zooms in until it fills your view, and your real
    mouse and keyboard now control your real computer. On a **Mirror** hologram, Minecraft is minimized and you are
    simply on your normal desktop. **Double-tap Esc**, or click back into Minecraft (taskbar), to come back. Backup:

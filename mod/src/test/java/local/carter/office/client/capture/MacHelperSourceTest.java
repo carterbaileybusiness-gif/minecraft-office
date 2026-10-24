@@ -19,6 +19,7 @@ import local.carter.office.client.helper.HelperConnection;
 import local.carter.office.client.helper.HelperProtocol.Capture;
 import local.carter.office.client.helper.HelperProtocol.CaptureKind;
 import local.carter.office.client.helper.HelperProtocol.CreateDisplay;
+import local.carter.office.client.helper.HelperProtocol.ListApps;
 import local.carter.office.client.helper.HelperProtocol.Display;
 import local.carter.office.client.helper.HelperProtocol.Ended;
 import local.carter.office.client.helper.HelperProtocol.Frame;
@@ -62,7 +63,9 @@ class MacHelperSourceTest {
 
 				@Override
 				public boolean send(final Message m) {
-					sent.add(m);
+					if (!(m instanceof ListApps)) { // the Dock's app list (asked on every connect) isn't a capture's business
+						sent.add(m);
+					}
 					return true;
 				}
 
