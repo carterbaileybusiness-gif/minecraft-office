@@ -386,6 +386,23 @@ public class HologramGameTests {
 	}
 
 	@GameTest
+	@SuppressWarnings("removal")
+	public void handbookCommandSkipsWhenAlreadyCurrent(GameTestHelper h) {
+		ServerPlayer a = h.makeMockServerPlayerInLevel();
+		try {
+			clearHandbooks(a);
+			a.getInventory().setItem(7, StarterKit.handbook());
+			h.getLevel().getServer().getCommands().performPrefixedCommand(a.createCommandSourceStack(), "handbook");
+			h.assertValueEqual(countHandbooks(a), 1, "no second copy when already current");
+			h.assertTrue(StarterKit.giveOrUpdateHandbook(a) == StarterKit.HandbookResult.ALREADY_CURRENT, "reports already current");
+			h.assertValueEqual(countHandbooks(a), 1, "still one copy");
+		} finally {
+			h.getLevel().getServer().getPlayerList().remove(a);
+		}
+		h.succeed();
+	}
+
+	@GameTest
 	public void handbookIsAboutGrimoireNotWizards(GameTestHelper h) {
 		StringBuilder text = new StringBuilder();
 		for (Filterable<Component> page : StarterKit.handbook().get(DataComponents.WRITTEN_BOOK_CONTENT).pages()) {

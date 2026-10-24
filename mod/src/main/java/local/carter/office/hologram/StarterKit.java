@@ -43,38 +43,53 @@ public final class StarterKit {
 		}
 	}
 
+	public enum HandbookResult { GIVEN, UPDATED, ALREADY_CURRENT }
+
 	/** {@code /handbook}: anyone can run it. */
 	public static void registerCommand(final CommandDispatcher<CommandSourceStack> dispatcher) {
 		dispatcher.register(Commands.literal("handbook").executes(ctx -> {
 			CommandSourceStack source = ctx.getSource();
-			boolean replaced = giveOrUpdateHandbook(source.getPlayerOrException());
-			source.sendSuccess(() -> Component.literal(replaced ? "Updated your Office Handbook." : "Here's the Office Handbook."), false);
+			HandbookResult result = giveOrUpdateHandbook(source.getPlayerOrException());
+			String message = switch (result) {
+				case GIVEN -> "Here's the Office Handbook.";
+				case UPDATED -> "Updated your Office Handbook.";
+				case ALREADY_CURRENT -> "You already have the latest Office Handbook.";
+			};
+			source.sendSuccess(() -> Component.literal(message), false);
 			return 1;
 		}));
 	}
 
 	/**
-	 * Replaces every outdated copy of the handbook (same title, different pages) in place; if there was none,
-	 * gives a fresh copy. Returns whether something was replaced.
+	 * Replaces every outdated copy of the handbook (same title, different pages) in place. With none outdated, gives a
+	 * fresh copy unless the player already holds a current one.
 	 */
-	public static boolean giveOrUpdateHandbook(final ServerPlayer player) {
+	public static HandbookResult giveOrUpdateHandbook(final ServerPlayer player) {
 		ItemStack fresh = handbook();
 		List<Filterable<Component>> current = fresh.get(DataComponents.WRITTEN_BOOK_CONTENT).pages();
 		Inventory inv = player.getInventory();
 		boolean replaced = false;
+		boolean hasCurrent = false;
 		for (int i = 0; i < inv.getContainerSize(); i++) {
 			ItemStack held = inv.getItem(i);
 			WrittenBookContent content = held.get(DataComponents.WRITTEN_BOOK_CONTENT);
-			if (held.is(Items.WRITTEN_BOOK) && content != null && HANDBOOK_TITLE.equals(content.title().raw())
-					&& !content.pages().equals(current)) {
-				inv.setItem(i, handbook());
-				replaced = true;
+			if (held.is(Items.WRITTEN_BOOK) && content != null && HANDBOOK_TITLE.equals(content.title().raw())) {
+				if (content.pages().equals(current)) {
+					hasCurrent = true;
+				} else {
+					inv.setItem(i, handbook());
+					replaced = true;
+				}
 			}
 		}
-		if (!replaced) {
-			give(player, fresh);
+		if (replaced) {
+			return HandbookResult.UPDATED;
 		}
-		return replaced;
+		if (hasCurrent) {
+			return HandbookResult.ALREADY_CURRENT;
+		}
+		give(player, fresh);
+		return HandbookResult.GIVEN;
 	}
 
 	public static ItemStack handbook() {
