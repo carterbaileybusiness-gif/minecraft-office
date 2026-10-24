@@ -26,6 +26,8 @@ import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -42,7 +44,8 @@ import net.minecraft.world.phys.Vec3;
  * foes ({@link Enemy}: the lanes' control ruling) are thrown {@link DragonGeometry#KNOCK} outward + {@link DragonGeometry#KNOCK_UP} up;
  * whatever burns there is put out;</li>
  * <li><b>permanent flood</b>: real water sources in the cells {@link DragonGeometry#flood} picks (radius
- * {@code min(12, 6 + (level − 7))}, no higher than the impact, each on solid ground or water, at most 600), and
+ * {@code min(12, 6 + (level − 7))}, air or plants and snow water washes away, no higher than the impact, each on solid ground
+ * or water, each layer closed under vanilla's two-source rule so every source is logged, at most 600), and
  * {@link DragonGeometry#MUD_CHANCE} of the grass and dirt tops within radius + 3 (at most 12 from the impact) turned to mud.
  * Both go through one {@link EditTier#ULTIMATE} batch at the impact cell: claims, spawn protection, block entities and the edit
  * log apply as for any terrain spell, and {@code /magic undo} takes the water back.</li>
@@ -132,8 +135,8 @@ public final class WaterDragon implements Spell {
 
 		private void flood(ServerLevel level) {
 			if (!level.isLoaded(cell)) return;
-			List<BlockPos> sources = DragonGeometry.flood(cell, floodRadius, p -> level.isLoaded(p) && level.getBlockState(p).isAir(),
-					p -> holdsWater(level, p), DragonGeometry.MAX_SOURCES);
+			List<BlockPos> sources = DragonGeometry.flood(cell, floodRadius, p -> open(level, p), p -> holdsWater(level, p),
+					p -> level.isLoaded(p) && level.getFluidState(p).isSourceOfType(Fluids.WATER), DragonGeometry.MAX_SOURCES);
 			List<BlockPos> muddy = DragonGeometry.mud(cell, mudRadius, p -> dirtTop(level, p), ctx.seed());
 			try (EditBatch b = ctx.kit().terrain().begin(ctx, cell, EditTier.ULTIMATE)) {
 				BlockState w = Blocks.WATER.defaultBlockState();
@@ -143,11 +146,26 @@ public final class WaterDragon implements Spell {
 			}
 		}
 
-		/** Water may stand on {@code p}: a block with a solid top, or water. */
+		/**
+		 * Water may stand on {@code p}: a block with a solid top, a solid block (vanilla's own test for turning water into a
+		 * source above it), or water.
+		 */
 		private static boolean holdsWater(ServerLevel level, BlockPos p) {
 			if (!level.isLoaded(p)) return false;
 			BlockState s = level.getBlockState(p);
-			return s.getFluidState().is(FluidTags.WATER) || s.isFaceSturdy(level, p, Direction.UP);
+			return s.getFluidState().is(FluidTags.WATER) || s.isSolid() || s.isFaceSturdy(level, p, Direction.UP);
+		}
+
+		/**
+		 * The flood may fill {@code p}: air, or something water washes away (short grass, flowers, a snow layer) with no fluid,
+		 * no block entity and no tall half (the batch refuses those).
+		 */
+		private static boolean open(ServerLevel level, BlockPos p) {
+			if (!level.isLoaded(p)) return false;
+			BlockState s = level.getBlockState(p);
+			if (s.isAir()) return true;
+			return s.canBeReplaced() && s.getFluidState().isEmpty() && !s.hasBlockEntity()
+					&& !s.hasProperty(BlockStateProperties.DOUBLE_BLOCK_HALF);
 		}
 
 		/** Grass or dirt with nothing solid on top (air, water or a plant): it may turn to mud. */

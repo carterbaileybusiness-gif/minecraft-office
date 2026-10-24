@@ -31,7 +31,9 @@ final class WaterSphere extends SingleQuadParticle implements LightPipeline.Exte
 		PRISON
 	}
 
-	private static final int RIM_POINTS = 48;
+	private static final int RIM_POINTS = 120;
+	/** Points of the prison's round water surface. */
+	private static final int SHELL = 110;
 	/** Soap-film hues the bubble's rim runs through. */
 	private static final int[] FILM = {0xFF9BE8, 0xFFE59B, 0x9BFFF0, 0xA8B8FF};
 
@@ -148,12 +150,12 @@ final class WaterSphere extends SingleQuadParticle implements LightPipeline.Exte
 		double rho = r * Math.sqrt(d * d - r * r) / d;
 		Vec3 n = to.scale(1 / d);
 		Vec3[] p = WaterFx.plane(n);
-		float wobble = bubble ? 0.025F : 0.05F;
+		float wobble = bubble ? 0.015F : 0.03F;
 		float speed = bubble ? 0.22F : 0.12F;
 		for (int i = 0; i <= RIM_POINTS; i++) {
 			double th = Mth.TWO_PI * i / RIM_POINTS;
-			double w = 1 + wobble * Math.sin(3 * th + t * speed) + 0.6 * wobble * Math.sin(5 * th - t * speed * 1.7)
-					+ 0.03 * ripple * Math.sin(7 * th + t * 1.3);
+			double w = 1 + wobble * Math.sin(2 * th + t * speed) + 0.5 * wobble * Math.sin(3 * th - t * speed * 1.7)
+					+ 0.012 * ripple * Math.sin(16 * th + t * 2.1);
 			rim[i] = cc.add(p[0].scale(Math.cos(th) * rho * w)).add(p[1].scale(Math.sin(th) * rho * w));
 			rimW[i] = (bubble ? 0.2F : 0.32F) * (1 + 0.4F * ripple);
 			rimA[i] = a;
@@ -161,7 +163,10 @@ final class WaterSphere extends SingleQuadParticle implements LightPipeline.Exte
 		// The fill: a film of see-through water, and faint light in it.
 		if (!bubble) pen.water(true).blob(c, r * 2.1F, WaterFx.BODY, 0.16F * a);
 		pen.water(false).blob(c, r * 2.3F, WaterFx.BODY, (bubble ? 0.05F : 0.1F) * a);
-		if (!bubble) pen.blob(c, r * 1.4F, WaterFx.DEEP, 0.1F * a);
+		if (!bubble) {
+			pen.blob(c, r * 1.4F, WaterFx.DEEP, 0.1F * a);
+			shell(c, r, t, a);
+		}
 		// The rim: soft glow round the whole edge, in bands of colour.
 		int bands = bubble ? FILM.length * 2 : 1;
 		if (bubble) {
@@ -169,21 +174,40 @@ final class WaterSphere extends SingleQuadParticle implements LightPipeline.Exte
 				int from = b * RIM_POINTS / bands;
 				int to2 = (b + 1) * RIM_POINTS / bands;
 				int hue = WaterPen.mix(body, FILM[(b + (int) (t / 24)) % FILM.length], 0.45F);
-				pen.tube(slice(rim, from, to2), slice(rimW, from, to2), slice(rimA, from, to2), to2 - from + 1, 1F, 0.45F, 0.06F, hue, 0.3F);
+				pen.tube(slice(rim, from, to2), slice(rimW, from, to2), slice(rimA, from, to2), to2 - from + 1, 1F, 0.18F, 0.04F, hue, 0.13F);
 			}
 		} else {
-			pen.tube(rim, rimW, rimA, RIM_POINTS + 1, 1F, 0.4F, 0.06F, body, 0.32F);
+			pen.tube(rim, rimW, rimA, RIM_POINTS + 1, 1F, 0.18F, 0.04F, body, 0.15F);
 		}
 		if (bubble) {
 			// The film is thickest seen edge-on: a soft band of light just inside the rim, fading inward.
 			for (int i = 0; i <= RIM_POINTS; i++) band[i] = cc.add(rim[i].subtract(cc).scale(0.88));
 			for (int i = 0; i <= RIM_POINTS; i++) rimW[i] = (float) (rho * 0.3);
-			pen.tube(band, rimW, rimA, RIM_POINTS + 1, 1F, 0.2F, 0.1F, WaterFx.LIGHT, 0.045F);
+			pen.tube(band, rimW, rimA, RIM_POINTS + 1, 1F, 0.1F, 0.05F, WaterFx.LIGHT, 0.022F);
 		}
 		for (int i = 0; i <= RIM_POINTS; i++) rimW[i] = bubble ? 0.05F : 0.07F;
 		pen.line(rim, rimW, rimA, RIM_POINTS + 1, WaterFx.FOAM, bubble ? 0.5F : 0.42F);
 		glint(cc, p, rho, a);
 	}
+
+	/**
+	 * The prison's round surface: soft light laid over a sphere of points (a Fibonacci spiral, turning slowly), overlapping so
+	 * thickly it reads as one glowing skin of water, round over the block-shaped water inside it. Added light, not the
+	 * translucent layer: that one drops faint pixels, which would leave the skin dotted.
+	 */
+	private void shell(Vec3 c, float r, float t, float a) {
+		double spin = t * 0.02;
+		for (int i = 0; i < SHELL; i++) {
+			double y = 1 - 2 * (i + 0.5) / SHELL;
+			double s = Math.sqrt(1 - y * y);
+			double th = i * 2.399963229728653 + spin;
+			double rr = r * (0.97 + 0.03 * Math.sin(t * 0.15 + i));
+			pen.blob(c.x + Math.cos(th) * s * rr, c.y + y * rr, c.z + Math.sin(th) * s * rr, 1.8F, SHELL_WATER, 0.055F * a);
+		}
+	}
+
+	/** The prison surface's water (RGB). */
+	private static final int SHELL_WATER = 0x3A86E8;
 
 	/** A bright arc high on one side, and a spot of light: the sheen that makes it read as round. */
 	private void glint(Vec3 cc, Vec3[] p, double rho, float a) {
@@ -205,7 +229,7 @@ final class WaterSphere extends SingleQuadParticle implements LightPipeline.Exte
 		double ring = Math.sqrt(Math.max(0, r * r - drop * drop));
 		for (int i = 0; i <= RIM_POINTS; i++) {
 			double th = Mth.TWO_PI * i / RIM_POINTS;
-			double w = 1 + 0.03 * Math.sin(3 * th + t * 0.2) + 0.05 * ripple * Math.sin(9 * th + t * 1.3);
+			double w = 1 + 0.015 * Math.sin(2 * th + t * 0.2) + 0.012 * ripple * Math.sin(16 * th + t * 2.1);
 			rim[i] = c.add(Math.cos(th) * ring * w, -drop + 0.05, Math.sin(th) * ring * w);
 			rimW[i] = 0.07F;
 			rimA[i] = a;

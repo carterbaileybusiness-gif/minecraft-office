@@ -160,7 +160,7 @@ public final class WaterPrison implements Spell {
 			return age < life;
 		}
 
-		/** One tick of held breath: air down by one; drowning only once it is used up; water breathers are immune. */
+		/** One tick of held breath: air down by {@link WaterPrisonGeometry#AIR_PER_TICK} (three times vanilla, so a full breath runs out within the prison); drowning only once it is used up; water breathers are immune. */
 		private void breathe(ServerLevel level, LivingEntity e) {
 			if (e.canBreatheUnderwater() || MobEffectUtil.hasWaterBreathing(e)) return;
 			boolean drowns = WaterPrisonGeometry.drowns(air);

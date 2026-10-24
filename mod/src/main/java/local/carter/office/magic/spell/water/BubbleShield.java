@@ -26,6 +26,9 @@ import net.minecraft.world.entity.projectile.FireworkRocketEntity;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.projectile.arrow.ThrownTrident;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.AbstractThrownPotion;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownExperienceBottle;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -36,7 +39,8 @@ import net.minecraft.world.phys.Vec3;
  * {@link BubbleShieldGeometry#RADIUS} about their middle follows them: every tick, each projectile not the caster's own that
  * is inside it or about to cross into it ({@link BubbleShieldGeometry#threatens}) is stopped. Stopped projectiles are
  * removed, except a thrown trident, which is turned back and drops by the bubble so nobody loses it. Arrows stuck in the
- * ground and firework rockets boosting someone's elytra are left alone. No block changes. A new bubble replaces the
+ * ground, firework rockets boosting someone's elytra, ender pearls, thrown potions and bottles o' enchanting pass through (a
+ * friend's pearl, splash heal or XP is never lost to the bubble). No block changes. A new bubble replaces the
  * caster's old one. It ends early if the caster dies, leaves or changes dimension.
  *
  * <p>Fx: {@code target} = the bubble's centre at the cast, {@code duration} = its life, {@code data[0]} = its radius.
@@ -89,10 +93,12 @@ public final class BubbleShield implements Spell {
 	}
 
 	/**
-	 * Whether the bubble stops {@code p} at all: not an arrow stuck in the ground, not a rocket boosting an elytra (the client fx asks too, for the ripples). A trident is
-	 * stopped by turning it back, see {@link #stop}.
+	 * Whether the bubble stops {@code p} at all: not an arrow stuck in the ground, a rocket boosting an elytra, an ender pearl, a
+	 * thrown potion or a bottle o' enchanting (the client fx asks too, for the ripples). A trident is stopped by turning it back,
+	 * see {@link #stop}.
 	 */
 	public static boolean stops(Projectile p) {
+		if (p instanceof ThrownEnderpearl || p instanceof AbstractThrownPotion || p instanceof ThrownExperienceBottle) return false;
 		if (p instanceof AbstractArrow a && flag(IN_GROUND, a)) return false;
 		return !(p instanceof FireworkRocketEntity r && flag(ATTACHED, r));
 	}

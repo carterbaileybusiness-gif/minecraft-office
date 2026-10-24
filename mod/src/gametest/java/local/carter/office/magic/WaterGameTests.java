@@ -29,7 +29,9 @@ import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.zombie.Drowned;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
+import net.minecraft.world.entity.projectile.arrow.ThrownTrident;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -339,8 +341,8 @@ public class WaterGameTests {
 		d.setNoAi(true);
 		Creeper c = h.spawn(EntityTypes.CREEPER, new BlockPos(20, 4, 12));
 		c.setNoAi(true);
-		// Nearly out of air: it drowns once the air is used up (vanilla: at -20, 2 damage).
-		c.setAirSupply(5);
+		// Low on air: it drowns once the air is used up (3 a tick; at -20, 2 damage, as vanilla).
+		c.setAirSupply(30);
 		int dAir = d.getAirSupply();
 		MagicTestKit.aim(p, new BlockPos(12, 5, 12));
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.WATER_PRISON, 0f), Result.CAST, "drowned prison");
@@ -348,8 +350,8 @@ public class WaterGameTests {
 		MagicAttachments.setMana(p, 200);
 		MagicTestKit.aim(p, new BlockPos(20, 5, 12));
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.WATER_PRISON, 0f), Result.CAST, "creeper prison");
-		h.runAfterDelay(15, () -> {
-			h.assertTrue(c.getAirSupply() < 0, "the creeper's air runs out (" + c.getAirSupply() + ")");
+		h.runAfterDelay(8, () -> {
+			h.assertTrue(c.getAirSupply() <= 15, "the creeper's air runs out fast (" + c.getAirSupply() + ")");
 			h.assertValueEqual(c.getHealth(), c.getMaxHealth(), "no drowning before the air is used up");
 		});
 		h.runAfterDelay(40, () -> {
@@ -495,13 +497,66 @@ public class WaterGameTests {
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WATER_DRAGON), Result.CAST, "result");
 		h.startSequence()
 				.thenWaitUntil(() -> h.assertTrue(sources(h, 4, 4) >= 50, "the flood landed"))
-				.thenIdle(5)
+				.thenIdle(30) // the water spreads; vanilla would make its own sources now if the flood weren't closed
 				.thenExecute(() -> {
+					int before = sources(h, 0, MagicTestKit.SIZE_Y - 1);
+					h.assertTrue(before >= 100, "positive control: the flood's sources are there before the undo (" + before + ")");
 					UndoReport r = MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
-					h.assertTrue(r.casts() == 1 && r.restored() >= 50, "undo takes the flood back: " + r);
-					h.assertFalse(h.getBlockState(DRAGON_CELL).getFluidState().isSource(), "the impact cell is no longer a source");
-					h.assertFalse(h.getBlockState(DRAGON_CELL.south(4)).getFluidState().isSource(), "nor one 4 out");
+					h.assertTrue(r.casts() == 1 && r.restored() == before, "undo restores every source there is: " + r + " of " + before);
+					h.assertValueEqual(sources(h, 0, MagicTestKit.SIZE_Y - 1), 0, "water sources after the undo");
 				})
+				.thenWaitUntil(() -> h.assertValueEqual(MagicTestKit.waterCount(h), 0, "the flowing water drains away"))
 				.thenSucceed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
+	public void bubbleShieldTurnsTridentBack(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 3);
+		// Positive control: the same trident at an unshielded player hits.
+		ServerPlayer bare = MagicTestKit.otherPlayer(h, new BlockPos(8, 4, 4));
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.BUBBLE_SHIELD, 0f), Result.CAST, "result");
+		ThrownTrident atCaster = trident(h, new BlockPos(16, 5, 12));
+		trident(h, new BlockPos(8, 5, 12));
+		double z0 = p.getZ();
+		h.runAfterDelay(25, () -> {
+			h.assertFalse(atCaster.isRemoved(), "a stranger's trident is not destroyed");
+			h.assertTrue(atCaster.getZ() > z0 + 1.5, "it was turned back outside the bubble: " + (atCaster.getZ() - z0));
+			h.assertValueEqual(p.getHealth(), 20f, "caster health");
+			h.assertTrue(bare.getHealth() < 20, "control: the unshielded player was hit (" + bare.getHealth() + ")");
+			h.succeed();
+		});
+	}
+
+	private static ThrownTrident trident(GameTestHelper h, BlockPos rel) {
+		Vec3 at = h.absoluteVec(Vec3.atCenterOf(rel));
+		ThrownTrident t = new ThrownTrident(h.getLevel(), at.x, at.y, at.z, new ItemStack(Items.TRIDENT));
+		t.pickup = AbstractArrow.Pickup.DISALLOWED;
+		t.setDeltaMovement(new Vec3(0, 0, -1.5));
+		h.getLevel().addFreshEntity(t);
+		return t;
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 100)
+	public void waterDragonFloodsOverGrassFlowersAndSnow(GameTestHelper h) {
+		ServerPlayer p = dragonCaster(h);
+		// Natural ground: a grass floor with short grass, a flower and a snow layer on it inside the flood.
+		MagicTestKit.fill(h, new BlockPos(1, 3, 1), new BlockPos(30, 3, 30), Blocks.GRASS_BLOCK);
+		BlockPos grass = DRAGON_CELL.west(2);
+		BlockPos flower = DRAGON_CELL.east(2).south();
+		BlockPos snow = DRAGON_CELL.north(3);
+		BlockPos far = new BlockPos(2, 4, 29); // well past the flood and its spill
+		h.setBlock(grass, Blocks.SHORT_GRASS);
+		h.setBlock(flower, Blocks.POPPY);
+		h.setBlock(snow, Blocks.SNOW);
+		h.setBlock(far, Blocks.SHORT_GRASS);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.WATER_DRAGON), Result.CAST, "result");
+		h.runAtTickTime(70, () -> {
+			for (BlockPos c : new BlockPos[] {grass, flower, snow}) {
+				h.assertTrue(h.getBlockState(c).getFluidState().isSourceOfType(Fluids.WATER), "flooded over at " + c + ": " + h.getBlockState(c));
+			}
+			h.assertBlockPresent(Blocks.SHORT_GRASS, far);
+			h.assertTrue(sources(h, 0, DRAGON_CELL.getY()) >= 100, "the flood landed");
+			h.succeed();
+		});
 	}
 }

@@ -13,7 +13,7 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>The sphere has radius {@link #RADIUS} about its centre (the target's middle at the cast). A creature whose middle is
  * within {@link #RADIUS} + {@link #HOLD} is inside. Each tick it is pulled to the centre with a velocity of {@link #PULL}
- * × the gap, at most {@link #MAX_PULL}. It loses {@link #AIR_PER_TICK} air a tick as if under water; at
+ * × the gap, at most {@link #MAX_PULL}. It loses {@link #AIR_PER_TICK} air a tick (vanilla under water loses 1; three keeps the drowning within the prison's life); at
  * {@link #DROWN_AT} it takes {@link #DROWN_DAMAGE} drowning damage and its air goes back to 0, as vanilla drowning does.
  */
 public final class WaterPrisonGeometry {
@@ -26,7 +26,7 @@ public final class WaterPrisonGeometry {
 	public static final double HOLD = 0.5;
 	public static final double PULL = 0.35;
 	public static final double MAX_PULL = 0.6;
-	public static final int AIR_PER_TICK = 1;
+	public static final int AIR_PER_TICK = 3;
 	/** Vanilla drowns at air −20 and resets the air to 0. */
 	public static final int DROWN_AT = -20;
 	public static final float DROWN_DAMAGE = 2;
@@ -42,9 +42,10 @@ public final class WaterPrisonGeometry {
 	public record Cell(BlockPos pos, float height) {}
 
 	/**
-	 * The ball as water cells, rounded on top: every cell in a column within {@link #RADIUS} of the centre (horizontally) whose
-	 * middle is above the sphere's underside and whose floor is below its top; the top cell of each column is only as full as
-	 * the sphere is there (at least {@link #MIN_FILL}), so the ball's crown is round, not stepped.
+	 * The ball's water core as cells, rounded on top: every cell in a column within {@link #CORE} of the centre (horizontally)
+	 * whose middle is above that sphere's underside and whose floor is below its top; the top cell of each column is only as
+	 * full as the sphere is there (at least {@link #MIN_FILL}), so the crown is round, not stepped. The core is smaller than the
+	 * prison so the cells' corners stay inside it; the client draws the round surface over them.
 	 */
 	public static List<Cell> fill(Vec3 centre) {
 		List<Cell> out = new ArrayList<>();
@@ -55,8 +56,8 @@ public final class WaterPrisonGeometry {
 				double x = c.getX() + dx + 0.5 - centre.x;
 				double z = c.getZ() + dz + 0.5 - centre.z;
 				double d2 = x * x + z * z;
-				if (d2 > RADIUS * RADIUS) continue;
-				double h = Math.sqrt(RADIUS * RADIUS - d2);
+				if (d2 > CORE * CORE) continue;
+				double h = Math.sqrt(CORE * CORE - d2);
 				double lo = centre.y - h;
 				double hi = centre.y + h;
 				for (int y = (int) Math.floor(lo); y <= (int) Math.floor(hi); y++) {
@@ -69,6 +70,9 @@ public final class WaterPrisonGeometry {
 		}
 		return out;
 	}
+
+	/** Radius of the water core drawn as cells (block corners then reach about the prison's radius). */
+	public static final double CORE = RADIUS - 0.7;
 
 	/** The thinnest top cell drawn. */
 	public static final float MIN_FILL = 0.15F;
@@ -86,7 +90,7 @@ public final class WaterPrisonGeometry {
 		return l > MAX_PULL ? v.scale(MAX_PULL / l) : v;
 	}
 
-	/** A prisoner's air after one tick in the sphere, from {@code air}: one less, back to 0 when it drowns ({@link #drowns}). */
+	/** A prisoner's air after one tick in the sphere, from {@code air}: {@link #AIR_PER_TICK} less, back to 0 when it drowns ({@link #drowns}). */
 	public static int air(int air) {
 		int next = air - AIR_PER_TICK;
 		return next <= DROWN_AT ? 0 : next;

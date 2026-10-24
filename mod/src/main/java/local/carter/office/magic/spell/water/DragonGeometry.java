@@ -23,9 +23,10 @@ import net.minecraft.world.phys.Vec3;
  * spline by arc length, slow as it pours out of the circle and fastest in the dive ({@link #ease}). The same seed gives the
  * same path on every side.
  *
- * <p><b>Flood.</b> {@link #flood} picks the air cells the crash fills with water: within {@link #floodRadius} of the impact
- * cell, at or below its level, reachable from it through air (so a cave sealed off by rock stays dry), each standing on
- * something solid, on water, or on another flooded cell (filled bottom up, so no water floats), at most {@link #MAX_SOURCES}.
+ * <p><b>Flood.</b> {@link #flood} picks the open cells the crash fills with water: within {@link #floodRadius} of the impact
+ * cell, at or below its level, reachable from it through open cells (so a cave sealed off by rock stays dry), each standing on
+ * something solid, on water, or on another flooded cell (filled bottom up, so no water floats), each layer closed under
+ * vanilla's two-source rule (so vanilla never makes a source the spell didn't place and log), at most {@link #MAX_SOURCES}.
  * {@link #mud} picks the grass and dirt tops within {@link #mudRadius} that turn to mud, {@link #MUD_CHANCE} of them, by a
  * seeded hash of their position.
  */
@@ -203,43 +204,99 @@ public final class DragonGeometry {
 	}
 
 	/**
-	 * The cells the crash at {@code origin} fills with water sources, bottom layer first, at most {@code max}: air cells
-	 * ({@code air}) within {@code radius} of {@code origin} (block distance), no higher than it, reachable from it through such
-	 * cells, each above a cell that {@code holds} water (solid or water) or above one already picked. {@code origin} itself must be air.
+	 * The cells the crash at {@code origin} fills with water sources, layer by layer from the bottom, at most {@code max}.
+	 *
+	 * <p>A layer first takes the open cells ({@code open}: air, or a plant or snow layer water would wash away) within
+	 * {@code radius} of {@code origin} (block distance), no higher than it, reachable from it through open cells, each above a
+	 * cell that {@code holds} water (solid, or water) or above one already picked. Then the layer is <b>closed under vanilla's
+	 * infinite-water rule</b>: an open cell whose floor holds water (or was picked) with at least two picked or existing
+	 * ({@code source}) water sources beside it would turn into a source by itself as soon as water flows in, so it is picked
+	 * too, until nothing changes. Every source the flood leaves is then one the spell placed and logged, and {@code /magic undo}
+	 * takes all of it back. A layer keeps to a square of half-side {@link #layerHalf} about the origin (at most
+	 * {@link #CLOSE_HALF}, and never with a corner past {@link #MAX_REACH}); no cell outside such a square can have two picked
+	 * neighbours, so the closure is complete. A layer that would go past {@code max} is left out whole (a half-filled layer would
+	 * close itself in vanilla, unlogged), and so is every layer above it. {@code origin} itself must be open.
 	 */
-	public static List<BlockPos> flood(BlockPos origin, int radius, Predicate<BlockPos> air, Predicate<BlockPos> holds, int max) {
+	public static List<BlockPos> flood(BlockPos origin, int radius, Predicate<BlockPos> open, Predicate<BlockPos> holds,
+			Predicate<BlockPos> source, int max) {
 		List<BlockPos> out = new ArrayList<>();
-		if (max <= 0 || !air.test(origin)) return out;
+		if (max <= 0 || !open.test(origin)) return out;
 		double r2 = (double) radius * radius;
-		// Reachable air: from the origin, sideways and down (water never climbs above the impact).
+		// Reachable open cells: from the origin, sideways and down (water never climbs above the impact).
 		Set<BlockPos> reach = new HashSet<>();
-		ArrayDeque<BlockPos> open = new ArrayDeque<>();
+		ArrayDeque<BlockPos> queue = new ArrayDeque<>();
 		reach.add(origin);
-		open.add(origin);
-		while (!open.isEmpty()) {
-			BlockPos c = open.poll();
+		queue.add(origin);
+		int bottom = origin.getY();
+		while (!queue.isEmpty()) {
+			BlockPos c = queue.poll();
+			bottom = Math.min(bottom, c.getY());
 			for (Direction d : Direction.values()) {
 				BlockPos n = c.relative(d);
-				if (n.getY() > origin.getY() || n.distSqr(origin) > r2 || reach.contains(n) || !air.test(n)) continue;
+				if (n.getY() > origin.getY() || n.distSqr(origin) > r2 || reach.contains(n) || !open.test(n)) continue;
 				reach.add(n);
-				open.add(n);
+				queue.add(n);
 			}
 		}
-		List<BlockPos> cells = new ArrayList<>(reach);
-		cells.sort(Comparator.<BlockPos>comparingInt(BlockPos::getY)
-				.thenComparingDouble(p -> horizontal(p, origin))
-				.thenComparingInt(BlockPos::getX)
-				.thenComparingInt(BlockPos::getZ));
 		Set<BlockPos> picked = new HashSet<>();
-		for (BlockPos c : cells) {
-			if (out.size() >= max) break;
-			BlockPos below = c.below();
-			if (picked.contains(below) || (!reach.contains(below) && holds.test(below))) {
-				out.add(c);
-				picked.add(c);
+		for (int y = bottom; y <= origin.getY(); y++) {
+			int half = layerHalf(radius, origin.getY() - y);
+			if (half < 0) continue;
+			// The layer's own cells: reachable, in its square, standing on something that holds water.
+			List<BlockPos> layer = new ArrayList<>();
+			Set<BlockPos> mine = new HashSet<>();
+			for (BlockPos c : reach) {
+				if (c.getY() != y || Math.abs(c.getX() - origin.getX()) > half || Math.abs(c.getZ() - origin.getZ()) > half) continue;
+				BlockPos below = c.below();
+				if (picked.contains(below) || holds.test(below)) {
+					layer.add(c);
+					mine.add(c);
+				}
 			}
+			if (layer.isEmpty()) continue;
+			// Closed under the two-source rule, to a fixpoint.
+			boolean grew = true;
+			while (grew) {
+				grew = false;
+				for (int dz = -half; dz <= half; dz++) {
+					for (int dx = -half; dx <= half; dx++) {
+						BlockPos c = new BlockPos(origin.getX() + dx, y, origin.getZ() + dz);
+						if (mine.contains(c) || !open.test(c)) continue;
+						BlockPos below = c.below();
+						if (!picked.contains(below) && !holds.test(below)) continue;
+						int wet = 0;
+						for (Direction d : Direction.Plane.HORIZONTAL) {
+							BlockPos n = c.relative(d);
+							if (mine.contains(n) || source.test(n)) wet++;
+						}
+						if (wet >= 2) {
+							layer.add(c);
+							mine.add(c);
+							grew = true;
+						}
+					}
+				}
+			}
+			if (out.size() + layer.size() > max) break;
+			layer.sort(Comparator.<BlockPos>comparingDouble(p -> horizontal(p, origin)).thenComparingInt(BlockPos::getX)
+					.thenComparingInt(BlockPos::getZ));
+			out.addAll(layer);
+			picked.addAll(layer);
 		}
 		return out;
+	}
+
+	/** Largest square a flood layer keeps to (its corners are 11.3 from the impact). */
+	public static final int CLOSE_HALF = 8;
+
+	/**
+	 * Half-side of the square a flood layer {@code depth} below the impact keeps to: at most the flood's radius and
+	 * {@link #CLOSE_HALF}, and small enough that its corners stay within {@link #MAX_REACH} of the impact (-1: no room).
+	 */
+	public static int layerHalf(int radius, int depth) {
+		double room = MAX_REACH * MAX_REACH - (double) depth * depth;
+		if (room < 0) return -1;
+		return Math.min(Math.min(radius, CLOSE_HALF), (int) Math.floor(Math.sqrt(room / 2)));
 	}
 
 	/**

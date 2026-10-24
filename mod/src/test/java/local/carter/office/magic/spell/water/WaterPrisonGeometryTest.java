@@ -33,7 +33,7 @@ class WaterPrisonGeometryTest {
 				assertTrue(at.add(p), "no cell twice: " + p);
 				double dx = p.getX() + 0.5 - c.x;
 				double dz = p.getZ() + 0.5 - c.z;
-				double h = Math.sqrt(WaterPrisonGeometry.RADIUS * WaterPrisonGeometry.RADIUS - dx * dx - dz * dz);
+				double h = Math.sqrt(WaterPrisonGeometry.CORE * WaterPrisonGeometry.CORE - dx * dx - dz * dz);
 				assertTrue(!Double.isNaN(h), "column within the radius: " + p);
 				assertTrue(p.getY() + (double) cell.height() <= c.y + h + 1.0E-5, "the water never rises above the sphere: " + p);
 				assertTrue(p.getY() + 0.5 >= c.y - h, "nor hangs below it: " + p);
@@ -41,7 +41,14 @@ class WaterPrisonGeometryTest {
 				if (cell.height() < 1) assertFalse(at.contains(p.above()), "only a column's top cell is partly full");
 			}
 			assertTrue(at.contains(BlockPos.containing(c)), "the middle is water");
-			assertTrue(cells.size() >= 25 && cells.size() <= 45, "about a ball of radius 2: " + cells.size());
+			assertTrue(cells.size() >= 5 && cells.size() <= 25, "about a ball of radius 1.3: " + cells.size());
+			for (WaterPrisonGeometry.Cell cell : cells) {
+				BlockPos p = cell.pos();
+				for (int k = 0; k < 8; k++) {
+					Vec3 corner = new Vec3(p.getX() + (k & 1), p.getY() + ((k >> 1) & 1) * cell.height(), p.getZ() + ((k >> 2) & 1));
+					assertTrue(corner.distanceTo(c) <= WaterPrisonGeometry.RADIUS + 0.75, "the cells stay within the round surface: " + corner);
+				}
+			}
 			assertTrue(cells.stream().anyMatch(x -> x.height() < 1), "a rounded crown");
 		}
 	}
@@ -62,21 +69,19 @@ class WaterPrisonGeometryTest {
 	}
 
 	@Test
-	void airDrainsOneATickAndDrownsOnlyWhenUsedUp() {
+	void airDrainsThreeATickAndDrownsOnlyWhenUsedUp() {
 		int air = 300;
-		int drowned = 0;
-		int firstDrown = -1;
+		java.util.List<Integer> drowned = new java.util.ArrayList<>();
 		for (int t = 1; t <= 400; t++) {
-			if (WaterPrisonGeometry.drowns(air)) {
-				drowned++;
-				if (firstDrown < 0) firstDrown = t;
-			}
+			if (WaterPrisonGeometry.drowns(air)) drowned.add(t);
 			air = WaterPrisonGeometry.air(air);
-			if (t == 100) assertEquals(200, air, "one a tick");
+			if (t == 50) assertEquals(150, air, "three a tick");
 		}
-		assertEquals(320, firstDrown, "the first drowning comes 20 ticks after the air runs out, as vanilla's");
-		assertEquals(5, drowned, "then every 20 ticks");
+		assertEquals(107, drowned.get(0), "no drowning until the air is used up (and vanilla's 20 more)");
+		for (int i = 1; i < drowned.size(); i++) assertEquals(7, drowned.get(i) - drowned.get(i - 1), "then every 7 ticks");
+		long inPrison = drowned.stream().filter(t -> t <= WaterPrisonGeometry.duration(1)).count();
+		assertTrue(inPrison >= 4, "a full breath runs out within a charged prison: " + inPrison + " drownings");
 		assertFalse(WaterPrisonGeometry.drowns(1));
-		assertEquals(0, WaterPrisonGeometry.air(-19));
+		assertEquals(0, WaterPrisonGeometry.air(-18));
 	}
 }
