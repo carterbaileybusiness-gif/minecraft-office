@@ -339,7 +339,10 @@ public final class GrimoireScreen extends Screen {
 		var conn = minecraft.getConnection();
 		List<java.util.UUID> others = new ArrayList<>();
 		if (conn != null && minecraft.player != null) {
-			for (java.util.UUID id : conn.getOnlinePlayerIds()) if (!id.equals(minecraft.player.getUUID())) others.add(id);
+			for (net.minecraft.client.multiplayer.PlayerInfo info : conn.getOnlinePlayers()) {
+				java.util.UUID id = info.getProfile().id();
+				if (!id.equals(minecraft.player.getUUID()) && info.getGameMode() != net.minecraft.world.level.GameType.SPECTATOR) others.add(id);
+			}
 		}
 		for (int i = 0; i < GrimoireLayout.TABS; i++) {
 			Rect r = l.tabs().get(i);

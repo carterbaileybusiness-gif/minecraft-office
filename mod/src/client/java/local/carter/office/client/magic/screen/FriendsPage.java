@@ -44,7 +44,9 @@ public final class FriendsPage {
 		WAITING,
 		/** You are travelling to this friend. */
 		TRAVELLING,
-		/** You are busy: another request is open, a channel runs, hand signs or a charge. */
+		/** Your request to someone else is waiting, or you are travelling to them: one request at a time. */
+		ONE_AT_A_TIME,
+		/** You are busy: a channel runs, hand signs or a charge (or you are dead or a spectator). */
 		BUSY,
 		/** Recall's (shared) cooldown is running. */
 		COOLDOWN,
@@ -83,10 +85,11 @@ public final class FriendsPage {
 	public static Status status(TravelRoster r, TravelRoster.Friend f, long cooldownLeft) {
 		boolean mine = r.waitingFor().map(f.id()::equals).orElse(false);
 		return switch (r.state()) {
-			case TRAVELLING -> mine ? Status.TRAVELLING : Status.BUSY;
-			case WAITING -> mine ? Status.WAITING : Status.BUSY;
+			case TRAVELLING -> mine ? Status.TRAVELLING : Status.ONE_AT_A_TIME;
+			case WAITING -> mine ? Status.WAITING : Status.ONE_AT_A_TIME;
 			case BUSY -> Status.BUSY;
-			case READY -> cooldownLeft > 0 ? Status.COOLDOWN : f.accepts() ? Status.AVAILABLE : Status.OFF;
+			// The friend's own "travel off" is never hidden by your cooldown.
+			case READY -> !f.accepts() ? Status.OFF : cooldownLeft > 0 ? Status.COOLDOWN : Status.AVAILABLE;
 		};
 	}
 
@@ -414,7 +417,8 @@ public final class FriendsPage {
 			float shake = row == shakeRow ? (float) Math.sin((now - shakeAt) / 25.0) * 2f * u * Math.max(0f, 1f - (now - shakeAt) / 350f) : 0f;
 			int head = Math.max(8, Math.min(rr.h() - 2 * Math.max(1, Math.round(u)), Math.round(16 * u)));
 			float hx = rr.x() + 2 * u + shake, hy = rr.y() + (rr.h() - head) / 2f;
-			face(g, skin(fr.id()), hx, hy, head, grey ? 0x90FFFFFF : UiKit.WHITE, a);
+			boolean dim = st == Status.ONE_AT_A_TIME;
+			face(g, skin(fr.id()), hx, hy, head, dim ? 0x60FFFFFF : grey ? 0x90FFFFFF : UiKit.WHITE, a);
 
 			// Why it is unavailable (or the travel glyph), right-aligned; the name fills what is left.
 			float tx = rr.x() + 2 * u + head + 4 * u;
@@ -424,7 +428,8 @@ public final class FriendsPage {
 			if (why != null) {
 				ws = UiKit.fit(font.width(why), (right - tx) * 0.55f, Math.max(1f / UiKit.guiScale(), UiKit.crisp(u * 0.8f)));
 				ww = font.width(why) * ws;
-				int wc = on ? UiKit.inkOf(e.argb()) : st == Status.OFF ? 0xFF9A3B2E : UiKit.INK_SOFT;
+				int wc = on ? UiKit.inkOf(e.argb()) : st == Status.OFF ? 0xFF9A3B2E
+						: st == Status.ONE_AT_A_TIME ? UiKit.alpha(UiKit.INK_SOFT, 0.7f) : UiKit.INK_SOFT;
 				UiKit.text(g, font, why, right - ww, rr.y() + (rr.h() - 9 * ws) / 2f, ws, UiKit.alpha(wc, a), false);
 			} else {
 				float gs = Math.min(rr.h() - 2f * u, 12f * u);
@@ -433,14 +438,22 @@ public final class FriendsPage {
 						UiKit.alpha(UiKit.WHITE, gk * a));
 				ww = gs;
 			}
-			Component name = Component.literal(fr.name());
 			float nameRoom = right - ww - 3 * u - tx;
+			Component name = Component.literal(fr.name());
 			float ns = UiKit.fit(font.width(name), nameRoom, u);
-			int nameCol = grey ? UiKit.alpha(UiKit.INK_SOFT, 0.8f) : UiKit.INK;
+			if (font.width(name) * ns > nameRoom) name = ellipsize(font, fr.name(), nameRoom / ns); // already at the smallest crisp scale
+			int nameCol = dim ? UiKit.alpha(UiKit.INK_SOFT, 0.55f) : grey ? UiKit.alpha(UiKit.INK_SOFT, 0.8f) : UiKit.INK;
 			UiKit.text(g, font, name, tx, rr.y() + (rr.h() - 9 * ns) / 2f, ns, UiKit.alpha(nameCol, a), false);
 			g.pose().popMatrix();
 			if (row == mouseRow && st.available()) g.setTooltipForNextFrame(font, Component.translatable("magic.office.friend_ask"), mouseX, mouseY);
 		}
+	}
+
+	/** {@code name} cut to fit {@code room} font units, ending in "…". */
+	static Component ellipsize(Font font, String name, float room) {
+		String dots = "…";
+		int keep = Math.max(0, Math.round(room) - font.width(dots));
+		return Component.literal(font.plainSubstrByWidth(name, keep) + dots);
 	}
 
 	private static @Nullable Component why(Status st, TravelRoster r, long now) {
@@ -448,6 +461,7 @@ public final class FriendsPage {
 			case AVAILABLE -> null;
 			case WAITING -> Component.translatable("magic.office.why_waiting", r.state() == TravelRoster.State.WAITING ? waitingSeconds(r, now) : 30);
 			case TRAVELLING -> Component.translatable("magic.office.why_travelling");
+			case ONE_AT_A_TIME -> Component.translatable("magic.office.why_one");
 			case BUSY -> Component.translatable("magic.office.why_busy");
 			case COOLDOWN -> Component.translatable("magic.office.why_cooldown");
 			case OFF -> Component.translatable("magic.office.why_off");

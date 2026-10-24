@@ -34,7 +34,8 @@ class LangCoverageTest {
 			"travel_interrupted", "travel_arrived", "travel_now_on", "travel_now_off", "travel_state_on", "travel_state_off", "tab_spells",
 			"tab_friends", "friends_title", "friends_none", "friends_page", "friend_ask", "why_off", "why_cooldown", "why_busy",
 			"why_waiting", "why_travelling", "travel_title", "travel_blurb", "panel_ready", "panel_cooldown", "panel_waiting",
-			"panel_travelling", "panel_busy", "panel_requests_on", "panel_requests_off", "toggle_off", "toggle_on", "friends_hint");
+			"panel_travelling", "panel_busy", "panel_requests_on", "panel_requests_off", "toggle_off", "toggle_on", "friends_hint",
+			"travel_too_soon", "travel_friend_full", "why_one");
 
 	private static JsonObject lang() throws Exception {
 		try (InputStream in = LangCoverageTest.class.getResourceAsStream("/assets/office/lang/en_us.json")) {
@@ -80,15 +81,19 @@ class LangCoverageTest {
 		}
 	}
 
-	/** Vanilla lang strings support only {@code %s} (and {@code %n$s}); a {@code %d} or {@code %.1f} would be rewritten. */
+	/**
+	 * Vanilla lang strings support only {@code %s} (and {@code %n$s}); it rewrites {@code %d} / {@code %.1f} to {@code %s} on load, so
+	 * a float argument would print raw ("2.0500000000000003"). No key may use a float format: format numbers in code.
+	 */
 	@Test
-	void travelStringsUseOnlyPercentS() throws Exception {
+	void noKeyUsesAFloatFormat() throws Exception {
 		JsonObject lang = lang();
+		java.util.regex.Pattern floatFormat = java.util.regex.Pattern.compile("%(\\d+\\$)?[-+ 0#,(]*\\d*(\\.\\d+)?[fFeEgG]");
 		for (String k : lang.keySet()) {
-			if (!k.startsWith("magic.office.travel") && !k.startsWith("magic.office.panel") && !k.startsWith("magic.office.why")
-					&& !k.startsWith("magic.office.friend")) continue;
-			assertFalse(lang.get(k).getAsString().replace("%s", "").contains("%"), k + " uses a format other than %s");
+			String v = lang.get(k).getAsString();
+			assertFalse(floatFormat.matcher(v).find(), k + " uses a float format: " + v);
 		}
+		assertTrue(floatFormat.matcher("%.1f").find() && floatFormat.matcher("%2$f").find() && !floatFormat.matcher("%s").find(), "the check works");
 	}
 
 	@Test

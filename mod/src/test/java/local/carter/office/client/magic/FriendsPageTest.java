@@ -34,17 +34,17 @@ class FriendsPageTest {
 	void yourCooldownGreysEveryone() {
 		TravelRoster r = roster(State.READY, null);
 		assertEquals(Status.COOLDOWN, FriendsPage.status(r, AVA, 40));
-		assertEquals(Status.COOLDOWN, FriendsPage.status(r, BEN, 40), "your cooldown comes before their setting");
+		assertEquals(Status.OFF, FriendsPage.status(r, BEN, 40), "your cooldown never hides their travel off");
 	}
 
 	@Test
 	void anOpenRequestMarksItsFriendAndBusiesTheRest() {
 		TravelRoster w = roster(State.WAITING, BEN);
 		assertEquals(Status.WAITING, FriendsPage.status(w, BEN, 0));
-		assertEquals(Status.BUSY, FriendsPage.status(w, AVA, 0));
+		assertEquals(Status.ONE_AT_A_TIME, FriendsPage.status(w, AVA, 0));
 		TravelRoster t = roster(State.TRAVELLING, AVA);
 		assertEquals(Status.TRAVELLING, FriendsPage.status(t, AVA, 0));
-		assertEquals(Status.BUSY, FriendsPage.status(t, BEN, 0));
+		assertEquals(Status.ONE_AT_A_TIME, FriendsPage.status(t, BEN, 0));
 		assertEquals(Status.BUSY, FriendsPage.status(roster(State.BUSY, null), AVA, 0));
 		for (Status s : Status.values()) assertEquals(s == Status.AVAILABLE, s.available());
 	}

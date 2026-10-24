@@ -174,8 +174,11 @@ public class TravelGameTests {
 		h.assertValueEqual(Travel.accept(f, id), Travel.Answer.GONE, "accept after deny");
 		h.assertTrue(rec.messageKeys(f).contains("magic.office.travel_gone"), "friend told it is gone");
 		h.assertFalse(TeleportChannel.channeling(p), "still no channel");
-		// And the caster may ask again at once.
-		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.SENT, "ask again");
+		// No asking the same friend again right away (they just said no).
+		rec.clear();
+		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.TOO_SOON, "ask again at once");
+		h.assertValueEqual(rec.messageKeys(p), List.of("magic.office.travel_too_soon"), "told kindly");
+		h.assertValueEqual(rec.chats(f).size(), 0, "the friend is not asked again");
 		h.succeed();
 	}
 
@@ -195,6 +198,7 @@ public class TravelGameTests {
 			h.assertValueEqual(Travel.accept(f, id), Travel.Answer.GONE, "accept after expiry");
 			h.assertFalse(TeleportChannel.channeling(p), "no channel");
 			h.assertValueEqual(cooldownLeft(h, p), 0L, "no cooldown");
+			h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.TOO_SOON, "an expired request also waits 30 s");
 			h.succeed();
 		});
 	}
@@ -307,12 +311,11 @@ public class TravelGameTests {
 		ServerPlayer p = caster(h);
 		ServerPlayer f = friend(h);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
-		int id = ask(h, rec, p, f);
+		ask(h, rec, p, f);
 		MagicTestKit.disconnect(f);
 		h.assertTrue(Travel.pendingFrom(p).isEmpty(), "request closed");
 		h.assertValueEqual(rec.chatKeys(p), List.of("magic.office.travel_left"), "caster told");
 		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.OFFLINE, "the friend is gone");
-		h.assertTrue(id > 0, "id");
 		h.succeed();
 	}
 
@@ -517,11 +520,113 @@ public class TravelGameTests {
 	public void travelCommandsNeedNoOpButTheRestDo(GameTestHelper h) {
 		ServerPlayer f = friend(h);
 		MagicAttachments.set(f, MagicAttachments.get(f).withLevel(2));
+		MagicAttachments.setMana(f, 40);
 		run(f, "magic level @s 9");
 		run(f, "magic reset @s");
-		h.assertValueEqual(MagicAttachments.get(f).level(), 2, "op commands refused for a non-op");
+		run(f, "magic mana @s 5");
+		h.assertValueEqual(MagicAttachments.get(f).level(), 2, "level and reset refused for a non-op");
+		h.assertValueEqual(MagicAttachments.mana(f), 40, "mana refused for a non-op");
+		// undo touches no player data, so check the command tree itself: a non-op cannot use it, an op can.
+		var magic = f.level().getServer().getCommands().getDispatcher().getRoot().getChild("magic");
+		var mine = f.createCommandSourceStack();
+		var op = f.level().getServer().createCommandSourceStack();
+		for (String sub : List.of("level", "mana", "reset", "undo")) {
+			h.assertFalse(magic.getChild(sub).canUse(mine), "/magic " + sub + " is refused for a non-op");
+			h.assertTrue(magic.getChild(sub).canUse(op), "/magic " + sub + " works for an op");
+		}
+		h.assertTrue(magic.canUse(mine) && magic.getChild("travel").canUse(mine), "/magic travel is for anyone");
 		run(f, "magic travel off");
 		h.assertFalse(MagicAttachments.get(f).travel(), "travel off works for anyone");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 800)
+	public void declinedFriendCanBeAskedAgainAfterThirtySeconds(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerPlayer f = friend(h);
+		ServerPlayer other = MagicTestKit.otherPlayer(h, new BlockPos(24, 4, 24));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		run(f, "magic travel deny " + ask(h, rec, p, f));
+		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.TOO_SOON, "the same friend at once");
+		h.assertValueEqual(Travel.request(p, other.getUUID()), Travel.Result.SENT, "another friend is fine");
+		run(other, "magic travel accept " + Travel.pendingFrom(p).orElseThrow().id());
+		TeleportChannel.interrupt(p, false); // stay put; only the request mattered
+		MagicAttachments.set(p, MagicAttachments.get(p).withReadyAt(java.util.Map.of()));
+		h.runAfterDelay(Travel.RETRY_TICKS - 20, () ->
+				h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.TOO_SOON, "still too soon just before 30 s"));
+		h.runAfterDelay(Travel.RETRY_TICKS + 5, () -> {
+			h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.SENT, "may ask again after 30 s");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV)
+	public void aFriendHasAtMostThreeRequestsWaiting(GameTestHelper h) {
+		ServerPlayer f = friend(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		for (int i = 0; i < Travel.MAX_OPEN_PER_FRIEND; i++) {
+			ServerPlayer c = caster(h);
+			h.assertValueEqual(Travel.request(c, f.getUUID()), Travel.Result.SENT, "request " + (i + 1));
+		}
+		ServerPlayer fourth = caster(h);
+		h.assertValueEqual(Travel.request(fourth, f.getUUID()), Travel.Result.FRIEND_FULL, "a fourth waits");
+		h.assertValueEqual(rec.messageKeys(fourth), List.of("magic.office.travel_friend_full"), "told");
+		h.assertValueEqual(Travel.pendingTo(f).size(), Travel.MAX_OPEN_PER_FRIEND, "three waiting");
+		h.assertValueEqual(rec.chats(f).size(), Travel.MAX_OPEN_PER_FRIEND, "three lines, not four");
+		run(f, "magic travel deny " + Travel.pendingTo(f).get(0).id());
+		h.assertValueEqual(Travel.request(fourth, f.getUUID()), Travel.Result.SENT, "room again after an answer");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
+	public void acceptingTwiceStartsOneChannel(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerPlayer f = friend(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		int id = ask(h, rec, p, f);
+		h.assertValueEqual(Travel.accept(f, id), Travel.Answer.STARTED, "first accept");
+		h.assertValueEqual(Travel.accept(f, id), Travel.Answer.GONE, "second accept");
+		run(f, "magic travel accept " + id);
+		h.assertValueEqual(rec.fx(p).size(), 1, "one fx");
+		h.runAfterDelay(62, () -> {
+			assertBeside(h, p, f, "arrived once");
+			h.assertValueEqual(rec.fx(p).size(), 1, "still one fx");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV)
+	public void deadOrSpectatingCastersAreBusyAndSpectatorsAreNotListed(GameTestHelper h) {
+		ServerPlayer f = friend(h);
+		MagicTestKit.recorder(h);
+		ServerPlayer watcher = caster(h);
+		watcher.setGameMode(GameType.SPECTATOR);
+		h.assertValueEqual(Travel.request(watcher, f.getUUID()), Travel.Result.BUSY, "a spectator");
+		h.assertValueEqual(Travel.roster(watcher).state(), TravelRoster.State.BUSY, "a spectator's roster");
+		ServerPlayer viewer = caster(h);
+		h.assertTrue(Travel.roster(viewer).friends().stream().noneMatch(x -> x.id().equals(watcher.getUUID())), "spectators are not listed");
+		ServerPlayer dead = caster(h);
+		MagicTestKit.kill(dead);
+		h.assertValueEqual(Travel.request(dead, f.getUUID()), Travel.Result.BUSY, "a dead caster");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV)
+	public void landingPrefersTheFriendsSideOfAClaimBorder(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerPlayer f = friend(h);
+		int fx = f.blockPosition().getX();
+		// Everything west of the friend's column is someone else's claim; the friend stands in unclaimed land.
+		local.carter.office.magic.terrain.ClaimCheck westClaimed = (caster, level, origin, radius) -> pos -> pos.getX() < fx;
+		Vec3 at = Travel.besideFriend(p, f, westClaimed);
+		h.assertTrue(at != null && at.x >= fx, "landed on the friend's side: " + at + " (friend x " + fx + ")");
+		// With no claims the nearest cell wins, which is the western neighbour.
+		Vec3 plain = Travel.besideFriend(p, f, local.carter.office.magic.terrain.ClaimCheck.NONE);
+		h.assertTrue(plain != null && plain.x < fx, "without claims the west cell is nearest first: " + plain);
+		// The friend inside the other claim: cells in that same claim come first.
+		local.carter.office.magic.terrain.ClaimCheck eastClaimed = (caster, level, origin, radius) -> pos -> pos.getX() >= fx;
+		Vec3 inside = Travel.besideFriend(p, f, eastClaimed);
+		h.assertTrue(inside != null && inside.x >= fx, "stays inside the claim the friend stands in: " + inside);
 		h.succeed();
 	}
 
@@ -547,12 +652,14 @@ public class TravelGameTests {
 		Travel.sendRoster(p);
 		h.assertValueEqual(rec.rosters(p).size(), 1, "sent");
 		Travel.query(p);
-		h.assertValueEqual(rec.rosters(p).size(), 1, "a second query in the same tick is not answered");
+		Travel.query(p);
+		Travel.query(p);
+		h.assertValueEqual(rec.rosters(p).size(), 1, "queries inside the throttle window are not answered at once");
 		run(a, "magic travel accept " + Travel.pendingFrom(p).orElseThrow().id());
 		h.assertValueEqual(Travel.roster(p).state(), TravelRoster.State.TRAVELLING, "travelling");
-		h.runAfterDelay(10, () -> {
-			Travel.query(p);
-			h.assertValueEqual(rec.rosters(p).size(), 2, "answered again later");
+		h.runAfterDelay(Travel.ROSTER_MIN_TICKS + 5, () -> {
+			h.assertValueEqual(rec.rosters(p).size(), 2, "answered once when the window ended, however many queries arrived");
+			h.assertValueEqual(rec.rosters(p).get(1).state(), TravelRoster.State.TRAVELLING, "with the fresh state");
 			h.succeed();
 		});
 	}

@@ -19,8 +19,11 @@ import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.net.MagicPayloads.TravelRoster;
 import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.terrain.ClaimCheck;
+import local.carter.office.magic.terrain.WorldTerrainEdits;
 
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
@@ -48,11 +51,21 @@ import net.minecraft.world.phys.Vec3;
 public final class Travel {
 	/** A request stays open this long (30 s). */
 	public static final int EXPIRE_TICKS = 600;
-	/** At most one roster reply per player this often (a client polls once a second; a flood gets the cached answer only). */
-	private static final int ROSTER_MIN_TICKS = 5;
+	/** After a friend declines (or lets a request expire) the same caster may not ask them again for this long (30 s). */
+	public static final int RETRY_TICKS = 600;
+	/** Most open requests one friend can have waiting at once. */
+	public static final int MAX_OPEN_PER_FRIEND = 3;
+	/**
+	 * At most one roster reply per player this often (a client polls once a second). A query inside the window is not dropped:
+	 * its reply is sent once the window has passed.
+	 */
+	public static final int ROSTER_MIN_TICKS = 5;
 
 	/** What {@link #request} decided. */
-	public enum Result { SENT, NOT_BOUND, NO_GRIMOIRE, BUSY, COOLDOWN, SELF, OFFLINE, TRAVEL_OFF, PENDING }
+	public enum Result { SENT, NOT_BOUND, NO_GRIMOIRE, BUSY, COOLDOWN, SELF, OFFLINE, TRAVEL_OFF, PENDING, TOO_SOON, FRIEND_FULL }
+
+	/** A caster and the friend they asked. */
+	private record Pair(UUID caster, UUID target) {}
 
 	/** What answering a request did. */
 	public enum Answer { STARTED, DENIED, GONE, CANNOT }
@@ -63,6 +76,10 @@ public final class Travel {
 	private static final Map<Integer, Request> BY_ID = new LinkedHashMap<>();
 	private static final Map<UUID, Request> BY_CASTER = new HashMap<>();
 	private static final Map<UUID, Long> LAST_ROSTER = new HashMap<>();
+	/** Players whose roster query arrived inside the throttle window: answered by {@link #tick} once it has passed. */
+	private static final java.util.Set<UUID> ROSTER_DUE = new java.util.LinkedHashSet<>();
+	/** (caster, friend) → game time until which the caster may not ask that friend again (they declined, or let it expire). */
+	private static final Map<Pair, Long> RETRY_AFTER = new HashMap<>();
 	private static int nextId = 1;
 
 	private Travel() {}
@@ -71,8 +88,10 @@ public final class Travel {
 
 	/**
 	 * {@code caster} asks to travel to {@code targetId}. Checked in order: bound; a grimoire in either hand; not channeling,
-	 * answering hand signs or charging; Recall's cooldown ready; not themselves; the target online and accepting requests; no
-	 * other open request. A refusal goes to the caster's action bar and changes nothing.
+	 * answering hand signs or charging, alive and not a spectator; Recall's cooldown ready; not themselves; the target online
+	 * and accepting requests; no other open request; not declined by (or expired with) that friend in the last
+	 * {@link #RETRY_TICKS}; the friend has fewer than {@link #MAX_OPEN_PER_FRIEND} requests waiting. A refusal goes to the
+	 * caster's action bar and changes nothing.
 	 */
 	public static Result request(ServerPlayer caster, UUID targetId) {
 		Result r = check(caster, targetId);
@@ -94,6 +113,7 @@ public final class Travel {
 	private static Result check(ServerPlayer caster, UUID targetId) {
 		MagicData d = MagicAttachments.get(caster);
 		if (d.element().isEmpty()) return Result.NOT_BOUND;
+		if (!caster.isAlive() || spectator(caster)) return Result.BUSY; // before the grimoire check: death drops it
 		if (!GrimoireItem.isGrimoire(caster.getMainHandItem()) && !GrimoireItem.isGrimoire(caster.getOffhandItem())) return Result.NO_GRIMOIRE;
 		if (busy(caster)) return Result.BUSY;
 		if (cooldownLeft(caster) > 0) return Result.COOLDOWN;
@@ -102,7 +122,22 @@ public final class Travel {
 		if (target == null) return Result.OFFLINE;
 		if (!MagicAttachments.get(target).travel()) return Result.TRAVEL_OFF;
 		if (BY_CASTER.containsKey(caster.getUUID())) return Result.PENDING;
+		if (retryLeft(caster, targetId) > 0) return Result.TOO_SOON;
+		int open = 0;
+		for (Request req : BY_ID.values()) if (req.target().equals(targetId)) open++;
+		if (open >= MAX_OPEN_PER_FRIEND) return Result.FRIEND_FULL;
 		return Result.SENT;
+	}
+
+	/** Ticks until {@code caster} may ask {@code target} again (0 = may ask). */
+	private static long retryLeft(ServerPlayer caster, UUID target) {
+		Long until = RETRY_AFTER.get(new Pair(caster.getUUID(), target));
+		return until == null ? 0 : Math.max(0, until - caster.level().getServer().overworld().getGameTime());
+	}
+
+	/** The friend declined, or let the request expire: the same caster waits {@link #RETRY_TICKS} before asking them again. */
+	private static void answered(MinecraftServer server, Request req) {
+		RETRY_AFTER.put(new Pair(req.caster(), req.target()), server.overworld().getGameTime() + RETRY_TICKS);
 	}
 
 	private static Component refusal(ServerPlayer caster, Result r, @Nullable ServerPlayer target) {
@@ -114,6 +149,8 @@ public final class Travel {
 			case SELF, OFFLINE -> Component.translatable("magic.office.travel_offline");
 			case TRAVEL_OFF -> Component.translatable("magic.office.travel_refuses", name(target));
 			case PENDING -> Component.translatable("magic.office.travel_pending", BY_CASTER.get(caster.getUUID()).targetName());
+			case TOO_SOON -> Component.translatable("magic.office.travel_too_soon", name(target), seconds(retryLeft(caster, target.getUUID())));
+			case FRIEND_FULL -> Component.translatable("magic.office.travel_friend_full", name(target));
 			case SENT -> Component.empty();
 		};
 	}
@@ -173,6 +210,7 @@ public final class Travel {
 			MagicServer.sender().actionBar(target, Component.translatable("magic.office.travel_gone"));
 			return Answer.GONE;
 		}
+		answered(target.level().getServer(), req);
 		ServerPlayer caster = target.level().getServer().getPlayerList().getPlayer(req.caster());
 		if (caster != null) MagicServer.sender().chat(caster, Component.translatable("magic.office.travel_denied", req.targetName()));
 		MagicServer.sender().actionBar(target, Component.translatable("magic.office.travel_you_denied", req.casterName()));
@@ -194,15 +232,32 @@ public final class Travel {
 
 	// ---------------------------------------------------------------- lifecycle
 
-	/** Once per server tick: requests past {@link #EXPIRE_TICKS} close and their casters are told. */
+	/**
+	 * Once per server tick: requests past {@link #EXPIRE_TICKS} close and their casters are told; spent retry windows are
+	 * forgotten; throttled roster queries are answered once their window has passed.
+	 */
 	public static void tick(MinecraftServer server) {
-		if (BY_ID.isEmpty()) return;
 		long now = server.overworld().getGameTime();
+		if (!RETRY_AFTER.isEmpty()) RETRY_AFTER.values().removeIf(until -> until <= now);
+		if (!ROSTER_DUE.isEmpty()) {
+			for (Iterator<UUID> it = ROSTER_DUE.iterator(); it.hasNext();) {
+				UUID id = it.next();
+				ServerPlayer p = server.getPlayerList().getPlayer(id);
+				if (p == null) {
+					it.remove();
+				} else if (!throttled(p, now)) {
+					it.remove();
+					sendRoster(p);
+				}
+			}
+		}
+		if (BY_ID.isEmpty()) return;
 		for (Iterator<Request> it = BY_ID.values().iterator(); it.hasNext();) {
 			Request req = it.next();
 			if (now < req.expiresAt()) continue;
 			it.remove();
 			BY_CASTER.remove(req.caster(), req);
+			answered(server, req);
 			ServerPlayer caster = server.getPlayerList().getPlayer(req.caster());
 			if (caster != null) MagicServer.sender().chat(caster, Component.translatable("magic.office.travel_expired", req.targetName()));
 		}
@@ -221,6 +276,7 @@ public final class Travel {
 	public static void left(ServerPlayer p) {
 		withdraw(p);
 		LAST_ROSTER.remove(p.getUUID());
+		ROSTER_DUE.remove(p.getUUID());
 		MinecraftServer server = p.level().getServer();
 		String who = name(p);
 		for (Iterator<Request> it = BY_ID.values().iterator(); it.hasNext();) {
@@ -248,6 +304,8 @@ public final class Travel {
 		BY_ID.clear();
 		BY_CASTER.clear();
 		LAST_ROSTER.clear();
+		ROSTER_DUE.clear();
+		RETRY_AFTER.clear();
 	}
 
 	/** {@code caster}'s open request, if any. */
@@ -264,15 +322,21 @@ public final class Travel {
 
 	// ---------------------------------------------------------------- the Friends page
 
-	/** The roster query receiver: answered at most once every {@link #ROSTER_MIN_TICKS} ticks per player. */
+	/**
+	 * The roster query receiver (and the reply to a travel request): at most one roster every {@link #ROSTER_MIN_TICKS} ticks
+	 * per player; a query inside the window is answered by {@link #tick} when it ends (once, however many arrived).
+	 */
 	public static void query(ServerPlayer viewer) {
-		long now = viewer.level().getServer().overworld().getGameTime();
-		Long last = LAST_ROSTER.get(viewer.getUUID());
-		if (last != null && now >= last && now - last < ROSTER_MIN_TICKS) return;
-		sendRoster(viewer);
+		if (throttled(viewer, viewer.level().getServer().overworld().getGameTime())) ROSTER_DUE.add(viewer.getUUID());
+		else sendRoster(viewer);
 	}
 
-	/** Sends {@code viewer} their roster now. */
+	private static boolean throttled(ServerPlayer viewer, long now) {
+		Long last = LAST_ROSTER.get(viewer.getUUID());
+		return last != null && now >= last && now - last < ROSTER_MIN_TICKS;
+	}
+
+	/** Sends {@code viewer} their roster now (unthrottled: for tests and {@link #tick}; receivers use {@link #query}). */
 	public static void sendRoster(ServerPlayer viewer) {
 		LAST_ROSTER.put(viewer.getUUID(), viewer.level().getServer().overworld().getGameTime());
 		MagicServer.sender().roster(viewer, roster(viewer));
@@ -283,28 +347,49 @@ public final class Travel {
 		MinecraftServer server = viewer.level().getServer();
 		List<TravelRoster.Friend> friends = new ArrayList<>();
 		for (ServerPlayer p : server.getPlayerList().getPlayers()) {
-			if (p == viewer || p.getUUID().equals(viewer.getUUID())) continue;
+			if (p == viewer || p.getUUID().equals(viewer.getUUID()) || spectator(p)) continue;
 			friends.add(new TravelRoster.Friend(p.getUUID(), name(p), MagicAttachments.get(p).travel()));
 		}
 		friends.sort(Comparator.comparing((TravelRoster.Friend f) -> f.name().toLowerCase(Locale.ROOT)).thenComparing(f -> f.id()));
 		Request req = BY_CASTER.get(viewer.getUUID());
 		TeleportChannel.Trip trip = TeleportChannel.trip(viewer);
 		if (trip instanceof Friend f) return new TravelRoster(friends, TravelRoster.State.TRAVELLING, Optional.of(f.target()), 0);
-		if (trip != null || SignChallenges.pending(viewer) || CastService.charging(viewer)) {
-			return new TravelRoster(friends, TravelRoster.State.BUSY, Optional.empty(), 0);
-		}
 		if (req != null) {
 			long left = req.expiresAt() - server.overworld().getGameTime();
 			return new TravelRoster(friends, TravelRoster.State.WAITING, Optional.of(req.target()), (int) Math.max(0, left));
 		}
+		if (busy(viewer)) return new TravelRoster(friends, TravelRoster.State.BUSY, Optional.empty(), 0);
 		return new TravelRoster(friends, TravelRoster.State.READY, Optional.empty(), 0);
 	}
 
 	// ---------------------------------------------------------------- helpers
 
-	/** Channeling (Recall or Travel), answering hand signs or charging a cast. */
+	/** Dead, a spectator, channeling (Recall or Travel), answering hand signs or charging a cast. */
 	static boolean busy(ServerPlayer p) {
-		return TeleportChannel.channeling(p) || SignChallenges.pending(p) || CastService.charging(p);
+		return !p.isAlive() || spectator(p) || TeleportChannel.channeling(p) || SignChallenges.pending(p) || CastService.charging(p);
+	}
+
+	/** The server-side game mode (what {@code isSpectator} reads on a real player; GameTest mocks override only the getter). */
+	static boolean spectator(ServerPlayer p) {
+		return p.gameMode.getGameModeForPlayer() == net.minecraft.world.level.GameType.SPECTATOR;
+	}
+
+	/** The claim check the terrain kit uses, or none (no world kit installed). */
+	private static ClaimCheck claims() {
+		return MagicServer.kit().terrain() instanceof WorldTerrainEdits edits ? edits.claims() : ClaimCheck.NONE;
+	}
+
+	/**
+	 * A safe spot beside {@code friend} for {@code caster} (null if none). Cells whose claim status matches the friend's own
+	 * cell are tried first ({@code claims} asked as the friend: unclaimed, or the friend's own claim, vs someone else's), so a
+	 * friend standing in their base is joined inside it rather than over the border in a neighbour's claim.
+	 */
+	public static @Nullable Vec3 besideFriend(ServerPlayer caster, ServerPlayer friend, ClaimCheck claims) {
+		ServerLevel level = friend.level();
+		BlockPos cell = friend.blockPosition();
+		java.util.function.Predicate<BlockPos> othersClaim = claims.forBatch(friend, level, cell, TeleportChannel.SEARCH_XZ + 1);
+		boolean friendSide = othersClaim.test(cell);
+		return TeleportChannel.safeSpot(caster, level, cell, true, pos -> othersClaim.test(pos) == friendSide);
 	}
 
 	private static long cooldownLeft(ServerPlayer p) {
@@ -330,7 +415,7 @@ public final class Travel {
 			ServerPlayer friend = caster.level().getServer().getPlayerList().getPlayer(target);
 			if (friend == null || !friend.isAlive() || friend.isRemoved()) return null;
 			ServerLevel level = friend.level();
-			Vec3 at = TeleportChannel.safeSpot(caster, level, friend.blockPosition(), true);
+			Vec3 at = besideFriend(caster, friend, claims());
 			if (at == null) return null;
 			Vec3 to = friend.position().subtract(at);
 			float yaw = to.horizontalDistanceSqr() < 1e-4 ? caster.getYRot() : (float) (Mth.atan2(to.z, to.x) * Mth.RAD_TO_DEG) - 90f;

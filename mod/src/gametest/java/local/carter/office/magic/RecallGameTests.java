@@ -451,7 +451,7 @@ public class RecallGameTests {
 
 	/**
 	 * Lets the chunk at {@code pos} go: forcing it and un-forcing it at once replaces the short-lived loading ticket the platform
-	 * build left behind, so nothing holds the chunk and it unloads on one of the next ticks.
+	 * build left behind, so only a ticket someone else adds can keep it loaded.
 	 */
 	private static void release(ServerLevel level, BlockPos pos) {
 		int cx = pos.getX() >> 4, cz = pos.getZ() >> 4;
@@ -459,24 +459,12 @@ public class RecallGameTests {
 		level.setChunkForced(cx, cz, false);
 	}
 
-	/** Runs {@code then} once the chunk at {@code pos} is unloaded: a bounded poll after {@link #release} (fails at the bound). */
-	private static void whenUnloaded(GameTestHelper h, ServerLevel level, BlockPos pos, int triesLeft, Runnable then) {
-		if (!level.hasChunkAt(pos)) {
-			then.run();
-		} else if (triesLeft == 0) {
-			h.fail("the chunk at " + pos + " never unloaded");
-		} else {
-			h.runAfterDelay(1, () -> whenUnloaded(h, level, pos, triesLeft - 1, then));
-		}
-	}
-
 	/**
-	 * Recall to a far home whose chunk nobody holds. It no longer waits for the chunk to unload (that wait was the flaky part):
-	 * {@link #destinationLoadsAnUnloadedChunk} covers loading an unloaded chunk; this one covers the channel's ticket and the
-	 * teleport into a chunk nobody else holds.
+	 * The channel holds the home chunk with its own ticket: a far home whose chunk nothing else holds is still loaded at tick 50
+	 * and the recall lands on it.
 	 */
 	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
-	public void recallWorksWhenTheHomeChunkIsNotLoaded(GameTestHelper h) {
+	public void recallChannelHoldsTheHomeChunkWithATicket(GameTestHelper h) {
 		ServerPlayer p = caster(h);
 		ServerLevel level = h.getLevel();
 		BlockPos far = new BlockPos(40_008, 90, 40_008);
@@ -484,9 +472,7 @@ public class RecallGameTests {
 		release(level, far);
 		setHome(p, GlobalPos.of(level.dimension(), far));
 		h.assertValueEqual(recall(p), Result.CAST, "the start check finds the platform");
-		// The start check loaded it (again, if it had gone) and the channel holds a ticket until the teleport.
-		h.assertTrue(level.hasChunkAt(far), "loaded by the start check");
-		h.runAfterDelay(50, () -> h.assertTrue(level.hasChunkAt(far), "still held by the channel's ticket"));
+		h.runAfterDelay(50, () -> h.assertTrue(level.hasChunkAt(far), "held by the channel's ticket"));
 		h.runAfterDelay(62, () -> {
 			h.assertTrue(p.level() == level, "same level");
 			h.assertTrue(p.position().distanceTo(Vec3.atBottomCenterOf(far)) < 0.01, "at home: " + p.position());
@@ -495,20 +481,16 @@ public class RecallGameTests {
 		});
 	}
 
-	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 400)
+	/** {@code destination} loads a chunk that was never loaded (no waiting for an unload: this chunk never existed). */
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV)
 	public void destinationLoadsAnUnloadedChunk(GameTestHelper h) {
 		ServerPlayer p = caster(h);
 		ServerLevel level = h.getLevel();
-		BlockPos far = new BlockPos(40_056, 90, 40_056);
-		platform(level, far);
-		release(level, far);
-		whenUnloaded(h, level, far, 300, () -> {
-			h.assertFalse(level.hasChunkAt(far), "unloaded");
-			Vec3 at = RecallSpell.destination(p, GlobalPos.of(level.dimension(), far));
-			h.assertTrue(at != null && at.distanceTo(Vec3.atBottomCenterOf(far)) < 0.01, "found the platform in the unloaded chunk: " + at);
-			h.assertTrue(level.hasChunkAt(far), "and loaded it");
-			h.succeed();
-		});
+		BlockPos far = new BlockPos(41_000 + 16 * (int) (h.getLevel().getGameTime() % 64), 90, -41_000); // never touched this run
+		h.assertFalse(level.hasChunkAt(far), "never loaded");
+		Vec3 at = RecallSpell.destination(p, GlobalPos.of(level.dimension(), far));
+		h.assertTrue(level.hasChunkAt(far), "destination loaded it (found " + at + ")");
+		h.succeed();
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)

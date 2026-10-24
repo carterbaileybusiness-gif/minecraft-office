@@ -162,9 +162,22 @@ public final class TeleportChannel {
 	 * the chunk if it is not loaded.
 	 */
 	public static @Nullable Vec3 safeSpot(ServerPlayer p, ServerLevel level, BlockPos cell, boolean beside) {
-		for (BlockPos offset : beside ? BESIDE : OFFSETS) {
-			Vec3 at = arrival(p, level, cell.offset(offset));
-			if (at != null) return at;
+		return safeSpot(p, level, cell, beside, pos -> true);
+	}
+
+	/**
+	 * As {@link #safeSpot(ServerPlayer, ServerLevel, BlockPos, boolean)}, but every cell {@code preferred} accepts is tried
+	 * (nearest first) before any cell it refuses.
+	 */
+	public static @Nullable Vec3 safeSpot(ServerPlayer p, ServerLevel level, BlockPos cell, boolean beside, Predicate<BlockPos> preferred) {
+		List<BlockPos> order = beside ? BESIDE : OFFSETS;
+		for (int pass = 0; pass < 2; pass++) {
+			for (BlockPos offset : order) {
+				BlockPos at = cell.offset(offset);
+				if (preferred.test(at) != (pass == 0)) continue;
+				Vec3 v = arrival(p, level, at);
+				if (v != null) return v;
+			}
 		}
 		return null;
 	}

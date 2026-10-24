@@ -339,7 +339,9 @@ public final class CastService {
 	}
 
 	private static Component cooldownMessage(Spell spell, long ticksLeft) {
-		return Component.translatable("magic.office.cooldown", name(spell), ticksLeft / 20.0);
+		// Lang strings take only %s: one decimal, rounded up to the next tenth of a second.
+		return Component.translatable("magic.office.cooldown", name(spell),
+				String.format(java.util.Locale.ROOT, "%.1f", Math.ceil(ticksLeft / 2.0) / 10));
 	}
 
 	private static Component noManaMessage(int mana, int need) {

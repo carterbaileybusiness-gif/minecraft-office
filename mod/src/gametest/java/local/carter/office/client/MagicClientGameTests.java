@@ -330,7 +330,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		if (seals != 1) throw new AssertionError("exactly one seal spent, have " + seals);
 	}
 
-	private static final String[] FRIENDS = {"Ava", "Ben", "Chloe", "Dev", "Eli", "Fay", "Gus", "Hana", "Ivo", "Juno"};
+	/** Ava first (the one asked); "Aaron_Wolfington" is a 16-character name, the longest vanilla allows, sorted onto row 0. */
+	private static final String[] FRIENDS = {"Ava", "Ben", "Chloe", "Dev", "Eli", "Fay", "Gus", "Hana", "Ivo", "Juno", "Aaron_Wolfington"};
 
 	/**
 	 * The grimoire's Friends tab with ten other players online (real server players with an embedded connection, so the client
@@ -385,8 +386,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			context.takeScreenshot("magic-friends-page2-gui4");
 			context.runOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).friendsPage().turn(-1));
 
-			// Click Ava (row 0): the request reaches the server and the row waits.
-			Rect row = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).layout().friends().rows().get(0));
+			// Click Ava (row 1, after Aaron_Wolfington): the request reaches the server and the row waits.
+			Rect row = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).layout().friends().rows().get(1));
 			moveTo(context, row.cx(), row.cy());
 			context.waitTicks(10);
 			context.takeScreenshot("magic-friends-hover-gui4");

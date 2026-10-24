@@ -77,7 +77,7 @@ public final class MagicServer {
 		ServerPlayNetworking.registerGlobalReceiver(SelectSpell.TYPE, (p, ctx) -> select(ctx.player(), p.spell()));
 		ServerPlayNetworking.registerGlobalReceiver(TravelRequest.TYPE, (p, ctx) -> {
 			Travel.request(ctx.player(), p.target());
-			Travel.sendRoster(ctx.player()); // the page shows the outcome at once
+			Travel.query(ctx.player()); // the page shows the outcome (throttled like any roster query)
 		});
 		ServerPlayNetworking.registerGlobalReceiver(TravelRosterQuery.TYPE, (p, ctx) -> Travel.query(ctx.player()));
 	}
