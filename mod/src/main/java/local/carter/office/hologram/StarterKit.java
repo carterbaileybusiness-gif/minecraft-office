@@ -3,17 +3,22 @@ package local.carter.office.hologram;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.mojang.brigadier.CommandDispatcher;
+
 import net.minecraft.ChatFormatting;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.Filterable;
 import net.minecraft.util.Prediction;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.WrittenBookContent;
 import net.minecraft.core.component.DataComponents;
 
-/** First-join kit: 4 Hologram Emitters and the "Office Handbook" written book. */
+/** First-join kit: 4 Hologram Emitters and the "Office Handbook" written book; {@code /handbook} refreshes the book. */
 public final class StarterKit {
 	public static final int EMITTERS = 4;
 	public static final String HANDBOOK_TITLE = "Office Handbook";
@@ -38,6 +43,40 @@ public final class StarterKit {
 		}
 	}
 
+	/** {@code /handbook}: anyone can run it. */
+	public static void registerCommand(final CommandDispatcher<CommandSourceStack> dispatcher) {
+		dispatcher.register(Commands.literal("handbook").executes(ctx -> {
+			CommandSourceStack source = ctx.getSource();
+			boolean replaced = giveOrUpdateHandbook(source.getPlayerOrException());
+			source.sendSuccess(() -> Component.literal(replaced ? "Updated your Office Handbook." : "Here's the Office Handbook."), false);
+			return 1;
+		}));
+	}
+
+	/**
+	 * Replaces every outdated copy of the handbook (same title, different pages) in place; if there was none,
+	 * gives a fresh copy. Returns whether something was replaced.
+	 */
+	public static boolean giveOrUpdateHandbook(final ServerPlayer player) {
+		ItemStack fresh = handbook();
+		List<Filterable<Component>> current = fresh.get(DataComponents.WRITTEN_BOOK_CONTENT).pages();
+		Inventory inv = player.getInventory();
+		boolean replaced = false;
+		for (int i = 0; i < inv.getContainerSize(); i++) {
+			ItemStack held = inv.getItem(i);
+			WrittenBookContent content = held.get(DataComponents.WRITTEN_BOOK_CONTENT);
+			if (held.is(Items.WRITTEN_BOOK) && content != null && HANDBOOK_TITLE.equals(content.title().raw())
+					&& !content.pages().equals(current)) {
+				inv.setItem(i, handbook());
+				replaced = true;
+			}
+		}
+		if (!replaced) {
+			give(player, fresh);
+		}
+		return replaced;
+	}
+
 	public static ItemStack handbook() {
 		ItemStack book = new ItemStack(Items.WRITTEN_BOOK);
 		List<Filterable<Component>> pages = new ArrayList<>();
@@ -51,7 +90,7 @@ public final class StarterKit {
 		return book;
 	}
 
-	/** {title, body} per page; kept short enough to fit a written-book page. */
+	/** {title, body} per page; kept short enough to fit a written-book page (at most 14 lines). */
 	static final String[][] PAGES = {
 		{"Office Handbook", "Hologram Emitters put your real computer screen into the world.\n\n"
 				+ "You get 4. Type /emitter for more (up to 8 holograms each)."},
@@ -61,33 +100,26 @@ public final class StarterKit {
 		{"Sizing", "Hold an emitter and look at your screen: glowing corners appear.\n"
 				+ "Hold right-click on a corner and drag, or just scroll.\n\n"
 				+ "Shift + hold right-click to move it (scroll turns floor screens)."},
-		{"Settings", "Your first hologram is your own screen (Mirror); each next one is a new screen (Extend).\n\n"
+		{"Settings", "Your first hologram is your own screen (Mirror, starts Private); each next is a new screen (Extend).\n"
 				+ "Right-click the emitter:\n- Shape: 16:9, 21:9 or 9:16\n- Shows: Extend, Window or Mirror\n- Remove"},
 		{"Privacy", "Also in the emitter menu:\n- Public: anyone nearby sees it\n- Private: only you; others see frosted glass\n"
-				+ "- Show to...: friends you pick\n\nPrivate screens never leave your computer."},
-		{"Working", "Mac: click your screen to work on your Mac: your mouse is the Mac's mouse, drag windows across screens, "
-				+ "type. Esc comes back. Extend screens have a Dock.\n\nWindows: click to zoom in; double-tap Esc."},
-		{"Magic", "Magic is normal survival: craft a table, a wand and runes. No commands.\n\n"
-				+ "Recipe book (JEI): hover an item and press R to see how it's made, U to see what it's used for."},
-		{"1. Wand", "Novice Wand: 1 coal + 1 stick (coal top-right, stick bottom-left).\n\n"
-				+ "Better: Arcane (amethyst + gold), Fire (gunpowder + gold), Frost (snowball + iron).\n\nRight-click to cast."},
-		{"2. Runes", "Spells use runes like a bow uses arrows.\n\n1 stone (cobblestone, blackstone...) + amethyst (Arcane), "
-				+ "gunpowder or coal (Fire) or a snowball (Frost) = 2 runes. A Crafting Altar makes more (see JEI)."},
-		{"3. The Table", "Spell Binding Table: 1 book, 2 amethyst, 1 gold ingot, 3 polished diorite.\n\n"
-				+ "Book top middle, amethyst either side of the gold, diorite along the bottom. Put bookshelves around it. "
-				+ "Village gazebos have one."},
-		{"4. Spell Book", "Put a book into the table and pick a path: Arcane, Fire or Frost. It costs a little XP "
-				+ "(about 1 level).\n\nIf it asks for more than a book, check JEI (press R on the table)."},
-		{"5. Equip It", "Wear the spell book in its own slot (look for the extra slot in your inventory) and hold a wand "
-				+ "or staff to cast the book's spells."},
-		{"6. Dress Up", "Wizard robes (lapis + wool) make spells stronger and faster. A Wizard Staff (1 quartz, 2 sticks) "
-				+ "beats a wand.\n\nWizard Merchant villagers sell wands, staves and robes for emeralds."},
-		{"7. Level Up", "Come back to the table with XP to bind more spells. Look for spell enchantments: Spell Infinity "
-				+ "casts without runes.\n\nWizard buildings in villages have loot."},
+				+ "- Show to...: friends you pick\nPrivate screens never leave your computer."},
+		{"Working", "Mac: click your screen to enter work mode. Your mouse becomes the Mac's mouse, your view follows it, "
+				+ "keys type into the app.\nHold the mouse button to drag windows onto your other screens; WASD walks you meanwhile."},
+		{"Working 2", "Esc comes back.\nExtend screens have a Dock.\n\nWindows: click to zoom in; double-tap Esc."},
+		{"Magic: Grimoire", "Craft a Grimoire: a book, a feather and an iron ingot, any order.\n"
+				+ "Hold it in your main hand and right-click to open it.\n"
+				+ "First time, choose your element: Fire, Water, Wind, Lightning, Earth or Shadow. It's for good."},
+		{"Rebinding", "A Rebinding Seal (nether star + book) lets you choose your element again."},
+		{"Casting", "Grimoire in your OFF hand, main hand empty.\n"
+				+ "Tap right-click: quick cast. Hold it and the circle grows; release for a stronger cast.\n"
+				+ "Shift + scroll or hold R (wheel) picks spells.\nHolding the Grimoire shows mana on the XP bar."},
+		{"Spells", "Casting levels up your Grimoire and unlocks your element's 5 spells.\n"
+				+ "The ultimate asks for hand signs: press the arrows shown before time runs out.\n"
+				+ "Big spells change the land, but never inside someone else's claim."},
+		{"Recall", "Shift + cast Recall to mark home (anywhere, any dimension).\n\n"
+				+ "Cast Recall to channel for 3 s and go home. Taking damage cancels it. 60 s cooldown, no mana."},
 		{"Also", "Talk: press V for voice chat; friends nearby hear you (check its settings for the talk key).\n\n"
 				+ "Claim your office: press ' and claim the chunks around it. Party friends can still build."},
-		{"Travel", "A Warp Stone (4 amethyst, 4 ender pearls, 1 gold ingot) turns stone bricks into a Waystone "
-				+ "(see JEI).\n\n"
-				+ "Waystones you've visited let you teleport between them. Some sit in the wild."},
 	};
 }
