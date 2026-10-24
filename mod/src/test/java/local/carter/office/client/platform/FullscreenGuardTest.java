@@ -33,6 +33,8 @@ class FullscreenGuardTest {
 			"\\bis\\w*Fullscreen\\((final long \\w+)?\\)|\\bis\\w*Fullscreen\\(\\w+\\)"
 					+ "|AXUIElementCopyAttributeValue\\(\\w+, \"AXFullScreen\" as CFString"
 					+ "|SDLVideo\\.SDL_GetWindowFlags\\(\\w+\\) & SDLVideo\\.SDL_WINDOW_FULLSCREEN\\)"
+					// Identify's number windows may show over a fullscreen app's Space: a collection behaviour, not a mode change
+					+ "|\\.fullScreenAuxiliary\\b"
 					// the player-facing hint naming the Video setting to turn off (MirrorHint): words, not an API call
 					+ "|\"Mirror needs Minecraft in a window: Options → Video → Fullscreen OFF ");
 	/** Window applies fullscreen; KeyboardHandler/MouseHandler route F11 (handleGlobalKeyPress); the video screens toggle it. */

@@ -415,6 +415,36 @@ public class HologramGameTests {
 		return old;
 	}
 
+	/** The Settings page points at the screen map; no page overflows a written-book page (14 lines of about 19 chars). */
+	@GameTest
+	public void handbookSettingsMentionsIdentify(GameTestHelper h) {
+		h.assertTrue(StarterKit.pageBody("Settings").contains("Identify"), "the Settings page mentions Identify");
+		for (String title : StarterKit.pageTitles()) {
+			int lines = bookLines(StarterKit.pageBody(title));
+			h.assertTrue(lines <= 14, "handbook page " + title + " needs " + lines + " lines (max 14)");
+		}
+		h.succeed();
+	}
+
+	/** Greedy word wrap at 19 characters a line, about what a written-book line holds. */
+	private static int bookLines(String body) {
+		int lines = 0;
+		for (String para : body.split("\n", -1)) {
+			int used = 0;
+			lines++;
+			for (String word : para.split(" ")) {
+				int need = used == 0 ? word.length() : used + 1 + word.length();
+				if (need > 19 && used > 0) {
+					lines++;
+					used = word.length();
+				} else {
+					used = need;
+				}
+			}
+		}
+		return lines;
+	}
+
 	@GameTest
 	@SuppressWarnings("removal")
 	public void joinReplacesOutdatedHandbooksAndSaysSo(GameTestHelper h) {

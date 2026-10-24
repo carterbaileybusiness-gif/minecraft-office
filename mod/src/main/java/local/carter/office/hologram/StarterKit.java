@@ -1,6 +1,7 @@
 package local.carter.office.hologram;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import com.mojang.brigadier.CommandDispatcher;
@@ -111,6 +112,11 @@ public final class StarterKit {
 	}
 
 	/** Body of the handbook page with this title (what follows the bold title and blank line). */
+	/** Every handbook page title, in book order. */
+	public static List<String> pageTitles() {
+		return Arrays.stream(PAGES).map(page -> page[0]).toList();
+	}
+
 	public static String pageBody(final String title) {
 		for (String[] page : PAGES) {
 			if (page[0].equals(title)) {
@@ -143,8 +149,9 @@ public final class StarterKit {
 		{"Sizing", "Hold an emitter and look at your screen: glowing corners appear.\n"
 				+ "Hold right-click on a corner and drag, or just scroll.\n\n"
 				+ "Shift + hold right-click to move it (scroll turns floor screens)."},
-		{"Settings", "Your first hologram is your own screen (Mirror, starts Private); each next is a new screen (Extend).\n"
-				+ "Right-click the emitter:\n- Shape: 16:9, 21:9 or 9:16\n- Shows: Extend, Window or Mirror\n- Remove"},
+		{"Settings", "First hologram: your screen (Mirror, Private). Next ones: new screens (Extend).\n"
+				+ "Right-click the emitter:\n- Shape, Shows (Extend, Window, Mirror), Remove\n"
+				+ "Screens show as a map: drag, Apply, Identify."},
 		{"Privacy", "Also in the emitter menu:\n- Public: anyone nearby sees it\n- Private: only you; others see frosted glass\n"
 				+ "- Show to...: friends you pick\nPrivate screens never leave your computer."},
 		{"Working", "Mac: click your screen to enter work mode. Your mouse becomes the Mac's mouse, your view follows it, "
