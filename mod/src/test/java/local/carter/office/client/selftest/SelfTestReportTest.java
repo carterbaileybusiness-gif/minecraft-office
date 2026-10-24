@@ -96,9 +96,9 @@ class SelfTestReportTest {
 		report.hideWindowTitles(List.of(BANK));
 		report.info("Java", "25.0.4.1 (Eclipse Adoptium)");
 		report.result(new SelfTestReport.Line("udp", "Shared-screen link (UDP)", Status.FAIL,
-				"PortUnreachableException: 170.205.26.20:8123 unreachable; [2001:db8::1]:8123; at 12:34:56", 5));
+				"PortUnreachableException: 203.0.113.7:8123 unreachable; [2001:db8::1]:8123; at 12:34:56", 5));
 		String text = report.render(ZonedDateTime.now());
-		assertFalse(text.contains("170.205"), text);
+		assertFalse(text.contains("203.0.113"), text);
 		assertFalse(text.contains("2001:db8"), text);
 		assertTrue(text.contains("25.0.4.1"), "versions in info lines are kept:\n" + text);
 		assertTrue(text.contains("12:34:56"), "clock times aren't addresses:\n" + text);
