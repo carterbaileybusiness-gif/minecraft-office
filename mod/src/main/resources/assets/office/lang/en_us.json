@@ -105,6 +105,8 @@
   "magic.office.recall_interrupted": "Recall interrupted",
   "magic.office.protected": "The land here is protected",
   "magic.office.busy": "Too much magic here — wait a moment",
+  "magic.office.wrong_element": "%s belongs to another element — you are bound to %s",
+  "magic.office.spell_failed": "The spell failed",
   "magic.office.undo_done": "Restored %d blocks from %d casts (%d changed since, left alone)",
   "magic.office.undo_help": "Undo a player's last n terrain casts (the newest 20 are kept)"
 }

@@ -16,6 +16,7 @@ import local.carter.office.magic.spell.wind.WindSpells;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
+import net.fabricmc.fabric.api.entity.event.v1.ServerEntityLevelChangeEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -46,17 +47,23 @@ public final class MagicMod {
 		});
 	}
 
-	/** Cast pipeline ticking and the hooks that discard a charge with no cast (death, disconnect). */
+	/** Cast pipeline ticking and the hooks that discard a charge with no cast (death, disconnect, dimension change). */
 	private static void registerCastHooks() {
 		ServerTickEvents.END_SERVER_TICK.register(CastService::tick);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> CastService.stop());
 		ServerLivingEntityEvents.ALLOW_DAMAGE.register(Motion::allowDamage);
 		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
-			if (entity instanceof ServerPlayer p) p.stopUsingItem();
+			if (entity instanceof ServerPlayer p) discardCharge(p);
 		});
+		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, from, to) -> discardCharge(player));
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-			handler.player.stopUsingItem();
+			discardCharge(handler.player);
 			CastService.forget(handler.player);
 		});
+	}
+
+	private static void discardCharge(ServerPlayer p) {
+		p.stopUsingItem();
+		CastService.endCharge(p);
 	}
 }

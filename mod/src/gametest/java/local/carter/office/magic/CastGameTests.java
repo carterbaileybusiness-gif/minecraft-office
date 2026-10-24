@@ -2,6 +2,7 @@ package local.carter.office.magic;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -10,8 +11,10 @@ import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.item.MagicItems;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
@@ -42,6 +45,8 @@ import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 
@@ -160,6 +165,7 @@ public class CastGameTests {
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		h.assertValueEqual(MagicTestKit.cast(fire, id("probe_water"), 0f), Result.WRONG_ELEMENT, "fire casting water");
 		h.assertValueEqual(MagicTestKit.cast(unbound, id("probe_water"), 0f), Result.NO_ELEMENT, "unbound");
+		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.wrong_element", "magic.office.choose"), "messages");
 		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
 		h.succeed();
 	}
@@ -285,11 +291,14 @@ public class CastGameTests {
 	public void chargeDiscardedOnDeath(GameTestHelper h) {
 		ServerPlayer p = probeCaster(h, 1);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ItemStack grimoire = p.getOffhandItem();
 		MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
 		h.assertTrue(p.isUsingItem(), "charging");
 		MagicTestKit.kill(p);
 		h.assertFalse(p.isUsingItem(), "charging after death");
 		p.releaseUsingItem();
+		// A late release reaching the item itself (a full 40-tick charge) must still cast nothing for a dead player.
+		MagicItems.GRIMOIRE.releaseUsing(grimoire, h.getLevel(), p, GrimoireItem.USE_DURATION - 40);
 		ServerPlayer back = MagicTestKit.respawn(h, p);
 		h.assertValueEqual(MagicAttachments.mana(back), 100, "mana after respawn");
 		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
@@ -300,13 +309,140 @@ public class CastGameTests {
 	public void chargeDiscardedOnDisconnect(GameTestHelper h) {
 		ServerPlayer p = probeCaster(h, 1);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ItemStack grimoire = p.getOffhandItem();
 		MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
 		h.assertTrue(p.isUsingItem(), "charging");
 		MagicTestKit.disconnect(p);
 		h.assertFalse(p.isUsingItem(), "charging after disconnect");
 		p.releaseUsingItem();
+		MagicItems.GRIMOIRE.releaseUsing(grimoire, h.getLevel(), p, GrimoireItem.USE_DURATION - 40);
 		h.assertValueEqual(MagicAttachments.mana(p), 100, "mana");
 		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void chargeDiscardedOnDimensionChange(GameTestHelper h) {
+		ServerPlayer p = probeCaster(h, 1);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ItemStack grimoire = p.getOffhandItem();
+		MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
+		h.assertTrue(p.isUsingItem(), "charging");
+		ServerLevel nether = h.getLevel().getServer().getLevel(Level.NETHER);
+		MagicTestKit.teleportTo(p, nether, new Vec3(0.5, 64, 0.5));
+		h.assertTrue(p.level() == nether, "in the Nether");
+		h.assertFalse(p.isUsingItem(), "charging after a dimension change");
+		p.releaseUsingItem(); // the client's late release packet
+		h.assertValueEqual(MagicAttachments.mana(p), 100, "mana");
+		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
+		h.assertTrue(p.getOffhandItem() == grimoire, "grimoire kept in the off hand");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
+	public void selectionCapturedAtChargeStart(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 3);
+		MagicTestKit.override(h, MagicTestKit.probe("probe", Element.FIRE, 0));
+		MagicTestKit.override(h, MagicTestKit.probe("probe_small_b", Element.FIRE, 2));
+		select(p, PROBE);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
+		h.assertTrue(p.isUsingItem(), "charging");
+		h.assertTrue(MagicServer.select(p, id("probe_small_b")), "selection changed mid-charge");
+		p.releaseUsingItem();
+		h.assertValueEqual(rec.fx(p).size(), 1, "fx sent");
+		h.assertValueEqual(rec.fx(p).get(0).spell(), PROBE, "cast the spell selected when the charge started");
+		// The next charge uses the new selection.
+		MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
+		p.releaseUsingItem();
+		h.assertValueEqual(rec.fx(p).size(), 2, "second fx");
+		h.assertValueEqual(rec.fx(p).get(1).spell(), id("probe_small_b"), "second spell");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void grimoireWontChargeWhenHopeless(GameTestHelper h) {
+		ServerPlayer p = probeCaster(h, 1);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.cast(p, PROBE, 0f), Result.CAST, "cast");
+		h.assertValueEqual(MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND), InteractionResult.PASS, "use on cooldown");
+		h.assertFalse(p.isUsingItem(), "charging on cooldown");
+		MagicAttachments.set(p, MagicAttachments.get(p).withReadyAt(Map.of()));
+		MagicAttachments.setMana(p, 5);
+		h.assertValueEqual(MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND), InteractionResult.PASS, "use without mana");
+		h.assertFalse(p.isUsingItem(), "charging without mana");
+		select(p, id("not_registered"));
+		h.assertValueEqual(MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND), InteractionResult.PASS, "use with an unknown spell");
+		h.assertFalse(p.isUsingItem(), "charging an unknown spell");
+		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.cooldown", "magic.office.no_mana"), "messages");
+		select(p, PROBE);
+		p.setGameMode(GameType.CREATIVE);
+		h.assertValueEqual(MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND), InteractionResult.CONSUME, "creative without mana");
+		p.stopUsingItem();
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void throwingSpellFailsNeutrally(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 1);
+		MagicTestKit.override(h, MagicTestKit.probe("probe_throws", Element.FIRE, 0).withBody(ctx -> {
+			throw new IllegalStateException("probe_throws: expected test failure");
+		}));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.cast(p, id("probe_throws"), 0f), Result.FIZZLED, "result");
+		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.spell_failed"), "message");
+		h.assertValueEqual(MagicAttachments.mana(p), 100, "mana");
+		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
+		h.succeed();
+	}
+
+	// ---- Ultimates and creative ----
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void ultimateNeedsXpLevels(GameTestHelper h) {
+		Identifier sid = id("probe_ult_levels");
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 7);
+		MagicTestKit.override(h, MagicTestKit.probe("probe_ult_levels", Element.FIRE, 4));
+		p.setExperienceLevels(2);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, sid), Result.NO_LEVELS, "result");
+		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.no_levels"), "message");
+		h.assertValueEqual(p.experienceLevel, 2, "XP levels");
+		h.assertValueEqual(MagicAttachments.mana(p), 160, "mana");
+		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
+		h.assertValueEqual(rec.challenges().size(), 0, "challenges sent");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void ultimateSpendsXpLevelsAndBaseMana(GameTestHelper h) {
+		Identifier sid = id("probe_ult_spend");
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 7);
+		MagicTestKit.override(h, MagicTestKit.probe("probe_ult_spend", Element.FIRE, 4));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, sid), Result.CAST, "result");
+		h.assertValueEqual(p.experienceLevel, MagicTestKit.XP_LEVELS - 3, "XP levels");
+		h.assertValueEqual(MagicAttachments.mana(p), 160 - 60, "mana");
+		h.assertValueEqual(MagicAttachments.get(p).cooldownLeft(sid, now(h)), 600L, "cooldown");
+		h.assertValueEqual(rec.fx(p).size(), 1, "fx sent");
+		h.assertValueEqual(rec.fx(p).get(0).charge(), 1.0f, "ultimate charge");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void creativePaysNothing(GameTestHelper h) {
+		Identifier sid = id("probe_ult_creative");
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 7);
+		MagicTestKit.override(h, MagicTestKit.probe("probe_ult_creative", Element.FIRE, 4));
+		p.setGameMode(GameType.CREATIVE);
+		MagicAttachments.setMana(p, 0);
+		p.setExperienceLevels(0);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, sid), Result.CAST, "result");
+		h.assertValueEqual(MagicAttachments.mana(p), 0, "mana");
+		h.assertValueEqual(p.experienceLevel, 0, "XP levels");
+		h.assertValueEqual(MagicAttachments.get(p).cooldownLeft(sid, now(h)), 600L, "cooldown still applies");
+		h.assertValueEqual(rec.fx(p).size(), 1, "fx sent");
 		h.succeed();
 	}
 
@@ -488,5 +624,51 @@ public class CastGameTests {
 			h.assertValueEqual(hits.size(), 1, "hits");
 			h.assertTrue(hits.get(0).entity() == zombie, "hit " + hits.get(0).entity());
 		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
+	public void pierceStopsAfterCastHitBudget(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 1);
+		for (int x = 2; x <= 30; x += 2) {
+			for (int z = 8; z <= 16; z += 2) MagicTestKit.dummy(h, new BlockPos(x, 4, z));
+		}
+		List<ProjectileHit> hits = new ArrayList<>();
+		List<Vec3> moves = new ArrayList<>();
+		MagicTestKit.override(h, MagicTestKit.probe("probe_pierce", Element.FIRE, 0).withBody(ctx -> {
+			// A huge radius: all 75 dummies are inside the sweep on the first step.
+			Vec3 centre = h.absoluteVec(new Vec3(16, 5, 12));
+			Projectiles.launch(ctx, new ProjectileSpec(centre, new Vec3(0, 0, 0.05), 0, 20, 20, true), hits::add, moves::add);
+			return CastOutcome.cast(ctx.fx());
+		}));
+		h.assertValueEqual(MagicTestKit.cast(p, id("probe_pierce"), 0f), Result.CAST, "result");
+		h.runAfterDelay(6, () -> {
+			h.assertValueEqual(hits.size(), Projectiles.MAX_HITS_PER_CAST, "entity hits");
+			h.assertValueEqual(moves.size(), 1, "steps flown");
+			h.assertValueEqual(hits.stream().map(ProjectileHit::entity).distinct().count(), (long) Projectiles.MAX_HITS_PER_CAST, "distinct entities");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void spellHitsIgnoreAndKeepInvulnerabilityFrames(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 1);
+		Zombie fresh = MagicTestKit.dummy(h, new BlockPos(14, 4, 10));
+		Zombie recentlyHit = MagicTestKit.dummy(h, new BlockPos(18, 4, 10));
+		recentlyHit.setInvulnerableTime(15);
+		boolean[] landed = new boolean[4];
+		MagicTestKit.override(h, MagicTestKit.probe("probe_iframes", Element.FIRE, 0).withBody(ctx -> {
+			landed[0] = Hurt.damage(ctx, fresh, 3f);
+			landed[1] = Hurt.damage(ctx, fresh, 3f);
+			landed[2] = Hurt.damage(ctx, recentlyHit, 3f);
+			landed[3] = Hurt.damage(ctx, recentlyHit, 3f);
+			return CastOutcome.cast(ctx.fx());
+		}));
+		h.assertValueEqual(MagicTestKit.cast(p, id("probe_iframes"), 0f), Result.CAST, "result");
+		for (int i = 0; i < landed.length; i++) h.assertTrue(landed[i], "hit " + i + " landed");
+		h.assertTrue(fresh.getHealth() <= 14f, "two hits in one tick, health " + fresh.getHealth());
+		h.assertTrue(recentlyHit.getHealth() <= 14f, "hits through i-frames, health " + recentlyHit.getHealth());
+		h.assertValueEqual(fresh.getInvulnerableTime(), 0, "no i-frames granted");
+		h.assertValueEqual(recentlyHit.getInvulnerableTime(), 15, "i-frames kept");
+		h.succeed();
 	}
 }

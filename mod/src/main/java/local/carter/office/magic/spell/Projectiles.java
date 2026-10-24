@@ -27,10 +27,14 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * server-wide (separate from the lingering-effect cap). Each tick the segment from the last position to the next is clipped
  * against block colliders ({@code ClipContext.Block.COLLIDER}, fluids ignored) and swept for entities that pass
  * {@link TargetFilter#affects}, hitboxes widened by the spec's radius. A non-piercing projectile stops at its first hit; a
- * piercing one hits each entity once and stops at a block. Running out of ticks ends it without a hit. Server thread only.
+ * piercing one hits each entity once and stops at a block. Running out of ticks ends it without a hit. All projectiles of one
+ * cast share a budget of {@link #MAX_HITS_PER_CAST} entity hits: once it is spent they stop at their next entity contact, and
+ * a piercing one stops as soon as it spends the last hit. Server thread only.
  */
 public final class Projectiles {
 	public static final int MAX = 64;
+	/** Entity hits per cast, summed over all its projectiles (the per-cast entity budget). */
+	public static final int MAX_HITS_PER_CAST = Targets.MAX_ENTITIES;
 
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 
@@ -40,10 +44,13 @@ public final class Projectiles {
 		final Consumer<ProjectileHit> onHit;
 		final @Nullable Consumer<Vec3> onMove;
 		final Set<Integer> hit = new HashSet<>();
+		/** Entity hits so far by this projectile's cast, shared by every projectile of the cast. */
+		final int[] castHits;
 		int tick;
 
-		Flight(CastContext ctx, ProjectileSpec spec, Consumer<ProjectileHit> onHit, @Nullable Consumer<Vec3> onMove) {
+		Flight(CastContext ctx, ProjectileSpec spec, Consumer<ProjectileHit> onHit, @Nullable Consumer<Vec3> onMove, int[] castHits) {
 			this.ctx = ctx;
+			this.castHits = castHits;
 			this.spec = spec;
 			this.onHit = onHit;
 			this.onMove = onMove;
@@ -64,7 +71,14 @@ public final class Projectiles {
 	/** As {@link #launch(CastContext, ProjectileSpec, Consumer)}; {@code onMove} gets the position reached at the end of every tick. */
 	public static boolean launch(CastContext ctx, ProjectileSpec spec, Consumer<ProjectileHit> onHit, @Nullable Consumer<Vec3> onMove) {
 		if (FLIGHTS.size() >= MAX || spec.maxTicks() <= 0) return false;
-		FLIGHTS.add(new Flight(ctx, spec, onHit, onMove));
+		int[] castHits = new int[1];
+		for (Flight f : FLIGHTS) {
+			if (f.ctx.castId() == ctx.castId()) {
+				castHits = f.castHits;
+				break;
+			}
+		}
+		FLIGHTS.add(new Flight(ctx, spec, onHit, onMove, castHits));
 		return true;
 	}
 
@@ -116,12 +130,18 @@ public final class Projectiles {
 		Vec3 end = blocked ? block.getLocation() : to;
 
 		for (EntityHit h : sweep(f, level, from, end)) {
-			if (!spec.pierce()) {
+			if (spec.pierce() && f.hit.contains(h.entity().getId())) continue;
+			if (f.castHits[0] >= MAX_HITS_PER_CAST) {
 				move(f, h.pos());
-				f.onHit.accept(new ProjectileHit(h.pos(), h.entity(), null));
 				return false;
 			}
-			if (f.hit.add(h.entity().getId())) f.onHit.accept(new ProjectileHit(h.pos(), h.entity(), null));
+			f.castHits[0]++;
+			f.hit.add(h.entity().getId());
+			f.onHit.accept(new ProjectileHit(h.pos(), h.entity(), null));
+			if (!spec.pierce() || f.castHits[0] >= MAX_HITS_PER_CAST) {
+				move(f, h.pos());
+				return false;
+			}
 		}
 		move(f, end);
 		if (blocked) {
