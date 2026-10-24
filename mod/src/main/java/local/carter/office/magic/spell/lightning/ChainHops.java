@@ -1,0 +1,80 @@
+package local.carter.office.magic.spell.lightning;
+
+import java.util.Arrays;
+import java.util.List;
+
+import net.minecraft.world.phys.Vec3;
+
+/**
+ * Pure hop selection for lightning that leaps between targets (Chain Lightning, and Spark's single arc), on points only: no world
+ * access, so the server and a unit test run the same rules. A chain starts at one point and each hop goes to the nearest point not
+ * yet hit within {@code range} of the last one hit (centre to centre), if the {@link Link} allows it (the server's line of sight).
+ * Ties go to the lower index, so a chain is the same on every run. It stops when no point qualifies, and never revisits a point.
+ */
+public final class ChainHops {
+	/** Chain Lightning: the most hops at charge 0 ({@code 4 + round(2 × charge)} in all), each at most 6 from the last target. */
+	public static final int BASE_HOPS = 4;
+	public static final double HOP_RANGE = 6;
+	/** Chain Lightning: damage {@code 6 × P × 0.8^hop}, hop 0 being the first target. */
+	public static final float DAMAGE = 6;
+	public static final float FALLOFF = 0.8F;
+
+	/** Whether lightning may leap from point {@code from} to point {@code to} (indices into the point list). */
+	@FunctionalInterface
+	public interface Link {
+		boolean allows(int from, int to);
+	}
+
+	private ChainHops() {}
+
+	/** Chain Lightning's hop count after the first target: {@code 4 + round(2 × charge)} (4 at a tap, 6 at full charge). */
+	public static int hops(float charge) {
+		float c = Math.clamp(charge, 0F, 1F);
+		return BASE_HOPS + Math.round(2 * c);
+	}
+
+	/** Chain Lightning's damage to the target at {@code hop} (0 = the first target): {@code 6 × power × 0.8^hop}. */
+	public static float damage(int hop, float power) {
+		return (float) (DAMAGE * power * Math.pow(FALLOFF, hop));
+	}
+
+	/** {@link #select(List, int, int, double, Link)} with every link allowed. */
+	public static int[] select(List<Vec3> points, int start, int hops, double range) {
+		return select(points, start, hops, range, (a, b) -> true);
+	}
+
+	/**
+	 * The chain's points in hit order: {@code start}, then up to {@code hops} more. Each next point is the nearest one (to the last
+	 * point hit, by centre distance, at most {@code range}) that was not hit yet and that {@code link} allows from the last point.
+	 * Empty if {@code start} is not an index of {@code points}.
+	 */
+	public static int[] select(List<Vec3> points, int start, int hops, double range, Link link) {
+		int n = points.size();
+		if (start < 0 || start >= n) return new int[0];
+		int[] order = new int[Math.min(n, 1 + Math.max(0, hops))];
+		boolean[] hit = new boolean[n];
+		order[0] = start;
+		hit[start] = true;
+		int count = 1;
+		double r2 = range * range;
+		while (count < order.length) {
+			int last = order[count - 1];
+			Vec3 from = points.get(last);
+			int best = -1;
+			double bestD = Double.MAX_VALUE;
+			for (int i = 0; i < n; i++) {
+				if (hit[i]) continue;
+				double d = from.distanceToSqr(points.get(i));
+				// Strictly nearer wins, so equal distances keep the lower index.
+				if (d <= r2 && d < bestD && link.allows(last, i)) {
+					best = i;
+					bestD = d;
+				}
+			}
+			if (best < 0) break;
+			hit[best] = true;
+			order[count++] = best;
+		}
+		return Arrays.copyOf(order, count);
+	}
+}
