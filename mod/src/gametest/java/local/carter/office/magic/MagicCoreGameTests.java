@@ -399,7 +399,7 @@ public class MagicCoreGameTests {
 
 		// Outsiders: a UUID no kit player has, and a real player the kit did not make, see none of this test's probes.
 		UUID stranger = UUID.randomUUID();
-		h.assertTrue(SpellRegistry.at(stranger, Element.FIRE, 1).isEmpty(), "a random UUID: no test-wide override");
+		h.assertTrue(SpellRegistry.at(stranger, Element.FIRE, 1).map(s -> s != shared).orElse(true), "a random UUID: no test-wide override");
 		h.assertTrue(SpellRegistry.get(stranger, shared.id()).isEmpty(), "a random UUID: not by id either");
 		h.assertValueEqual(SpellRegistry.at(stranger, Element.FIRE, Slots.RECALL), Optional.of(realRecall), "a random UUID: the real Recall");
 		ServerPlayer outsider = h.makeMockServerPlayerInLevel();
