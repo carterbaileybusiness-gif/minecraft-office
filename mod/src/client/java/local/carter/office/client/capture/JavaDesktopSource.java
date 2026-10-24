@@ -3,6 +3,8 @@ package local.carter.office.client.capture;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
@@ -57,12 +59,22 @@ public final class JavaDesktopSource implements CaptureSource {
 	/** Mirror pre-check (Windows platform: keep Minecraft out of the capture); returns why not, or null. Null = none. */
 	private static volatile @Nullable Supplier<@Nullable String> mirrorGuard;
 
-	/** One screen capture for every Mirror hologram on this computer. */
-	private static final SharedFeed MIRROR_FEED = new SharedFeed("win-mirror", ScreenProducer::new);
+	/**
+	 * One screen capture per monitor for every Mirror hologram that copies it, keyed by the monitor's webrtc screen index
+	 * ({@link #PRIMARY} = the primary monitor, also a Mirror whose chosen monitor isn't plugged in).
+	 */
+	private static final Map<Integer, SharedFeed> MIRROR_FEEDS = new ConcurrentHashMap<>();
+	private static final int PRIMARY = -1;
+
+	private static SharedFeed feedFor(final int screenIndex) {
+		return MIRROR_FEEDS.computeIfAbsent(screenIndex,
+				i -> new SharedFeed("win-mirror" + (i == PRIMARY ? "" : "-" + i), () -> new ScreenProducer(i)));
+	}
 
 	private final Object lock = new Object();
 	private @Nullable Run current;
 	private @Nullable MirrorSub mirror;
+	private @Nullable SharedFeed mirrorFeed;
 	/** Why the current session ended (null while running or not started), for {@link #status()}. */
 	private volatile @Nullable String endedReason;
 
@@ -84,6 +96,14 @@ public final class JavaDesktopSource implements CaptureSource {
 	 * screen ids on Windows), else the first screen; null when there is none. Pure.
 	 */
 	public static @Nullable Long pickScreen(final List<Long> screenIds, final int primaryIndex) {
+		return pickScreen(screenIds, primaryIndex, PRIMARY);
+	}
+
+	/** As {@link #pickScreen(List, int)}, but the chosen monitor ({@code chosenIndex}, -1 = none) first when it is there. */
+	public static @Nullable Long pickScreen(final List<Long> screenIds, final int primaryIndex, final int chosenIndex) {
+		if (chosenIndex >= 0 && screenIds.contains((long) chosenIndex)) {
+			return Long.valueOf(chosenIndex);
+		}
 		if (screenIds.isEmpty()) {
 			return null;
 		}
@@ -153,28 +173,41 @@ public final class JavaDesktopSource implements CaptureSource {
 			sink.ended(problem);
 			return;
 		}
+		int index = PRIMARY;
+		if (t.monitor() != null) {
+			try {
+				index = Win32.get().displayIndex(t.monitor()); // -1 (the primary) when it isn't plugged in
+			} catch (RuntimeException | LinkageError e) {
+				LOGGER.debug("Mirror monitor lookup failed: {}", e.toString());
+			}
+		}
 		MirrorSub sub = new MirrorSub(sink);
+		SharedFeed feed = feedFor(index);
 		synchronized (lock) {
 			mirror = sub;
+			mirrorFeed = feed;
 		}
-		MIRROR_FEED.subscribe(sub); // every Mirror hologram shares one screen capture
+		feed.subscribe(sub); // every Mirror hologram of that monitor shares one screen capture
 	}
 
 	@Override
 	public void stop() {
 		Run run;
 		MirrorSub sub;
+		SharedFeed feed;
 		synchronized (lock) {
 			run = current;
 			current = null;
 			sub = mirror;
 			mirror = null;
+			feed = mirrorFeed;
+			mirrorFeed = null;
 		}
 		if (run != null) {
 			run.cancel();
 		}
-		if (sub != null) {
-			MIRROR_FEED.unsubscribe(sub); // returns once the feed no longer calls it
+		if (sub != null && feed != null) {
+			feed.unsubscribe(sub); // returns once the feed no longer calls it
 		}
 	}
 
@@ -216,19 +249,29 @@ public final class JavaDesktopSource implements CaptureSource {
 		}
 	}
 
-	/** Number of Mirror holograms currently fed by the one shared screen capture (tests, logs). */
+	/** Number of Mirror holograms currently fed by the shared screen captures (tests, logs). */
 	public static int mirrorSubscribers() {
-		return MIRROR_FEED.subscribers();
+		int n = 0;
+		for (SharedFeed f : MIRROR_FEEDS.values()) {
+			n += f.subscribers();
+		}
+		return n;
 	}
 
 	/**
-	 * The primary monitor, captured once for every Mirror hologram (Minecraft's window is excluded from capture by its
-	 * display affinity), at {@link #IDLE_FPS}, converted I420 → RGBA natively like the window path.
+	 * One monitor (the chosen one, else the primary), captured once for every Mirror hologram of it (Minecraft's window is
+	 * excluded from capture by its display affinity), at {@link #IDLE_FPS}, converted I420 → RGBA natively like the window
+	 * path.
 	 */
 	static final class ScreenProducer implements SharedFeed.Producer {
+		private final int chosenIndex;
 		private @Nullable ByteBuffer rgba;
 		private DesktopCapturer.@Nullable Result lastResult;
 		private int failures;
+
+		ScreenProducer(final int chosenIndex) {
+			this.chosenIndex = chosenIndex;
+		}
 
 		@Override
 		public void run(final SharedFeed.Output out) throws Exception {
@@ -247,7 +290,7 @@ public final class JavaDesktopSource implements CaptureSource {
 					ids.add(s.id);
 				}
 				int primary = Win32.get().primaryDisplayIndex();
-				Long pick = pickScreen(ids, primary);
+				Long pick = pickScreen(ids, primary, chosenIndex);
 				if (pick == null) {
 					out.end(REASON_NO_SCREEN);
 					return;

@@ -13,7 +13,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import local.carter.office.client.helper.HelperProtocol.Cursor;
 import local.carter.office.client.helper.HelperProtocol.Displays;
+import local.carter.office.client.helper.HelperProtocol.PointerButton;
+import local.carter.office.client.helper.HelperProtocol.Scroll;
+import local.carter.office.client.helper.HelperProtocol.WorkBegin;
+import local.carter.office.client.pointer.PointerPoint;
 import local.carter.office.client.helper.HelperProtocol.Identify;
 import local.carter.office.client.helper.HelperProtocol.IdentifyLabel;
 import local.carter.office.client.helper.HelperProtocol.ListDisplays;
@@ -123,6 +128,32 @@ class MacHelperScreensTest {
 		assertFalse(helper.screens().abilities().live());
 		assertEquals(ScreenList.NO_HELPER_HINT, helper.screens().abilities().hint());
 		assertNull(helper.resolveMirror(LG), "no helper: back to the main display");
+	}
+
+	@Test
+	void pointerDisplayResolved() {
+		helper.connected(welcome(true));
+		helper.message(DISPLAYS);
+		PointerPoint onLg = new PointerPoint(0, 960, 540, 1920, 1080, LG);
+		assertTrue(helper.workBegin(onLg, PointerButton.LEFT));
+		assertEquals(LG, ((WorkBegin) sent.get(sent.size() - 1)).display());
+		helper.scroll(onLg, 0, 48);
+		assertEquals(LG, ((Scroll) sent.get(sent.size() - 1)).display());
+		helper.workBegin(new PointerPoint(0, 960, 540, 1920, 1080, "ABSENT"), PointerButton.LEFT);
+		assertNull(((WorkBegin) sent.get(sent.size() - 1)).display(), "an unplugged monitor: the main display");
+		helper.workBegin(new PointerPoint(0, 960, 540, 1920, 1080, MAIN), PointerButton.LEFT);
+		assertNull(((WorkBegin) sent.get(sent.size() - 1)).display(), "the main display needs no key");
+		helper.message(new Cursor(0, 10, 20, 1920, 1080, LG));
+		assertEquals(LG, helper.workCursorDisplay());
+		helper.message(new Cursor(0, 10, 20, 1440, 900));
+		assertNull(helper.workCursorDisplay());
+	}
+
+	@Test
+	void oldHelperPointerHasNoDisplay() {
+		helper.connected(welcome(false));
+		helper.workBegin(new PointerPoint(0, 960, 540, 1920, 1080, LG), PointerButton.LEFT);
+		assertNull(((WorkBegin) sent.get(sent.size() - 1)).display());
 	}
 
 	@Test

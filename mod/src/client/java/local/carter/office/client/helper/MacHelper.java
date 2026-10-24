@@ -415,24 +415,29 @@ public final class MacHelper implements HelperConnection.Listener {
 		return p.onMain() ? p.h() : null;
 	}
 
+	/** A Mirror point's monitor as the helper should map it: the chosen one while listed, else null (the main display). */
+	private @Nullable String display(final PointerPoint p) {
+		return p.onMain() ? resolveMirror(p.display()) : null;
+	}
+
 	public boolean pointerDown(final PointerPoint p) {
-		return send(new PointerDown(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p)));
+		return send(new PointerDown(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p), display(p)));
 	}
 
 	public boolean pointerMove(final PointerPoint p) {
-		return send(new PointerMove(p.slot(), p.x(), p.y(), w(p), h(p)));
+		return send(new PointerMove(p.slot(), p.x(), p.y(), w(p), h(p), display(p)));
 	}
 
 	public boolean pointerUp(final PointerPoint p) {
-		return send(new PointerUp(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p)));
+		return send(new PointerUp(p.slot(), p.x(), p.y(), PointerButton.LEFT, w(p), h(p), display(p)));
 	}
 
 	public boolean click(final PointerPoint p, final PointerButton button) {
-		return send(new Click(p.slot(), p.x(), p.y(), button, w(p), h(p)));
+		return send(new Click(p.slot(), p.x(), p.y(), button, w(p), h(p), display(p)));
 	}
 
 	public boolean scroll(final PointerPoint p, final int dx, final int dy) {
-		return send(new Scroll(p.slot(), p.x(), p.y(), dx, dy, w(p), h(p)));
+		return send(new Scroll(p.slot(), p.x(), p.y(), dx, dy, w(p), h(p), display(p)));
 	}
 
 	// ---------------------------------------------------------------- the display map
@@ -583,12 +588,18 @@ public final class MacHelper implements HelperConnection.Listener {
 	/** Work mode at this point (spec 5.10 round 2): the helper puts the real cursor there and hands it the real mouse. */
 	public boolean workBegin(final PointerPoint p, final PointerButton button) {
 		cursor = null;
-		return send(new HelperProtocol.WorkBegin(p.slot(), p.x(), p.y(), button, w(p), h(p)));
+		return send(new HelperProtocol.WorkBegin(p.slot(), p.x(), p.y(), button, w(p), h(p), display(p)));
 	}
 
 	/** Where the real cursor is while working, or null. */
 	public HelperProtocol.@Nullable Cursor cursor() {
 		return cursor;
+	}
+
+	/** The monitor the working cursor is on when it is a slot-0 monitor other than the main one ("screens" helpers), or null. */
+	public @Nullable String workCursorDisplay() {
+		HelperProtocol.Cursor c = cursor;
+		return c == null ? null : c.display();
 	}
 
 	/** Called on the client thread when secure input goes on / off while typing (and off when the helper is gone). */
@@ -780,6 +791,9 @@ public final class MacHelper implements HelperConnection.Listener {
 			case HelperProtocol.Cursor c -> cursor = c;
 			case Displays d -> {
 				helperScreens = screensOf(d);
+				for (MacHelperSource s : attached) {
+					s.screensChanged(); // a Mirror's chosen monitor came or went
+				}
 				fireScreens();
 			}
 			case HelperProtocol.Walk w -> {

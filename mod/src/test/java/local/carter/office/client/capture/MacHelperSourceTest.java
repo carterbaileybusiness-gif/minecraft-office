@@ -3,6 +3,8 @@ package local.carter.office.client.capture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
@@ -16,6 +18,9 @@ import org.junit.jupiter.api.Test;
 
 import local.carter.office.client.helper.HelperChannel;
 import local.carter.office.client.helper.HelperConnection;
+import local.carter.office.client.helper.HelperProtocol;
+import local.carter.office.client.helper.HelperProtocol.Displays;
+import local.carter.office.client.helper.HelperProtocol.ScreenInfo;
 import local.carter.office.client.helper.HelperProtocol.Capture;
 import local.carter.office.client.helper.HelperProtocol.CaptureKind;
 import local.carter.office.client.helper.HelperProtocol.CreateDisplay;
@@ -175,6 +180,79 @@ class MacHelperSourceTest {
 
 		helper.message(new Ended(c.surface(), "no permission"));
 		assertEquals(HologramLook.OwnSource.NEEDS_HELPER, s.status(), "Mirror needs Screen Recording too");
+	}
+
+	// ---- the Mirror's chosen monitor (display map)
+
+	private static final String MAIN_ID = "37D8832A-2D66-02CA-B9F7-8F30A301B230";
+	private static final String LG = "9B2F1C44-5E6A-4D7B-8C9D-0E1F2A3B4C5D";
+
+	private static Displays displays(final boolean withLg) {
+		List<ScreenInfo> list = new ArrayList<>();
+		list.add(new ScreenInfo(MAIN_ID, 0, true, "MacBook", 0, 0, 1440, 900));
+		if (withLg) {
+			list.add(new ScreenInfo(LG, 0, false, "LG", -1920, -180, 1920, 1080));
+		}
+		return new Displays(list);
+	}
+
+	private void screensWelcome() {
+		helper.connected(new Welcome(1, true, true, List.of(HelperProtocol.FEATURE_SCREENS)));
+	}
+
+	private static Target mirrorOf(final String monitor) {
+		return new Target(Mode.MIRROR, 0, null, Shape.WIDE_16_9, monitor);
+	}
+
+	@Test
+	void mirrorCapturesChosenMonitor() {
+		screensWelcome();
+		helper.message(displays(true));
+		source().start(mirrorOf(LG), 5, sink);
+		Capture c = last(Capture.class);
+		assertEquals(CaptureKind.MAIN, c.kind());
+		assertEquals(LG, c.display());
+	}
+
+	@Test
+	void mirrorFallsBackAndReturns() {
+		screensWelcome();
+		helper.message(displays(false));
+		MacHelperSource s = source();
+		s.start(mirrorOf(LG), 5, sink);
+		Capture first = last(Capture.class);
+		assertNull(first.display(), "LG unplugged: the main display");
+
+		helper.message(displays(true));
+		Capture back = last(Capture.class);
+		assertNotEquals(first.surface(), back.surface(), "a new capture once LG is back");
+		assertEquals(LG, back.display());
+		assertEquals(new Stop(first.surface()), last(Stop.class), "the main-display capture stops");
+
+		int captures = (int) sent.stream().filter(Capture.class::isInstance).count();
+		helper.message(displays(true));
+		assertEquals(captures, sent.stream().filter(Capture.class::isInstance).count(), "the same screens: nothing re-issued");
+
+		helper.message(displays(false));
+		assertNull(last(Capture.class).display(), "LG gone again: back to the main display");
+		assertTrue(s.isLive(), "never an end: the hologram just shows the main display");
+	}
+
+	@Test
+	void oldHelperMirrorIsMain() {
+		welcome(true); // no features
+		helper.message(displays(true));
+		source().start(mirrorOf(LG), 5, sink);
+		assertNull(last(Capture.class).display(), "an older helper never gets a display key");
+	}
+
+	@Test
+	void targetIncludesMonitorOnlyForMirror() {
+		HologramSpec mirror = new HologramSpec(ME, Shape.WIDE_16_9, Mode.MIRROR, Privacy.PRIVATE, 1, null, 2, 0, 1, 0, 0, LG);
+		assertEquals(LG, Target.of(mirror).monitor());
+		assertNull(Target.of(mirror.withMode(Mode.EXTEND)).monitor(), "Extend shows its Office display");
+		assertNull(Target.of(mirror.withMode(Mode.WINDOW)).monitor());
+		assertNotEquals(Target.of(mirror), Target.of(mirror.withMirrorDisplay(null)), "picking a monitor is a new target");
 	}
 
 	/** Every Mac capture failure surfaces on the hologram (owner only), never an endless "Connecting…". */

@@ -242,6 +242,16 @@ public final class MacPlatform implements Platform {
 		}
 
 		@Override
+		public @Nullable String workCursorDisplay() {
+			return helper.workCursorDisplay();
+		}
+
+		@Override
+		public @Nullable String mirrorShown(final @Nullable String wanted) {
+			return helper.resolveMirror(wanted);
+		}
+
+		@Override
 		public void scroll(final PointerPoint p, final int dx, final int dy) {
 			helper.scroll(p, dx, dy);
 		}

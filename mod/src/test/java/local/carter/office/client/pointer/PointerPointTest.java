@@ -55,6 +55,17 @@ class PointerPointTest {
 	}
 
 	@Test
+	void mirrorCarriesItsMonitor() {
+		HologramSpec lg = spec(Mode.MIRROR, Shape.WIDE_16_9, 1).withMirrorDisplay("LG");
+		PointerPoint p = PointerPoint.of(lg, new Hit(0.5, 0.5, 2, null));
+		assertEquals(new PointerPoint(0, 960, 540, 1920, 1080, "LG"), p);
+		assertTrue(p.onMain(), "still slot 0: the helper maps it onto that monitor");
+		assertNull(PointerPoint.of(spec(Mode.EXTEND, Shape.WIDE_16_9, 1).withMirrorDisplay("LG"), new Hit(0.5, 0.5, 2, null)).display(),
+				"Extend points are on their Office display");
+		assertFalse(p.near(new PointerPoint(0, 960, 540, 1920, 1080), 6), "another monitor is another screen");
+	}
+
+	@Test
 	void onlyExtendAndMirrorHologramsAndOnlyThePicture() {
 		assertNull(PointerPoint.of(spec(Mode.MIRROR, Shape.WIDE_16_9, 1), new Hit(1.02, 0.5, 2, null)), "just off the Mirror's picture");
 		assertNull(PointerPoint.of(spec(Mode.WINDOW, Shape.WIDE_16_9, 1), new Hit(0.5, 0.5, 2, null)), "one window is view-only");

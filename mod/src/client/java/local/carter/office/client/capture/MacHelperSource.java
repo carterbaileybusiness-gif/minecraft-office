@@ -52,6 +52,8 @@ public final class MacHelperSource implements CaptureSource {
 	private long generation = -1;
 	private int frameW;
 	private int frameH;
+	/** Mirror: the monitor the running capture copies (null = the main display), as resolved when it was issued. */
+	private @Nullable String capturedMonitor;
 	/** Display re-request backoff (0.5 → 8 s); only reset by a capture that has run a while without needing one. */
 	private long retryDelayMs = HelperConnection.Backoff.MIN_MS;
 	private int retryToken;
@@ -216,7 +218,9 @@ public final class MacHelperSource implements CaptureSource {
 					stopSurface = surface;
 					surface = helper.newSurface(this);
 					generation = -1;
-					capture = new Capture(surface, CaptureKind.MAIN, null, null, MIRROR_MAX_W, fps);
+					// the chosen monitor while the helper lists it, else the main display (old helpers: always main)
+					capturedMonitor = helper.resolveMirror(t.monitor());
+					capture = new Capture(surface, CaptureKind.MAIN, null, null, MIRROR_MAX_W, fps, capturedMonitor);
 				} else if (!extend && (t.windowKey() == null || WindowKey.parse(t.windowKey()) == null)) {
 					stopSurface = surface; // no window picked yet: the look says "Pick a window"
 					surface = 0;
@@ -261,6 +265,21 @@ public final class MacHelperSource implements CaptureSource {
 			noPermission = false;
 		}
 		update(false);
+	}
+
+	/**
+	 * The screens changed (DISPLAYS): a Mirror whose chosen monitor was unplugged falls back to the main display, and goes
+	 * back to that monitor when it is plugged in again.
+	 */
+	public void screensChanged() {
+		synchronized (lock) {
+			Target t = target;
+			if (!running || ended || t == null || t.mode() != Mode.MIRROR || surface == 0
+					|| java.util.Objects.equals(helper.resolveMirror(t.monitor()), capturedMonitor)) {
+				return;
+			}
+		}
+		update(true);
 	}
 
 	public void helperDisconnected() {
