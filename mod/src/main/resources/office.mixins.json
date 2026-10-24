@@ -2,7 +2,13 @@
 	"required": true,
 	"package": "local.carter.office.mixin",
 	"compatibilityLevel": "JAVA_25",
-	"mixins": [],
+	"mixins": [
+		"EndermanTakeBlockGoalMixin",
+		"LevelMixin",
+		"PistonBaseBlockMixin",
+		"ServerExplosionMixin",
+		"SilverfishMergeWithStoneGoalMixin"
+	],
 	"injectors": {
 		"defaultRequire": 1
 	}

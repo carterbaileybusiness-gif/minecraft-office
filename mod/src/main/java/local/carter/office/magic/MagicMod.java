@@ -25,6 +25,7 @@ import local.carter.office.magic.spell.wind.WindSpells;
 import local.carter.office.magic.terrain.ClaimCheck;
 import local.carter.office.magic.terrain.EditLog;
 import local.carter.office.magic.terrain.TempBlockData;
+import local.carter.office.magic.terrain.TempBlockGuard;
 import local.carter.office.magic.terrain.WorldTerrainEdits;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -118,6 +119,8 @@ public final class MagicMod {
 	 * down and deleting half-written edit logs), ticked at the end of every server tick, and on {@code SERVER_STOPPING} the queue
 	 * is applied, the logs written and every temporary block restored (after {@code CastService.stop} ended the lingering
 	 * effects). A chunk's temporary blocks are restored before it unloads (and saves), and expired ones when it loads.
+	 * {@link TempBlockGuard}: a temporary block broken by a player drops nothing and gets its original back at once (explosions,
+	 * pistons, endermen and {@code Level.destroyBlock} are handled by the server mixins).
 	 */
 	private static void registerTerrainHooks() {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
@@ -138,6 +141,7 @@ public final class MagicMod {
 			if (MagicServer.kit().temp() instanceof TempBlockData temp) temp.tick(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPING.register(MagicMod::stopTerrain);
+		TempBlockGuard.register();
 	}
 
 	private static void stopTerrain(MinecraftServer server) {
