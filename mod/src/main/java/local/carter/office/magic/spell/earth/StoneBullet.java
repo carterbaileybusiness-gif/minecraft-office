@@ -62,7 +62,7 @@ public final class StoneBullet implements Spell {
 		Vec3 dir = ctx.look().normalize();
 		ProjectileSpec spec = spec(ctx.eye(), dir);
 		float damage = DAMAGE * ctx.power();
-		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, damage, hit))) return CastOutcome.fizzle("magic.office.busy");
+		if (!Projectiles.launch(ctx, spec, hit -> hit(ctx, spec, damage, hit))) return CastOutcome.fizzle("magic.office.busy");
 
 		// Where the arc meets a block, tick by tick as the projectile clips, so every client stops the stone at the same wall.
 		Stop stop = stop(ctx.level(), spec);
@@ -105,13 +105,25 @@ public final class StoneBullet implements Spell {
 		return new Stop(Projectiles.step(spec, spec.maxTicks()), spec.maxTicks(), false);
 	}
 
-	private static void hit(CastContext ctx, float damage, ProjectileHit hit) {
+	/**
+	 * The time (ticks, fractional) at which the arc passes {@code pos}: from the horizontal travel, or from the vertical travel
+	 * when the stone was thrown straight up or down. Clamped to the spec's range.
+	 */
+	public static double timeAt(ProjectileSpec spec, Vec3 pos) {
+		Vec3 v = spec.velocity();
+		Vec3 d = pos.subtract(spec.origin());
+		double h2 = v.x * v.x + v.z * v.z;
+		double t;
+		if (h2 > 1.0E-6) t = (d.x * v.x + d.z * v.z) / h2;
+		else t = Math.abs(v.y) > 1.0E-6 ? d.y / v.y : 0;
+		return Math.max(0, Math.min(spec.maxTicks(), t));
+	}
+
+	private static void hit(CastContext ctx, ProjectileSpec spec, float damage, ProjectileHit hit) {
 		LivingEntity e = hit.entity();
 		if (e == null) return;
 		// The direction the stone was travelling when it struck.
-		Vec3 dir = hit.pos().subtract(ctx.eye());
-		if (dir.lengthSqr() < 1.0E-6) dir = ctx.look();
-		dir = dir.normalize();
+		Vec3 dir = heading(spec, timeAt(spec, hit.pos()));
 		Hurt.damage(ctx, e, damage);
 		Hurt.knock(e, dir, KNOCK, Math.min(MAX_UP, LIFT + KNOCK * Math.max(0, dir.y)));
 	}

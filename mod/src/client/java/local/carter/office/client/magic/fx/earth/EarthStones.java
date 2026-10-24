@@ -3,7 +3,6 @@ package local.carter.office.client.magic.fx.earth;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.function.BooleanSupplier;
 
 import org.jspecify.annotations.Nullable;
 
@@ -30,10 +29,10 @@ import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 /**
  * The Earth lane's moving rocks: real block models drawn at any position, size and tilt that a {@link Motion} gives them
  * frame by frame (between ticks too), with no world change. Stone Bullet's tumbling boulder and its chips, and Earth Wall's
- * columns heaving out of the ground and sinking back, are these. A rock may start later ({@code delay}) and may check the world
- * when it starts ({@code onStart}: false drops it). {@link FxKit}'s ghost blocks only stand on whole cells; these need free
- * motion. Each rock costs one ghost block of its event's {@code FxBudget} (the caller asks the budget first), and at most
- * {@link #MAX_LIVE} live at once. Cleared on world change.
+ * columns heaving out of the ground and sinking back, are these. {@link FxKit}'s ghost blocks only stand on whole cells; these need free
+ * motion. Each rock costs one ghost block of its event's {@code FxBudget} (the caller asks the budget first). Every rock is on
+ * a {@link RockLedger.Leash} beaten by a cancellable {@code FxKit.simulate} timer of its cast, so {@code FxKit.cancel(casterId)}
+ * (and the timer running out) takes it away; {@link RockLedger} caps them overall and per caster. Cleared on world change.
  */
 public final class EarthStones {
 	private EarthStones() {}
@@ -64,28 +63,31 @@ public final class EarthStones {
 		}
 	}
 
-	public static final int MAX_LIVE = 256;
 	private static final double CULL_DISTANCE = 80;
 	private static final List<Stone> LIVE = new ArrayList<>();
+	private static final RockLedger LEDGER = new RockLedger();
+	/** Client ticks counted here (not while paused): the clock leashes are beaten with. */
+	private static long ticks;
 	private static @Nullable BlockModelResolver resolver;
 	private static @Nullable ClientLevel seen;
 
 	private static final class Stone {
+		final int casterId;
+		final RockLedger.Leash leash;
 		final BlockState state;
 		final int life;
 		final Motion motion;
-		final @Nullable BooleanSupplier onStart;
 		final BlockModelRenderState model = new BlockModelRenderState();
 		final Pose pose = new Pose();
 		boolean resolved;
 		int age;
 
-		Stone(BlockState state, int delay, int life, Motion motion, @Nullable BooleanSupplier onStart) {
+		Stone(int casterId, RockLedger.Leash leash, BlockState state, int life, Motion motion) {
+			this.casterId = casterId;
+			this.leash = leash;
 			this.state = state;
-			this.age = -Math.max(0, delay);
 			this.life = Math.max(1, life);
 			this.motion = motion;
-			this.onStart = onStart;
 		}
 	}
 
@@ -95,42 +97,46 @@ public final class EarthStones {
 		LevelRenderEvents.COLLECT_SUBMITS.register(EarthStones::submit);
 	}
 
-	/** Adds a rock now, for {@code life} ticks. False when too many are live. */
-	public static boolean add(BlockState state, int life, Motion motion) {
-		return add(state, 0, life, motion, null);
+	/** The clock leashes are beaten with. */
+	public static long now() {
+		return ticks;
 	}
 
 	/**
-	 * Adds a rock that appears {@code delay} ticks from now for {@code life} ticks; {@code onStart} runs as it appears and may
-	 * drop it (false). False when too many are live.
+	 * Adds a rock of {@code casterId}'s cast for {@code life} ticks, on {@code leash} (it goes as soon as the leash is no longer
+	 * beaten). False when the ledger refuses it (too many rocks, or too many of this caster's).
 	 */
-	public static boolean add(BlockState state, int delay, int life, Motion motion, @Nullable BooleanSupplier onStart) {
-		if (LIVE.size() >= MAX_LIVE || state.isAir()) return false;
-		Stone s = new Stone(state, delay, life, motion, onStart);
-		if (s.age == 0 && s.onStart != null && !s.onStart.getAsBoolean()) return true;
-		LIVE.add(s);
+	public static boolean add(int casterId, RockLedger.Leash leash, BlockState state, int life, Motion motion) {
+		if (state.isAir() || !leash.alive(ticks) || !LEDGER.admit(casterId)) return false;
+		LIVE.add(new Stone(casterId, leash, state, life, motion));
 		return true;
 	}
 
-	/** Rocks live or waiting (the screenshot runs read it). */
+	/** Rocks live (the screenshot runs read it). */
 	public static int live() {
 		return LIVE.size();
+	}
+
+	/** Rocks live for {@code casterId}. */
+	public static int live(int casterId) {
+		return LEDGER.of(casterId);
 	}
 
 	private static void tick(Minecraft mc) {
 		if (mc.level != seen) {
 			seen = mc.level;
 			LIVE.clear();
+			LEDGER.clear();
 		}
 		if (mc.isPaused()) return;
+		ticks++;
 		for (Iterator<Stone> it = LIVE.iterator(); it.hasNext(); ) {
 			Stone s = it.next();
 			s.age++;
-			if (s.age == 0 && s.onStart != null && !s.onStart.getAsBoolean()) {
+			if (s.age >= s.life || !s.leash.alive(ticks)) {
 				it.remove();
-				continue;
+				LEDGER.release(s.casterId);
 			}
-			if (s.age >= s.life) it.remove();
 		}
 	}
 
@@ -143,7 +149,7 @@ public final class EarthStones {
 		float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
 		PoseStack stack = context.poseStack();
 		for (Stone s : LIVE) {
-			if (s.age < 0) continue;
+			if (!s.leash.alive(ticks)) continue;
 			Pose p = s.pose;
 			p.scale = 1F;
 			p.yaw = p.pitch = p.roll = 0F;

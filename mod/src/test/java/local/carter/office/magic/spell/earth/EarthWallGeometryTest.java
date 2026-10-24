@@ -7,10 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
-import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import org.junit.jupiter.api.Test;
+
+import local.carter.office.magic.spell.earth.EarthWallGeometry.Cell;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
@@ -18,7 +20,12 @@ import net.minecraft.world.phys.Vec3;
 class EarthWallGeometryTest {
 	private static final Vec3 FEET = new Vec3(16.5, 4, 4.5);
 	/** Flat ground: everything at y ≥ 4 is open. */
-	private static final Predicate<BlockPos> FLAT = p -> p.getY() >= 4;
+	private static final Function<BlockPos, Cell> FLAT = open(p -> p.getY() >= 4);
+
+	/** OPEN where {@code open}, else SOLID. */
+	private static Function<BlockPos, Cell> open(Predicate<BlockPos> open) {
+		return p -> open.test(p) ? Cell.OPEN : Cell.SOLID;
+	}
 
 	@Test
 	void sizesFollowCharge() {
@@ -90,23 +97,23 @@ class EarthWallGeometryTest {
 	@Test
 	void groundClimbsStepsAndReachesDown() {
 		BlockPos n = new BlockPos(0, 10, 0);
-		assertEquals(n, EarthWallGeometry.base(n, p -> p.getY() >= 10));
-		assertEquals(n.above(), EarthWallGeometry.base(n, p -> p.getY() >= 11), "a one-block step");
-		assertEquals(n.above(2), EarthWallGeometry.base(n, p -> p.getY() >= 12), "a two-block step");
-		assertNull(EarthWallGeometry.base(n, p -> p.getY() >= 13), "a three-block wall: no column");
-		assertEquals(n.below(2), EarthWallGeometry.base(n, p -> p.getY() >= 8), "a two-block drop");
-		assertEquals(n.below(3), EarthWallGeometry.base(n, p -> p.getY() >= 7), "a three-block drop");
-		assertNull(EarthWallGeometry.base(n, p -> p.getY() >= 6), "a pit: no column");
-		assertNull(EarthWallGeometry.base(n, p -> true), "nothing to stand on");
+		assertEquals(n, EarthWallGeometry.base(n, open(p -> p.getY() >= 10)));
+		assertEquals(n.above(), EarthWallGeometry.base(n, open(p -> p.getY() >= 11)), "a one-block step");
+		assertEquals(n.above(2), EarthWallGeometry.base(n, open(p -> p.getY() >= 12)), "a two-block step");
+		assertNull(EarthWallGeometry.base(n, open(p -> p.getY() >= 13)), "a three-block wall: no column");
+		assertEquals(n.below(2), EarthWallGeometry.base(n, open(p -> p.getY() >= 8)), "a two-block drop");
+		assertEquals(n.below(3), EarthWallGeometry.base(n, open(p -> p.getY() >= 7)), "a three-block drop");
+		assertNull(EarthWallGeometry.base(n, open(p -> p.getY() >= 6)), "a pit: no column");
+		assertNull(EarthWallGeometry.base(n, open(p -> true)), "nothing to stand on");
 	}
 
 	@Test
 	void columnStopsBelowTheFirstBlockedCell() {
 		EarthWallGeometry g = new EarthWallGeometry(BlockPos.ZERO, 1, 0, 5, 4);
 		BlockPos chest = new BlockPos(0, 2, 0);
-		List<BlockPos> col = g.cells(BlockPos.ZERO, p -> !p.equals(chest));
+		List<BlockPos> col = g.cells(BlockPos.ZERO, open(p -> !p.equals(chest)));
 		assertEquals(List.of(BlockPos.ZERO, new BlockPos(0, 1, 0)), col);
-		assertTrue(g.cells(BlockPos.ZERO, p -> false).isEmpty());
+		assertTrue(g.cells(BlockPos.ZERO, open(p -> false)).isEmpty());
 	}
 
 	@Test
@@ -117,7 +124,7 @@ class EarthWallGeometryTest {
 			for (int width : new int[] {5, 7}) {
 				for (int height : new int[] {3, 4}) {
 					EarthWallGeometry g = new EarthWallGeometry(o, axis[0], axis[1], width, height);
-					for (Predicate<BlockPos> ground : Set.<Predicate<BlockPos>>of(p -> p.getY() >= 66, p -> p.getY() >= 61, p -> p.getY() >= 64)) {
+					for (Function<BlockPos, Cell> ground : List.of(open(p -> p.getY() >= 66), open(p -> p.getY() >= 61), open(p -> p.getY() >= 64))) {
 						int n = 0;
 						for (int k : g.order()) {
 							BlockPos base = EarthWallGeometry.base(g.nominal(k), ground);
@@ -132,6 +139,31 @@ class EarthWallGeometryTest {
 				}
 			}
 		}
+	}
+
+	@Test
+	void plantsAreNeverStepsCropsAreGaps() {
+		BlockPos n = new BlockPos(0, 10, 0);
+		// Flat ground (solid below 10) with short vegetation in the column: the column rises from the ground through it.
+		Function<BlockPos, Cell> flowers = p -> p.getY() < 10 ? Cell.SOLID : p.getY() == 10 ? Cell.CLEAR : Cell.OPEN;
+		assertEquals(n, EarthWallGeometry.base(n, flowers));
+		EarthWallGeometry g = new EarthWallGeometry(BlockPos.ZERO, 1, 0, 5, 3);
+		assertEquals(List.of(n, n.above(), n.above(2)), g.cells(n, flowers));
+		// A flower one block down: never a step, the column reaches down past it to the ground.
+		Function<BlockPos, Cell> lowFlower = p -> p.getY() < 9 ? Cell.SOLID : p.getY() == 9 ? Cell.CLEAR : Cell.OPEN;
+		assertEquals(n.below(), EarthWallGeometry.base(n, lowFlower));
+		// A crop (or torch) in the nominal cell, under it, or anywhere in the column: no column at all.
+		Function<BlockPos, Cell> crop = p -> p.getY() < 10 ? Cell.SOLID : p.getY() == 10 ? Cell.GAP : Cell.OPEN;
+		assertNull(EarthWallGeometry.base(n, crop));
+		Function<BlockPos, Cell> cropBelow = p -> p.getY() < 9 ? Cell.SOLID : p.getY() == 9 ? Cell.GAP : Cell.OPEN;
+		assertNull(EarthWallGeometry.base(n, cropBelow), "never stands on a crop");
+		Function<BlockPos, Cell> torchAbove = p -> p.getY() < 10 ? Cell.SOLID : p.getY() == 11 ? Cell.GAP : Cell.OPEN;
+		assertEquals(n, EarthWallGeometry.base(n, torchAbove));
+		assertTrue(g.cells(n, torchAbove).isEmpty(), "a gap in the column leaves the whole column open");
+		// A step with a crop on it: no climbing onto the crop.
+		Function<BlockPos, Cell> cropStep = p -> p.getY() <= 10 ? Cell.SOLID : p.getY() == 11 ? Cell.GAP : Cell.OPEN;
+		assertNull(EarthWallGeometry.base(n, cropStep));
+		assertTrue(Cell.OPEN.fillable() && Cell.CLEAR.fillable() && !Cell.SOLID.fillable() && !Cell.GAP.fillable());
 	}
 
 	private static int[] places(EarthWallGeometry g) {

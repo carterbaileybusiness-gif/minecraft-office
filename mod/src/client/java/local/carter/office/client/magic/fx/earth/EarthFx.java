@@ -2,6 +2,7 @@ package local.carter.office.client.magic.fx.earth;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntConsumer;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.SpellFxRegistry;
@@ -27,8 +28,6 @@ public final class EarthFx {
 	static final int CLAY = Element.EARTH.argb() & 0xFFFFFF;
 	/** Brown earth dust. */
 	static final DustParticleOptions DUST = new DustParticleOptions(0x7A5A3A, 1.6F);
-	/** Pale stone dust. */
-	static final DustParticleOptions STONE_DUST = new DustParticleOptions(0x9A938A, 1.3F);
 	/** Grit falling off a flying rock. */
 	static final BlockParticleOption GRIT = new BlockParticleOption(ParticleTypes.FALLING_DUST, Blocks.COARSE_DIRT.defaultBlockState());
 	static final BlockState COBBLE = Blocks.COBBLESTONE.defaultBlockState();
@@ -43,6 +42,59 @@ public final class EarthFx {
 
 	static BlockParticleOption crumbs(BlockState s) {
 		return new BlockParticleOption(ParticleTypes.BLOCK, s);
+	}
+
+	/**
+	 * A cancellable client timer ({@link FxKit#simulate}, one step a tick for {@code ticks}) that also beats a leash: rocks on that
+	 * leash live while the timer runs, so {@code FxKit.cancel(casterId)} or the timer's end takes them away.
+	 */
+	static RockLedger.Leash leash(FxKit kit, int ticks, IntConsumer onTick) {
+		RockLedger.Leash leash = new RockLedger.Leash(EarthStones.now());
+		drive(kit, leash, ticks, onTick);
+		return leash;
+	}
+
+	/**
+	 * As {@link #leash(FxKit, int, IntConsumer)} for a leash made beforehand ({@code new RockLedger.Leash(EarthStones.now())}),
+	 * so the timer's own steps (the first runs at once) can already put rocks on it.
+	 */
+	static void drive(FxKit kit, RockLedger.Leash leash, int ticks, IntConsumer onTick) {
+		kit.simulate(1, ticks, t -> {
+			leash.beat(EarthStones.now());
+			onTick.accept(t);
+		});
+	}
+
+	/** Block crumbs for one event, capped (on top of the event's particle budget) so a big cast never turns into a gravel storm. */
+	static final class Crumbs {
+		private final FxKit kit;
+		private int left;
+
+		Crumbs(FxKit kit, int cap) {
+			this.kit = kit;
+			this.left = cap;
+		}
+
+		void burst(Vec3 at, BlockState s, int count, double speed) {
+			int n = Math.min(count, left);
+			if (n <= 0) return;
+			left -= n;
+			kit.burst(at, crumbs(s), n, speed);
+		}
+
+		void trail(Vec3 from, Vec3 to, BlockState s, int count) {
+			int n = Math.min(count, left);
+			if (n <= 0) return;
+			left -= n;
+			kit.trail(from, to, crumbs(s), n);
+		}
+
+		/** Takes up to {@code count} now for later (paid out of the budget too); the number granted. */
+		int reserve(int count) {
+			int n = Math.min(count, left);
+			left -= n;
+			return kit.budget().particles(n);
+		}
 	}
 
 	/** {@code v} normalised (+Z if it has no length). */
@@ -64,7 +116,7 @@ public final class EarthFx {
 	 * ground it meets in {@code level} and settles, shrinking away over its last ticks. The flight is worked out now (one
 	 * position per tick against the world as it is) and drawn smoothly between ticks. Costs one ghost block of the event.
 	 */
-	static void chip(FxKit kit, ClientLevel level, BlockState state, Vec3 at, Vec3 velocity, float size, int life) {
+	static void chip(FxKit kit, RockLedger.Leash leash, ClientLevel level, BlockState state, Vec3 at, Vec3 velocity, float size, int life) {
 		if (!kit.budget().ghostBlock()) return;
 		RandomSource r = kit.random();
 		List<Vec3> path = new ArrayList<>(life + 2);
@@ -87,7 +139,7 @@ public final class EarthFx {
 		float spinA = (r.nextFloat() - 0.5F) * 70F;
 		float spinB = (r.nextFloat() - 0.5F) * 70F;
 		float yaw0 = r.nextFloat() * 360F;
-		EarthStones.add(state, life, (t, out) -> {
+		EarthStones.add(kit.event().casterId(), leash, state, life, (t, out) -> {
 			int i = Math.min(path.size() - 2, (int) t);
 			out.at(path.get(i).lerp(path.get(i + 1), t - i));
 			float spin = Math.min(t, life * 0.6F);
@@ -96,11 +148,5 @@ public final class EarthFx {
 			out.scale = size * Mth.clamp((life - t) / 4F, 0F, 1F);
 			return true;
 		});
-	}
-
-	/** Brown dust and crumbs of {@code state} rolling out along the ground round {@code at} (a column landing, a wall falling). */
-	static void groundBurst(FxKit kit, Vec3 at, BlockState state, int crumbs, int dust, double speed) {
-		kit.burst(at, crumbs(state), crumbs, speed);
-		kit.ring(at.add(0, 0.1, 0), 0.6, DUST, dust);
 	}
 }

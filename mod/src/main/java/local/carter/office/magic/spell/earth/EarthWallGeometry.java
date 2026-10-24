@@ -2,7 +2,7 @@ package local.carter.office.magic.spell.earth;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Predicate;
+import java.util.function.Function;
 
 import org.jspecify.annotations.Nullable;
 
@@ -10,7 +10,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Where and when Earth Wall's columns rise (pure: block maths only; the world comes in as an {@code open} predicate, so the
+ * Where and when Earth Wall's columns rise (pure: block maths only; the world comes in as a {@link Cell} classifier, so the
  * server effect and the client fx run the same rule on their own copy of the world).
  *
  * <p>The wall stands {@link #AHEAD} blocks ahead of the caster's feet (closer if something is in the way), across the look: it
@@ -19,8 +19,8 @@ import net.minecraft.world.phys.Vec3;
  * {@code k} starts rising at {@link #riseStart} and is placed {@link #RISE_TICKS} later ({@link #placeTick}), the last at
  * tick {@link #LAST_PLACE}. A column only rises if the column inside it ({@link #inner}) rose, so the wall never jumps a gap
  * into the next room. Each column finds its ground near the origin's level ({@link #base}: it climbs up to
- * {@link #MAX_CLIMB}, drops down to {@link #MAX_DROP}) and stacks {@code height} cells there, stopping at the first cell that
- * is not open ({@link #cells}). With these limits every cell is within 6 of the origin (one MEDIUM batch).
+ * {@link #MAX_CLIMB}, drops down to {@link #MAX_DROP}) and stacks {@code height} cells there, stopping below the first solid
+ * cell ({@link #cells}); only cells with a collision shape count as ground or steps ({@link Cell}). With these limits every cell is within 6 of the origin (one MEDIUM batch).
  */
 public final class EarthWallGeometry {
 	/** How far ahead of the caster's feet the wall stands. */
@@ -139,32 +139,60 @@ public final class EarthWallGeometry {
 	}
 
 	/**
-	 * The bottom cell of a column whose nominal cell is {@code nominal}: the lowest open cell above solid ground. On open ground
-	 * it reaches down at most {@link #MAX_DROP} for something to stand on; in a step it climbs at most {@link #MAX_CLIMB}.
-	 * Null when neither finds ground (over a pit, into a high wall).
+	 * What a cell is to the wall. {@link #SOLID}: it has a collision shape (ground to stand on, a step to climb, a ceiling to stop
+	 * under). {@link #OPEN}: the wall may fill it (air, water, replaceable). {@link #CLEAR}: natural short vegetation (small
+	 * flowers, short grass, fern) the wall tears out (a logged permanent edit) and then fills. {@link #GAP}: anything else
+	 * without collision (crops, saplings, torches, rails, redstone, two-block plants): the wall never touches it and that column
+	 * stays an open gap.
 	 */
-	public static @Nullable BlockPos base(BlockPos nominal, Predicate<BlockPos> open) {
+	public enum Cell {
+		SOLID, OPEN, CLEAR, GAP;
+
+		/** The wall may fill it (CLEAR once torn out). */
+		public boolean fillable() {
+			return this == OPEN || this == CLEAR;
+		}
+	}
+
+	/**
+	 * The bottom cell of a column whose nominal cell is {@code nominal}: the lowest fillable cell above solid ground. On open
+	 * ground it reaches down at most {@link #MAX_DROP} for something solid to stand on; in a step it climbs at most
+	 * {@link #MAX_CLIMB}. Null when neither finds ground (over a pit, into a high wall), or when it meets a {@link Cell#GAP}
+	 * on the way (a column never stands on, or rises through, a crop or a torch).
+	 */
+	public static @Nullable BlockPos base(BlockPos nominal, Function<BlockPos, Cell> cell) {
 		BlockPos p = nominal;
-		if (open.test(p)) {
+		Cell here = cell.apply(p);
+		if (here == Cell.GAP) return null;
+		if (here.fillable()) {
 			for (int i = 0; i <= MAX_DROP; i++) {
-				if (!open.test(p.below())) return p;
+				Cell below = cell.apply(p.below());
+				if (below == Cell.SOLID) return p;
+				if (below == Cell.GAP) return null;
 				if (i < MAX_DROP) p = p.below();
 			}
 			return null;
 		}
 		for (int i = 0; i < MAX_CLIMB; i++) {
 			p = p.above();
-			if (open.test(p)) return p;
+			Cell c = cell.apply(p);
+			if (c == Cell.GAP) return null;
+			if (c.fillable()) return p;
 		}
 		return null;
 	}
 
-	/** The column's cells from {@code base} up, at most {@code height}, stopping below the first cell that is not open. */
-	public List<BlockPos> cells(BlockPos base, Predicate<BlockPos> open) {
+	/**
+	 * The column's cells from {@code base} up, at most {@code height}, stopping below the first solid cell. Empty when a
+	 * {@link Cell#GAP} is among them: that column is left as a gap.
+	 */
+	public List<BlockPos> cells(BlockPos base, Function<BlockPos, Cell> cell) {
 		List<BlockPos> out = new ArrayList<>(height);
 		for (int i = 0; i < height; i++) {
 			BlockPos c = base.above(i);
-			if (!open.test(c)) break;
+			Cell k = cell.apply(c);
+			if (k == Cell.GAP) return List.of();
+			if (k == Cell.SOLID) break;
 			out.add(c);
 		}
 		return out;

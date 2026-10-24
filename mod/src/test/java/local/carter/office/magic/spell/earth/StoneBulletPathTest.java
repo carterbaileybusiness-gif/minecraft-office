@@ -48,4 +48,16 @@ class StoneBulletPathTest {
 			assertTrue(h.y <= 0, "flat throw: heading points down after launch");
 		}
 	}
+
+	@Test
+	void timeAtFindsTheTickAndTheHeadingThere() {
+		for (double t : new double[] {0, 1, 4.5, 11, 29}) {
+			assertEquals(t, StoneBullet.timeAt(SPEC, StoneBullet.path(SPEC, t)), 1e-9);
+		}
+		// Thrown straight down: time from the vertical travel.
+		ProjectileSpec down = StoneBullet.spec(new Vec3(0, 70, 0), new Vec3(0, -1, 0));
+		assertEquals(3, StoneBullet.timeAt(down, new Vec3(0, 70 - 6.6, 0)), 1e-9);
+		// Late in a flat throw the stone is coming down: the knock follows that heading.
+		assertTrue(StoneBullet.heading(SPEC, StoneBullet.timeAt(SPEC, StoneBullet.path(SPEC, 20))).y < -0.15);
+	}
 }
