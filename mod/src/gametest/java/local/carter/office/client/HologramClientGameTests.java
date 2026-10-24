@@ -575,15 +575,17 @@ public class HologramClientGameTests implements FabricClientGameTest {
 	 */
 	private void inWorldPointer(final ClientGameTestContext context, final TestSingleplayerContext sp) {
 		FakePointer fake = new FakePointer();
-		BlockPos behind0 = emitter.offset(0, 0, -1);
-		BlockPos behind1 = emitter.offset(0, 1, -1);
-		BlockPos behind2 = emitter.offset(0, 2, -1);
+		// a stone patch wide enough to sit behind the hologram's centre even after the corner drag moved it sideways
+		java.util.List<BlockPos> behind = new java.util.ArrayList<>();
+		for (int dx = -3; dx <= 3; dx++) {
+			for (int dy = 0; dy <= 3; dy++) {
+				behind.add(emitter.offset(dx, dy, -1));
+			}
+		}
 		sp.getServer().runOnServer(server -> {
 			ServerPlayer p = player(server);
 			p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
-			p.level().setBlockAndUpdate(behind0, Blocks.STONE.defaultBlockState());
-			p.level().setBlockAndUpdate(behind1, Blocks.STONE.defaultBlockState());
-			p.level().setBlockAndUpdate(behind2, Blocks.STONE.defaultBlockState());
+			behind.forEach(b -> p.level().setBlockAndUpdate(b, Blocks.STONE.defaultBlockState()));
 			p.teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5); // the stone is within reach
 		});
 		context.runOnClient(mc -> PointerClient.setPortForTesting(fake));
@@ -594,7 +596,8 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.waitTicks(3);
 			String aimed = context.computeOnClient(mc -> mc.hitResult == null ? "nothing" : mc.hitResult.getType().name());
 			if (!"BLOCK".equals(aimed)) {
-				throw new AssertionError("the stone behind the hologram should be what vanilla aims at, was " + aimed);
+				throw new AssertionError("the stone behind the hologram should be what vanilla aims at, was " + aimed
+						+ " (hologram centre " + hologramCenter(spec) + ", emitter " + emitter + ")");
 			}
 
 			// 1. a click: CLICK at the middle of display 1, typing mode, nothing broken
@@ -738,9 +741,8 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.waitTicks(3);
 
 			sp.getConnection().waitForServerboundPackets();
-			boolean intact = sp.getServer().computeOnServer(server -> player(server).level().getBlockState(behind0).is(Blocks.STONE)
-					&& player(server).level().getBlockState(behind1).is(Blocks.STONE)
-					&& player(server).level().getBlockState(behind2).is(Blocks.STONE));
+			boolean intact = sp.getServer().computeOnServer(server -> behind.stream()
+					.allMatch(b -> player(server).level().getBlockState(b).is(Blocks.STONE)));
 			if (!intact) {
 				throw new AssertionError("a block behind the hologram was broken");
 			}
@@ -748,9 +750,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.runOnClient(mc -> PointerClient.setPortForTesting(null));
 			sp.getServer().runOnServer(server -> {
 				ServerPlayer p = player(server);
-				p.level().setBlockAndUpdate(behind0, Blocks.AIR.defaultBlockState());
-				p.level().setBlockAndUpdate(behind1, Blocks.AIR.defaultBlockState());
-				p.level().setBlockAndUpdate(behind2, Blocks.AIR.defaultBlockState());
+				behind.forEach(b -> p.level().setBlockAndUpdate(b, Blocks.AIR.defaultBlockState()));
 				p.teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() + 0.5);
 				p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM, 4));
 			});
