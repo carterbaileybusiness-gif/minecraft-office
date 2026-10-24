@@ -7,6 +7,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
@@ -16,6 +17,7 @@ import local.carter.office.magic.core.TerrainRules;
 import local.carter.office.magic.core.TerrainRules.Verdict;
 import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.CastContext;
+import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.terrain.EditLog.LoggedCast;
 import local.carter.office.magic.terrain.EditLog.LoggedEdit;
 import local.carter.office.magic.terrain.EditLog.UndoReport;
@@ -29,12 +31,14 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.TagKey;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -52,6 +56,9 @@ import net.minecraft.world.phys.Vec3;
  * meanwhile is left alone.</li>
  * <li>Applied changes (not temporary blocks) are logged per cast to {@link EditLog}, written once the cast's queued changes
  * are applied and its batches closed, and every {@link #FLUSH_TICKS} ticks while it runs.</li>
+ * <li>Launched debris ({@link LaunchedDebris}) lands only where the cast could have set the block (the same rules, minus radius
+ * and budget) and where no player or protected entity stands in the cell or the one above; elsewhere it vanishes. A landing
+ * is logged in the cast, so undo takes it away again.</li>
  * <li>Temporary blocks must be inert ({@link TempBlockData#isSafe}); placing the same state on a live temporary block refreshes
  * its timer.</li>
  * </ul>
@@ -157,6 +164,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	/** Applies up to {@link #PER_TICK} queued changes, then writes the logs of casts that are done (and, periodically, of running ones). */
 	public void tick() {
 		ticks++;
+		LaunchedDebris.prune(server.getTickCount());
 		for (int i = 0; i < PER_TICK && !queue.isEmpty(); i++) apply(queue.poll());
 		boolean periodic = ticks % FLUSH_TICKS == 0;
 		for (Iterator<Cast> it = casts.values().iterator(); it.hasNext();) {
@@ -168,6 +176,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 
 	/** Server stopping: applies everything still queued and writes every log. */
 	public void stop() {
+		LaunchedDebris.clear();
 		while (!queue.isEmpty()) apply(queue.poll());
 		for (Cast c : casts.values()) if (c.dirty) flush(c);
 		casts.clear();
@@ -224,6 +233,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 				FallingBlockEntity falling = FallingBlockEntity.fall(level, pos, before);
 				falling.dropItem = false; // lands as a block where it can, never as an item
 				falling.setDeltaMovement(ch.velocity());
+				LaunchedDebris.track(falling, level, new DebrisLanding(cast));
 			}
 			case TEMP -> {
 				temp.place(level, pos, ch.state(), ch.ticks());
@@ -346,5 +356,44 @@ public final class WorldTerrainEdits implements TerrainEdits {
 			cast.openBatches--;
 			cast.lastActive = WorldTerrainEdits.this.ticks;
 		}
+	}
+
+	/** Where one cast's debris may land: {@code Batch.offer}'s rules at the landing cell, for the caster, without radius or budget. */
+	private final class DebrisLanding implements LaunchedDebris.Landing {
+		private final Cast cast;
+
+		DebrisLanding(Cast cast) {
+			this.cast = cast;
+		}
+
+		@Override
+		public boolean land(FallingBlockEntity debris, ServerLevel level, BlockPos pos, BlockState state, BooleanSupplier place) {
+			// Undone casts, debris that changed dimension (the log is per dimension) and casters who left never land.
+			if (cast.revoked || !level.dimension().equals(cast.dimension)) return false;
+			ServerPlayer caster = server.getPlayerList().getPlayer(cast.player);
+			if (caster == null || level.isOutsideBuildHeight(pos) || !level.isLoaded(pos)) return false;
+			BlockState current = level.getBlockState(pos);
+			boolean blockEntity = current.hasBlockEntity() || level.getBlockEntity(pos) != null || state.hasBlockEntity();
+			boolean immune = current.is(IMMUNE) || tall(current) || state.is(IMMUNE) || tall(state);
+			boolean insideBorder = level.getWorldBorder().isWithinBounds(pos);
+			boolean spawnProtected = insideBorder && spawn.test(caster, level, pos);
+			boolean claimed = claims.forBatch(caster, level, pos, 0).test(pos);
+			if (TerrainRules.decide(blockEntity, immune, claimed, spawnProtected, insideBorder, 0, 0, 0, 1) != Verdict.ALLOW) return false;
+			if (occupied(level, pos, debris) || !place.getAsBoolean()) return false;
+			BlockState after = level.getBlockState(pos);
+			if (!after.equals(current)) {
+				cast.edits.add(new LoggedEdit(pos, current, after));
+				cast.dirty = true;
+			}
+			cast.lastActive = ticks;
+			casts.putIfAbsent(cast.id, cast); // forgotten while the debris flew: back, so its log is written again
+			return true;
+		}
+	}
+
+	/** A player (not a spectator) or a protected entity ({@link TargetFilter#isProtected}) in {@code pos} or the cell above. */
+	private static boolean occupied(ServerLevel level, BlockPos pos, Entity except) {
+		AABB cells = new AABB(pos).expandTowards(0, 1, 0);
+		return !level.getEntities(except, cells, e -> !e.isSpectator() && TargetFilter.isProtected(e)).isEmpty();
 	}
 }

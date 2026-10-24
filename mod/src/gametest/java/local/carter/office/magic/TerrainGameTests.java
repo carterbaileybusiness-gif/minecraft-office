@@ -258,9 +258,10 @@ public class TerrainGameTests {
 		h.assertTrue(edits.log().casts(p.getUUID()).get(0).edits().stream().allMatch(EditLog.LoggedEdit::launched), "flagged as launched");
 		for (FallingBlockEntity f : falling) f.discard();
 		int stone = MagicTestKit.count(h, Blocks.STONE);
-		// Launched blocks may have landed somewhere: undo never puts them back (no duplicates).
-		h.assertValueEqual(edits.undo(p.getUUID(), 1), new UndoReport(0, 1, WorldTerrainEdits.MAX_LAUNCH), "undo report");
-		h.assertValueEqual(MagicTestKit.count(h, Blocks.STONE), stone, "stone after undo");
+		long stoneLaunched = edits.log().casts(p.getUUID()).get(0).edits().stream().filter(e -> e.before().is(Blocks.STONE)).count();
+		// The debris never landed (discarded): undo puts every launched block back.
+		h.assertValueEqual(edits.undo(p.getUUID(), 1), new UndoReport(WorldTerrainEdits.MAX_LAUNCH, 1, 0), "undo report");
+		h.assertValueEqual(MagicTestKit.count(h, Blocks.STONE), stone + (int) stoneLaunched, "stone after undo");
 		h.succeed();
 	}
 
