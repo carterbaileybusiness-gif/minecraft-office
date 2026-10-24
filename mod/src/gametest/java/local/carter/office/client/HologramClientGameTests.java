@@ -17,6 +17,8 @@ import local.carter.office.client.dock.DockLayout;
 import local.carter.office.client.capture.TestPatternSource;
 import local.carter.office.client.interact.HologramSettingsScreen;
 import local.carter.office.client.render.HologramLook;
+import local.carter.office.client.screens.Screen;
+import local.carter.office.client.screens.ScreenList;
 import local.carter.office.client.render.HologramPlacement;
 import local.carter.office.client.render.ScreenTexture;
 import local.carter.office.client.render.ScreenTextureRegistry;
@@ -82,6 +84,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			inWorldPointer(context, sp);
 			scrollResizes(context, sp);
 			wallMount(context, sp);
+			settingsMapFitsAtEveryGuiScale(context, sp);
 			offlineLook(context, sp);
 			if (Boolean.getBoolean("office.measure")) {
 				measureWork(context, sp); // opt-in, on a Mac: in-game frame rate and latency in work mode (fix round A)
@@ -1198,6 +1201,114 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			}
 		}
 		return n;
+	}
+
+	/** Three monitors (one portrait, left of and above main) and four Office displays: the widest map the screen gets. */
+	private static final ScreenList BUSY_SCREENS = new ScreenList(java.util.List.of(
+			new Screen("MAIN", 0, true, "MacBook", 0, 0, 1440, 900),
+			new Screen("LG", 0, false, "LG", -1920, -180, 1920, 1080),
+			new Screen("TALL", 0, false, "Dell", -3000, -1000, 1080, 1920),
+			new Screen("O1", 1, false, null, 1440, 0, 1920, 1080),
+			new Screen("O2", 2, false, null, 3360, 0, 1920, 1080),
+			new Screen("O3", 3, false, null, 5280, 0, 1920, 1080),
+			new Screen("O4", 4, false, null, 7200, 0, 1920, 1080)), ScreenList.Abilities.ALL);
+
+	/**
+	 * The display map (Task 10) at GUI scales 1-4, in Extend and in Mirror: the map and its Apply button lie inside the
+	 * window and overlap no other widget. Screenshot each.
+	 */
+	private void settingsMapFitsAtEveryGuiScale(final ClientGameTestContext context, final TestSingleplayerContext sp) {
+		int savedScale = context.computeOnClient(mc -> mc.options.guiScale().get());
+		local.carter.office.core.Mode original = context.computeOnClient(mc -> clientHologram(mc).spec().mode());
+		context.runOnClient(mc -> ScreenList.setTestOverride(BUSY_SCREENS));
+		try {
+			for (local.carter.office.core.Mode mode : new local.carter.office.core.Mode[] {local.carter.office.core.Mode.EXTEND,
+					local.carter.office.core.Mode.MIRROR}) {
+				if (mode == local.carter.office.core.Mode.EXTEND
+						&& local.carter.office.client.platform.Platform.current() instanceof local.carter.office.client.platform.WindowsPlatform) {
+					continue; // Extend is greyed on Windows: no map there
+				}
+				switchMode(context, sp, mode);
+				for (int scale = 1; scale <= 4; scale++) {
+					final int s = scale;
+					context.runOnClient(mc -> {
+						mc.options.guiScale().set(s);
+						mc.resizeGui();
+						mc.gui.setScreen(new HologramSettingsScreen(clientHologram(mc), "Test"));
+					});
+					context.waitTicks(2);
+					String problem = context.computeOnClient(mc -> mapProblem(mc, mode));
+					context.takeScreenshot("settings-map-" + mode.name().toLowerCase(java.util.Locale.ROOT) + "-scale-" + s);
+					if (problem != null) {
+						throw new AssertionError(mode + " at GUI scale " + s + ": " + problem);
+					}
+				}
+			}
+		} finally {
+			context.runOnClient(mc -> {
+				mc.gui.setScreen(null);
+				ScreenList.setTestOverride(null);
+				mc.options.guiScale().set(savedScale);
+				mc.resizeGui();
+			});
+			switchMode(context, sp, original);
+		}
+	}
+
+	/** Puts the test hologram into {@code mode} through its settings screen (as a player would) and waits for the sync. */
+	private void switchMode(final ClientGameTestContext context, final TestSingleplayerContext sp, final local.carter.office.core.Mode mode) {
+		if (context.computeOnClient(mc -> clientHologram(mc).spec().mode()) == mode) {
+			return;
+		}
+		String label = switch (mode) {
+			case MIRROR -> "Mirror";
+			case EXTEND -> "Extend";
+			case WINDOW -> "Window";
+		};
+		context.runOnClient(mc -> {
+			HologramSettingsScreen screen = new HologramSettingsScreen(clientHologram(mc), "Test");
+			mc.gui.setScreen(screen);
+			for (var child : screen.children()) {
+				if (child instanceof net.minecraft.client.gui.components.Button b && b.getMessage().getString().equals(label)) {
+					b.onPress(new net.minecraft.client.input.KeyEvent(InputConstants.KEY_RETURN, 0, 0));
+				}
+			}
+			mc.gui.setScreen(null);
+		});
+		sp.getConnection().waitForServerboundPackets();
+		context.waitFor(mc -> clientHologram(mc) != null && clientHologram(mc).spec().mode() == mode, 100);
+	}
+
+	/** Why the open settings screen's map breaks the fit rule, or null. */
+	private static @org.jspecify.annotations.Nullable String mapProblem(final Minecraft mc, final local.carter.office.core.Mode mode) {
+		if (!(mc.gui.screen() instanceof HologramSettingsScreen screen)) {
+			return "the settings screen isn't open";
+		}
+		java.util.List<net.minecraft.client.gui.components.AbstractWidget> mine = new java.util.ArrayList<>();
+		if (screen.displayMap() == null) {
+			return "no display map";
+		}
+		mine.add(screen.displayMap());
+		if (mode == local.carter.office.core.Mode.EXTEND) {
+			if (screen.applyButton() == null) {
+				return "no Apply button";
+			}
+			mine.add(screen.applyButton());
+		}
+		int w = screen.width;
+		int h = screen.height;
+		for (var m : mine) {
+			if (m.getX() < 0 || m.getY() < 0 || m.getRight() > w || m.getBottom() > h) {
+				return m.getMessage().getString() + " " + m.getRectangle() + " leaves the " + w + " x " + h + " window";
+			}
+			for (var child : screen.children()) {
+				if (child instanceof net.minecraft.client.gui.components.AbstractWidget o && o != m
+						&& o.getRectangle().intersects(m.getRectangle())) {
+					return m.getMessage().getString() + " overlaps " + o.getMessage().getString();
+				}
+			}
+		}
+		return null;
 	}
 
 	private void offlineLook(final ClientGameTestContext context, final TestSingleplayerContext sp) {
