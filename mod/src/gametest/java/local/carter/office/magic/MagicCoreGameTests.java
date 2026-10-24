@@ -157,7 +157,13 @@ public class MagicCoreGameTests {
 		MagicData d = MagicAttachments.get(p);
 		h.assertValueEqual(d.element(), Optional.of(Element.FIRE), "still fire");
 		h.assertValueEqual(d.selected(), Optional.of(SpellIds.FIRE_BOLT), "first spell selected");
-		h.assertValueEqual(rec.titleKeys(), List.of("magic.office.bound"), "one bound title");
+		h.assertValueEqual(rec.titleKeys(), List.of("element.office.fire"), "one title: the element's name");
+		MagicTestKit.Recorder.Title t = rec.titles().get(0);
+		h.assertValueEqual(t.title().getStyle().getColor().getValue(), Element.FIRE.argb() & 0xFFFFFF, "title in the element colour");
+		h.assertTrue(t.subtitle().getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents tc
+				&& tc.getKey().equals("magic.office.bound") && tc.getArgs()[0] instanceof net.minecraft.network.chat.Component m
+				&& m.getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents mc
+				&& mc.getKey().equals("element.office.fire.motto"), "subtitle: bound + motto");
 		h.succeed();
 	}
 
@@ -173,18 +179,68 @@ public class MagicCoreGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA)
-	public void rebindingSealClearsElementKeepsLevel(GameTestHelper h) {
+	public void rebindingSealOpensChoiceChangesNothing(GameTestHelper h) {
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 5);
-		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL));
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL, 2));
 		h.assertTrue(use(h, p, InteractionHand.MAIN_HAND).consumesAction(), "seal used");
-		MagicData d = MagicAttachments.get(p);
-		h.assertValueEqual(d.element(), Optional.<Element>empty(), "element cleared");
-		h.assertValueEqual(d.level(), 5, "level kept");
-		h.assertTrue(p.getMainHandItem().isEmpty(), "seal used up");
 		h.assertValueEqual(rec.opens(), List.of(OpenGrimoire.Mode.CHOOSE), "choice opened");
-		h.assertValueEqual(GrimoireLook.element(p.getOffhandItem()), Optional.<Element>empty(), "held grimoire re-stamped unbound");
-		h.assertTrue(ElementChoice.choose(p, Element.EARTH), "can choose again");
+		h.assertTrue(ElementChoice.rebindPending(p), "a rebind is pending");
+		// The player closes the screen (Esc): no ChooseElement ever arrives.
+		MagicData d = MagicAttachments.get(p);
+		h.assertValueEqual(d.element(), Optional.of(Element.FIRE), "old element kept");
+		h.assertValueEqual(d.selected(), Optional.of(SpellIds.FIRE_BOLT), "selection kept");
+		h.assertValueEqual(p.getMainHandItem().getCount(), 2, "no seal spent");
+		h.assertValueEqual(GrimoireLook.element(p.getOffhandItem()), Optional.of(Element.FIRE), "grimoire keeps its look");
+		h.assertTrue(rec.titles().isEmpty(), "no title");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void rebindWithoutGrimoireSpendsExactlyOneSeal(GameTestHelper h) {
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 5);
+		p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY); // no grimoire anywhere
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL, 3));
+		use(h, p, InteractionHand.MAIN_HAND);
+		h.assertTrue(MagicServer.chooseElement(p, Element.EARTH), "the seal's choice binds");
+		MagicData d = MagicAttachments.get(p);
+		h.assertValueEqual(d.element(), Optional.of(Element.EARTH), "rebound to earth");
+		h.assertValueEqual(d.selected(), Optional.of(SpellIds.STONE_BULLET), "first spell selected");
+		h.assertValueEqual(d.level(), 5, "level kept");
+		h.assertValueEqual(p.getMainHandItem().getCount(), 2, "exactly one seal spent");
+		h.assertValueEqual(rec.titleKeys(), List.of("element.office.earth"), "bound title");
+		h.assertFalse(ElementChoice.rebindPending(p), "the rebind is used up");
+		h.assertFalse(MagicServer.chooseElement(p, Element.WATER), "a second choice is refused");
+		h.assertValueEqual(MagicAttachments.get(p).element(), Optional.of(Element.EARTH), "still earth");
+		h.assertValueEqual(p.getMainHandItem().getCount(), 2, "no second seal spent");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void rebindNeedsTheSealInHand(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 5);
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL));
+		use(h, p, InteractionHand.MAIN_HAND);
+		ItemStack seal = p.getMainHandItem().copy();
+		p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY); // put away before choosing
+		h.assertFalse(MagicServer.chooseElement(p, Element.WIND), "no seal in hand: refused");
+		h.assertValueEqual(MagicAttachments.get(p).element(), Optional.of(Element.FIRE), "still fire");
+		p.setItemInHand(InteractionHand.OFF_HAND, seal); // the seal back, in the off hand this time
+		h.assertTrue(MagicServer.chooseElement(p, Element.WIND), "a seal in either hand works");
+		h.assertTrue(p.getOffhandItem().isEmpty(), "that seal spent");
+		h.assertValueEqual(MagicAttachments.get(p).element(), Optional.of(Element.WIND), "wind");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void unboundPlayerCannotUseASeal(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.otherPlayer(h, MagicTestKit.STAND);
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL));
+		h.assertValueEqual(use(h, p, InteractionHand.MAIN_HAND), InteractionResult.PASS, "unbound: pass");
+		h.assertFalse(ElementChoice.rebindPending(p), "nothing pending");
+		h.assertFalse(MagicServer.chooseElement(p, Element.FIRE), "no grimoire, no pending rebind: refused");
+		h.assertValueEqual(p.getMainHandItem().getCount(), 1, "seal kept");
 		h.succeed();
 	}
 

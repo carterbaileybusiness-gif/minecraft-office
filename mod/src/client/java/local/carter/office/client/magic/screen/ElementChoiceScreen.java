@@ -6,6 +6,7 @@ import java.util.List;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
+import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.MagicPayloads.ChooseElement;
 import local.carter.office.magic.spell.SpellIds;
 
@@ -27,11 +28,13 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
  * ({@link ChoiceLayout}, 4°/s). Hovering a sigil (or picking one with Tab / the arrow keys) pauses the orbit, grows it to 1.25×
  * with a pulsing glow in its colour, and the book's pages show that element: its name, motto, a turning summoning circle and
  * its five spells. Clicking (or Enter) turns the orbit so the sigil sits on top, fades the others out and asks to confirm
- * ({@code bind_q}, {@code bind_note}, Bind / Back). Bind sends {@link ChooseElement}, flashes in the element's colour for 20
- * ticks and closes. Esc closes unbound. Not a pause screen.
+ * ({@code bind_q}, {@code bind_note}, Bind / Back). Bind sends {@link ChooseElement} and waits ("Binding…", buttons off) for
+ * the server's binding to sync back; then it flashes in the element's colour for 20 ticks and closes. With no change after
+ * {@link #BIND_TIMEOUT_TICKS} it returns to the confirm step with an error line. Opened by a Rebinding Seal, the current
+ * element is marked and can't be chosen. Esc closes without binding. Not a pause screen.
  */
 public final class ElementChoiceScreen extends Screen {
-	public enum State { CHOOSING, CONFIRM, BOUND }
+	public enum State { CHOOSING, CONFIRM, BINDING, BOUND }
 
 	private static final float ORBIT_DEG_PER_S = 4f;
 	private static final long BOOK_MS = 520;
@@ -40,6 +43,8 @@ public final class ElementChoiceScreen extends Screen {
 	private static final long SIGIL_FLY_MS = 520;
 	private static final long TURN_MS = 650;
 	public static final int BOUND_TICKS = 20;
+	/** How long Bind waits for the server's synced element before giving up with an error (ticks). */
+	public static final int BIND_TIMEOUT_TICKS = 40;
 	private static final int GOLD = 0xFFFFD27A;
 	private static final Element[] ELEMENTS = Element.values();
 
@@ -61,12 +66,22 @@ public final class ElementChoiceScreen extends Screen {
 	private long stateAt;
 	private float turnFrom, turnTo;
 	private int boundTicks;
+	private int bindingTicks;
+	private boolean bindFailed;
+	/** The element bound when the screen opened (a Rebinding Seal), which can't be chosen again; -1 when unbound. */
+	private final int current;
 	private float othersFade = 1f;
+	/** Spell-name wrapping for the right page, cached per (element, page size, GUI scale, language). */
+	private Object spellsKey;
+	private float spellsScale;
+	private List<List<FormattedCharSequence>> spellsLines = List.of();
 	private RuneButton bind, back;
 	private final List<FormattedCharSequence> lines = new ArrayList<>();
 
 	public ElementChoiceScreen() {
 		super(Component.translatable("magic.office.choose"));
+		var player = net.minecraft.client.Minecraft.getInstance().player;
+		this.current = player == null ? -1 : MagicAttachments.get(player).element().map(Element::ordinal).orElse(-1);
 	}
 
 	// ---------------------------------------------------------------- state for tests
@@ -110,6 +125,27 @@ public final class ElementChoiceScreen extends Screen {
 			onClose();
 			return;
 		}
+		if (state == State.BINDING) {
+			// The flash plays only once the server's binding has synced back; no change in time → back to confirm, with an error.
+			if (MagicAttachments.get(minecraft.player).element().equals(java.util.Optional.of(ELEMENTS[chosen]))) {
+				orbit = currentTurn();
+				state = State.BOUND;
+				stateAt = Util.getMillis();
+				boundTicks = 0;
+				syncButtons();
+				play(SimpleSoundInstance.forUI(SoundEvents.AMETHYST_BLOCK_RESONATE, 0.9f, 1f));
+				play(SimpleSoundInstance.forUI(SoundEvents.BEACON_ACTIVATE, 1.6f, 0.6f));
+			} else if (++bindingTicks >= BIND_TIMEOUT_TICKS) {
+				state = State.CONFIRM;
+				stateAt = Util.getMillis() - 1000; // no re-run of the confirm animations
+				turnFrom = turnTo = orbit;
+				bindFailed = true;
+				syncButtons();
+				setFocused(bind);
+				play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_BASS, 0.6f));
+			}
+			return;
+		}
 		if (state == State.BOUND && ++boundTicks >= BOUND_TICKS) onClose();
 	}
 
@@ -120,8 +156,9 @@ public final class ElementChoiceScreen extends Screen {
 	private void syncButtons() {
 		if (bind == null) return;
 		boolean on = state == State.CONFIRM;
-		bind.visible = back.visible = on || state == State.BOUND;
+		bind.visible = back.visible = on || state == State.BINDING || state == State.BOUND;
 		bind.active = back.active = on;
+		bind.setMessage(Component.translatable(state == State.BINDING ? "magic.office.binding" : "magic.office.bind"));
 	}
 
 	// ---------------------------------------------------------------- input
@@ -175,6 +212,11 @@ public final class ElementChoiceScreen extends Screen {
 	}
 
 	private void confirm(int i) {
+		if (i == current) {
+			play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_BASS, 0.6f)); // already your element: a seal would be wasted
+			return;
+		}
+		bindFailed = false;
 		chosen = i;
 		focus = i;
 		state = State.CONFIRM;
@@ -200,16 +242,17 @@ public final class ElementChoiceScreen extends Screen {
 		play(SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 0.85f, 0.8f));
 	}
 
+	/** Sends the choice and waits (BINDING) for the server's binding to sync back; the flash plays then (see {@link #tick}). */
 	private void bindNow() {
 		if (state != State.CONFIRM || chosen < 0) return;
 		orbit = currentTurn();
-		state = State.BOUND;
-		stateAt = Util.getMillis();
-		boundTicks = 0;
+		turnFrom = turnTo = orbit;
+		state = State.BINDING;
+		bindingTicks = 0;
+		bindFailed = false;
 		syncButtons();
 		if (ClientPlayNetworking.canSend(ChooseElement.TYPE)) ClientPlayNetworking.send(new ChooseElement(ELEMENTS[chosen]));
-		play(SimpleSoundInstance.forUI(SoundEvents.AMETHYST_BLOCK_RESONATE, 0.9f, 1f));
-		play(SimpleSoundInstance.forUI(SoundEvents.BEACON_ACTIVATE, 1.6f, 0.6f));
+		play(SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 1.2f, 0.7f));
 	}
 
 	/** Orbit angle while the confirm turn animates. */
@@ -246,7 +289,7 @@ public final class ElementChoiceScreen extends Screen {
 			if (active() != before) onActiveChanged(active());
 			if (active() < 0 && introDone()) orbit = (orbit + ORBIT_DEG_PER_S * dt) % 360f;
 			othersFade = UiKit.approach(othersFade, 1f, 10f, dt);
-		} else if (state == State.CONFIRM) {
+		} else if (state == State.CONFIRM || state == State.BINDING) {
 			othersFade = UiKit.approach(othersFade, 0f, 9f, dt);
 		}
 		for (int i = 0; i < grow.length; i++) {
@@ -301,9 +344,9 @@ public final class ElementChoiceScreen extends Screen {
 
 		for (int i = 0; i < ChoiceLayout.SIGILS; i++) sigil(g, l, i, now, t, flash);
 
-		if (state == State.CONFIRM || state == State.BOUND) {
+		if (state == State.CONFIRM || state == State.BINDING || state == State.BOUND) {
 			float f = UiKit.easeOut((now - stateAt - (state == State.CONFIRM ? 220 : 0)) / 260f);
-			float fade = state == State.CONFIRM ? f : 1f - UiKit.clamp01(flash * 3f);
+			float fade = state == State.CONFIRM ? f : state == State.BINDING ? 1f : 1f - UiKit.clamp01(flash * 3f);
 			bind.fade = back.fade = fade;
 		}
 		super.extractRenderState(g, mouseX, mouseY, a); // the Bind / Back buttons
@@ -394,7 +437,8 @@ public final class ElementChoiceScreen extends Screen {
 			alpha *= 1f - UiKit.clamp01((flash - 0.35f) / 0.65f);
 		}
 		// Glow: faint always, pulsing in the element colour when hovered or chosen.
-		float pulse = 0.5f + 0.5f * (float) Math.sin(now / 170.0);
+		float pulse = 0.5f + 0.5f * (float) Math.sin(now / (state == State.BINDING && isChosen ? 70.0 : 170.0));
+		if (i == current && state == State.CHOOSING) alpha *= 0.55f; // your element now: shown, but not choosable
 		float glowK = 0.22f + grow[i] * (0.45f + 0.35f * pulse);
 		UiKit.glow(g, cx, cy, size * (1.9f + 0.35f * grow[i] * pulse), UiKit.alpha(e.argb(), glowK * alpha));
 		// A slowly turning rune ring behind the hovered one.
@@ -404,14 +448,17 @@ public final class ElementChoiceScreen extends Screen {
 		UiKit.centredTexture(g, UiKit.sigil(e), 64, cx, cy + 1f, size, 0f, UiKit.alpha(0xFF000000, 0.45f * alpha)); // shadow
 		UiKit.centredTexture(g, UiKit.sigil(e), 64, cx, cy, size, 0f, UiKit.alpha(UiKit.WHITE, alpha));
 		// Name under the hovered sigil (white, outlined) so it reads even before the pages turn.
-		if (grow[i] > 0.05f && state == State.CHOOSING) {
-			Component name = UiKit.elementName(e);
+		boolean isCurrent = i == current && state == State.CHOOSING;
+		if ((grow[i] > 0.05f || isCurrent) && state == State.CHOOSING) {
+			Component name = isCurrent ? Component.translatable("magic.office.current") : UiKit.elementName(e);
 			float s = UiKit.crisp(Math.max(1f, l.sigilSize() / 44f));
-			// On the side away from the book; skipped when the screen edge leaves no room (the pages show the name anyway).
+			// On the side away from the book, clear of the hover ring (0.66 × size); skipped when the screen edge leaves no
+			// room (the pages show the name anyway).
 			boolean below = cy >= height / 2f;
-			float y = below ? cy + size / 2f + 2f : cy - size / 2f - 2f - 9 * s;
+			float y = below ? cy + size * 0.66f + 1f : cy - size * 0.66f - 1f - 9 * s;
 			if (y >= 1 && y + 9 * s <= height - 1) {
-				UiKit.centred(g, font, name, cx, y, s, UiKit.alpha(UiKit.mix(e.argb(), UiKit.WHITE, 0.55f), grow[i] * alpha), true);
+				float k = isCurrent ? Math.max(grow[i], 0.8f) : grow[i];
+				UiKit.centred(g, font, name, cx, y, s, UiKit.alpha(UiKit.mix(e.argb(), UiKit.WHITE, 0.55f), k * alpha), true);
 			}
 		}
 	}
@@ -497,6 +544,30 @@ public final class ElementChoiceScreen extends Screen {
 		float textRoom = p.w() - icon - 3 * unit;
 		// One scale for all five names: the largest crisp one at which every name fits its row, wrapping onto a second
 		// line when the row is tall enough (small books keep readable text that way).
+		Object key = List.of(e, p, Math.round(unit * 64), UiKit.guiScale(), minecraft.options.languageCode);
+		if (!key.equals(spellsKey)) {
+			wrapSpells(e, rowH, textRoom, unit);
+			spellsKey = key;
+		}
+		float s = spellsScale;
+		List<List<FormattedCharSequence>> wrapped = spellsLines;
+		for (int slot = 0; slot < rows; slot++) {
+			Identifier id = SpellIds.at(e, slot);
+			float cy = p.y() + rowH * (slot + 0.5f);
+			UiKit.centredTexture(g, UiKit.spellIcon(id), 32, p.x() + icon / 2f, cy, icon, 0f, UiKit.alpha(UiKit.WHITE, k));
+			int col = slot == Slots.ULTIMATE ? UiKit.inkOf(e.argb()) : UiKit.INK;
+			List<FormattedCharSequence> nl = slot < wrapped.size() ? wrapped.get(slot) : List.of(UiKit.spellName(id).getVisualOrderText());
+			float y = cy - (nl.size() * 9.5f * s - 1.5f * s) / 2f;
+			for (FormattedCharSequence line : nl) {
+				UiKit.text(g, font, line, p.x() + icon + 3 * unit, y, s, UiKit.alpha(col, k), false);
+				y += 9.5f * s;
+			}
+		}
+	}
+
+	/** Finds the spell-name scale and lines for {@link #spellsPage} (run only when the key changes). */
+	private void wrapSpells(Element e, float rowH, float textRoom, float unit) {
+		int rows = Slots.ULTIMATE + 1;
 		float s = UiKit.crisp(unit);
 		float step = 1f / UiKit.guiScale();
 		List<List<FormattedCharSequence>> wrapped = new ArrayList<>();
@@ -513,18 +584,8 @@ public final class ElementChoiceScreen extends Screen {
 			if (ok || s <= step * 1.01f) break;
 			s = UiKit.crisp(s - step);
 		}
-		for (int slot = 0; slot < rows; slot++) {
-			Identifier id = SpellIds.at(e, slot);
-			float cy = p.y() + rowH * (slot + 0.5f);
-			UiKit.centredTexture(g, UiKit.spellIcon(id), 32, p.x() + icon / 2f, cy, icon, 0f, UiKit.alpha(UiKit.WHITE, k));
-			int col = slot == Slots.ULTIMATE ? UiKit.inkOf(e.argb()) : UiKit.INK;
-			List<FormattedCharSequence> nl = slot < wrapped.size() ? wrapped.get(slot) : List.of(UiKit.spellName(id).getVisualOrderText());
-			float y = cy - (nl.size() * 9.5f * s - 1.5f * s) / 2f;
-			for (FormattedCharSequence line : nl) {
-				UiKit.text(g, font, line, p.x() + icon + 3 * unit, y, s, UiKit.alpha(col, k), false);
-				y += 9.5f * s;
-			}
-		}
+		spellsScale = s;
+		spellsLines = List.copyOf(wrapped);
 	}
 
 	private void confirmPage(GuiGraphicsExtractor g, Rect p, Element e, float k, float unit) {
@@ -544,6 +605,15 @@ public final class ElementChoiceScreen extends Screen {
 		for (FormattedCharSequence line : lines) {
 			UiKit.centred(g, font, line, p.cx(), y, ns, UiKit.alpha(UiKit.INK_SOFT, k), false);
 			y += 10 * ns;
+		}
+		if (bindFailed && state == State.CONFIRM) {
+			y += 4 * unit;
+			Component err = Component.translatable("magic.office.bind_failed");
+			float es = UiKit.wrap(font, err, p.w(), unit, 3, lines);
+			for (FormattedCharSequence line : lines) {
+				UiKit.centred(g, font, line, p.cx(), y, es, UiKit.alpha(0xFFA8321E, k), false);
+				y += 10 * es;
+			}
 		}
 	}
 

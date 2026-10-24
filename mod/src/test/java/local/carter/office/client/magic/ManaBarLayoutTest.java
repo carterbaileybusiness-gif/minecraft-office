@@ -25,12 +25,15 @@ class ManaBarLayoutTest {
 			// Widest plausible texts: mana up to "190" (and room to spare), XP levels up to 5 digits; +2 for the outline.
 			for (int manaW = 5; manaW <= 40; manaW++) {
 				for (int xpW = 5; xpW <= 40; xpW += 5) {
-					Rect mana = l.manaText(manaW);
-					Rect xp = l.xpText(xpW);
-					String at = wh[0] + "x" + wh[1] + " mana " + mana + " xp " + xp;
-					assertFalse(mana.overlaps(xp), at);
-					assertTrue(xp.insideScreen(wh[0], wh[1], 0), at + ": xp level on screen");
-					assertTrue(mana.insideScreen(wh[0], wh[1], 0), at + ": mana number on screen");
+					for (boolean right : new boolean[] {false, true}) {
+						Rect mana = l.manaText(manaW);
+						Rect xp = l.xpText(xpW, right);
+						String at = wh[0] + "x" + wh[1] + " mana " + mana + " xp " + xp + " off hand right " + right;
+						assertFalse(mana.overlaps(xp), at);
+						assertTrue(xp.insideScreen(wh[0], wh[1], 0), at + ": xp level on screen");
+						assertTrue(mana.insideScreen(wh[0], wh[1], 0), at + ": mana number on screen");
+						assertFalse(xp.overlaps(l.offhandSlot(right)), at + ": xp level clear of the off-hand slot");
+					}
 				}
 			}
 		}
@@ -44,17 +47,31 @@ class ManaBarLayoutTest {
 		assertTrue(mana.bottom() <= l.bar().y(), "mana number above the bar");
 		// Vanilla's level spot (the gap between hearts and food, y = h - 24 - 9 - 2) lifted 2 so the outline clears the bar.
 		assertEquals(360 - 37, l.manaY());
-		Rect xp = l.xpText(11);
+		Rect xp = l.xpText(11, false);
 		assertTrue(xp.x() >= l.bar().right(), "xp level right of the bar");
 		assertTrue(xp.x() - l.bar().right() <= 6, "xp level hugs the bar's right end");
 		assertTrue(xp.y() <= l.bar().cy() && xp.bottom() >= l.bar().cy(), "xp level beside the bar");
+		Rect left = l.xpText(11, true);
+		assertTrue(left.right() <= l.bar().x() && l.bar().x() - left.right() <= 6, "left-handed: at the bar's left end");
 	}
 
 	@Test
 	void spellLabelSitsWhereTheHeldItemNameGoes() {
 		ManaBarLayout.Layout l = ManaBarLayout.layout(640, 360);
-		assertEquals(360 - 59, l.labelY(true));
-		assertEquals(360 - 45, l.labelY(false));
+		assertEquals(360 - 59, l.labelY(), "the held-item line, creative too (its lower line would hit the mana number)");
+		assertTrue(l.labelY() + 9 < l.manaText(17).y(), "label above the mana number");
+	}
+
+	@Test
+	void manaBarOnlyInCastingStance() {
+		// bound, main grimoire, main empty, off grimoire, jumpable mount
+		assertTrue(ManaBarLayout.shows(true, false, true, true, false), "off hand + empty main hand");
+		assertTrue(ManaBarLayout.shows(true, true, false, false, false), "grimoire in the main hand");
+		assertTrue(ManaBarLayout.shows(true, true, false, true, false), "grimoires in both hands");
+		assertFalse(ManaBarLayout.shows(true, false, false, true, false), "off hand with a tool in the main hand: vanilla bars");
+		assertFalse(ManaBarLayout.shows(false, true, false, false, false), "unbound");
+		assertFalse(ManaBarLayout.shows(true, false, true, false, false), "no grimoire");
+		assertFalse(ManaBarLayout.shows(true, true, false, false, true), "riding a jumpable mount: its jump bar");
 	}
 
 	@Test

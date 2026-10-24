@@ -1,7 +1,6 @@
 package local.carter.office.magic.item;
 
-import java.util.Optional;
-
+import local.carter.office.magic.cast.ElementChoice;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
@@ -15,8 +14,9 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
 
 /**
- * Rebinding Seal (nether star + book): use it to clear your element (level, xp, home and cooldowns stay), then choose again.
- * Used up on use; passes when you are unbound.
+ * Rebinding Seal (nether star + book): use it while bound to open the element choice again. Nothing changes yet: one seal is
+ * spent, and the new element bound (level, xp, home and cooldowns stay), only when you choose ({@code ElementChoice.rebind});
+ * closing the screen keeps both. Passes when you are unbound.
  */
 public class RebindingSealItem extends Item {
 	public RebindingSealItem(Properties properties) {
@@ -28,8 +28,7 @@ public class RebindingSealItem extends Item {
 		MagicData data = MagicAttachments.get(player);
 		if (data.element().isEmpty()) return InteractionResult.PASS;
 		if (player instanceof ServerPlayer sp) {
-			MagicAttachments.set(sp, data.withElement(Optional.empty()).withSelected(Optional.empty()));
-			sp.getItemInHand(hand).consume(1, sp);
+			ElementChoice.beginRebind(sp);
 			MagicServer.sender().open(sp, OpenGrimoire.Mode.CHOOSE);
 		}
 		return InteractionResult.SUCCESS;

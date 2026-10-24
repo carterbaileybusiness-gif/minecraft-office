@@ -30,12 +30,13 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 
 /**
- * The mana bar. While a grimoire is in either hand and the player is bound, it takes the XP bar's place: 182 × 5 in the element
- * colour, a notch per 10 mana, a white sweep while the selected spell recharges, the mana number centred above and the XP
- * level (vanilla green) at the bar's right end. Otherwise vanilla draws as usual. After the selection changes, the spell's
- * icon and name fade in for 40 ticks where vanilla shows the held item's name (which it replaces only meanwhile). The
- * locator bar's markers are hidden while the mana bar shows, so they never sit on top of it. Office action-bar hints (above
- * this line) are untouched.
+ * The mana bar. In casting stance ({@link ManaBarLayout#shows}: bound, a grimoire in the main hand or in the off hand with the
+ * main hand empty, not on a jumpable mount) it takes the XP bar's place: 182 × 5 in the element colour, a notch per 10 mana,
+ * a white sweep while the selected spell recharges, the mana number centred above and the XP level (vanilla green) at the
+ * bar's right end (left end for left-handed players, clear of the off-hand slot). Any other time vanilla draws its XP,
+ * locator and jump bars. After the selection changes, the spell's icon and name fade in for 40 ticks on vanilla's held-item
+ * line (which they replace only meanwhile). The locator bar's markers are hidden while the mana bar shows, so they never sit
+ * on top of it. Office action-bar hints (above this line) are untouched.
  */
 public final class ManaBarHud {
 	public static final int LABEL_TICKS = 40;
@@ -76,12 +77,15 @@ public final class ManaBarHud {
 		};
 	}
 
-	/** Bound, not a spectator, and a grimoire in either hand. */
+	/**
+	 * The mana bar shows ({@link ManaBarLayout#shows}): casting stance (bound, grimoire in the main hand, or in the off hand
+	 * with the main hand empty), not a spectator, not on a jumpable mount.
+	 */
 	public static boolean active(Minecraft mc) {
 		LocalPlayer p = mc.player;
 		if (p == null || p.isSpectator()) return false;
-		if (!GrimoireItem.isGrimoire(p.getMainHandItem()) && !GrimoireItem.isGrimoire(p.getOffhandItem())) return false;
-		return MagicAttachments.get(p).element().isPresent();
+		return ManaBarLayout.shows(MagicAttachments.get(p).element().isPresent(), GrimoireItem.isGrimoire(p.getMainHandItem()),
+				p.getMainHandItem().isEmpty(), GrimoireItem.isGrimoire(p.getOffhandItem()), p.jumpableVehicle() != null);
 	}
 
 	/** Ticks left on the selected-spell label (0 = hidden). */
@@ -203,7 +207,8 @@ public final class ManaBarHud {
 		if (mc.player == null) return;
 		ManaBarLayout.Layout l = ManaBarLayout.layout(g.guiWidth(), g.guiHeight());
 		Component s = Component.literal(Integer.toString(mc.player.experienceLevel));
-		UiKit.outlined(g, mc.font, s, l.xpX(), l.xpY(), XP_GREEN, 0xFF000000);
+		boolean offhandRight = mc.player.getMainArm() == net.minecraft.world.entity.HumanoidArm.LEFT;
+		UiKit.outlined(g, mc.font, s, l.xpX(mc.font.width(s), offhandRight), l.xpY(), XP_GREEN, 0xFF000000);
 	}
 
 	/** The selected spell's icon and name, fading in and out where vanilla shows the held item's name. */
@@ -219,13 +224,12 @@ public final class ManaBarHud {
 		int colour = SpellRegistry.get(id).map(s -> s.element() == null ? Element.RECALL_ARGB : s.element().argb())
 				.orElse(e != null && !id.getPath().equals("recall") ? e.argb() : Element.RECALL_ARGB);
 		ManaBarLayout.Layout l = ManaBarLayout.layout(g.guiWidth(), g.guiHeight());
-		boolean hearts = mc.gameMode != null && mc.gameMode.canHurtPlayer();
 		Component name = UiKit.spellName(id);
 		int tw = mc.font.width(name);
 		int icon = 9;
 		int total = icon + 3 + tw;
 		int x = (g.guiWidth() - total) / 2;
-		int y = l.labelY(hearts);
+		int y = l.labelY();
 		float rise = (1f - UiKit.easeOut(age / FADE_IN)) * 3f;
 		g.pose().pushMatrix();
 		g.pose().translate(0, rise);

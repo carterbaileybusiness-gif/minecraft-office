@@ -30,6 +30,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
@@ -59,6 +60,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			firstOpenShowsElementChoice(context, sp);
 			bindingFireClosesAndShowsManaBar(context, sp);
 			grimoireScreenSelectsSpells(context, sp);
+			manaBarOnlyInCastingStance(context, sp);
+			rebindingSealRebindsOnChoice(context, sp);
 		} finally {
 			setGuiScale(context, savedScale);
 		}
@@ -167,7 +170,9 @@ public class MagicClientGameTests implements FabricClientGameTest {
 
 		context.clickScreenButton("magic.office.bind");
 		state = context.computeOnClient(mc -> mc.gui.screen() instanceof ElementChoiceScreen s ? s.state() : null);
-		if (state != ElementChoiceScreen.State.BOUND) throw new AssertionError("Bind should bind, state " + state);
+		if (state != ElementChoiceScreen.State.BINDING) throw new AssertionError("Bind should wait for the server, state " + state);
+		// The flash starts only once the server's binding has synced back.
+		context.waitFor(mc -> mc.gui.screen() instanceof ElementChoiceScreen s && s.state() == ElementChoiceScreen.State.BOUND, 40);
 		context.waitTicks(6);
 		context.takeScreenshot("magic-choice-bound-gui4");
 		context.waitFor(mc -> mc.gui.screen() == null, 60);
@@ -253,6 +258,75 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		context.waitTicks(6);
 		if (ManaBarHud.labelTicks() <= 0) throw new AssertionError("selecting a spell should show its name above the hotbar");
 		context.takeScreenshot("magic-hud-label-gui3");
+	}
+
+	/** The mana bar replaces the XP bar only in casting stance; with a tool in the main hand vanilla's bars come back. */
+	private static void manaBarOnlyInCastingStance(ClientGameTestContext context, TestSingleplayerContext sp) {
+		setGuiScale(context, 3);
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.OFF_HAND, p.getMainHandItem().copy());
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.STICK));
+		});
+		context.waitTicks(5);
+		if (context.computeOnClient(ManaBarHud::active)) throw new AssertionError("off-hand grimoire + a stick in the main hand: vanilla bars");
+		context.takeScreenshot("magic-hud-not-stance-gui3");
+		sp.getServer().runOnServer(server -> player(server).setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY));
+		context.waitTicks(5);
+		if (!context.computeOnClient(ManaBarHud::active)) throw new AssertionError("off-hand grimoire + empty main hand: the mana bar");
+		context.takeScreenshot("magic-hud-offhand-stance-gui3");
+	}
+
+	/**
+	 * A Rebinding Seal (no grimoire needed): the choice opens with the current element marked; a failed bind (the seal put
+	 * away) returns to confirm with an error; with the seal back, Bind rebinds and spends exactly one seal.
+	 */
+	private static void rebindingSealRebindsOnChoice(ClientGameTestContext context, TestSingleplayerContext sp) {
+		setGuiScale(context, 4);
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL, 2));
+		});
+		context.waitTicks(5);
+		context.getInput().pressMouse(MOUSE_RIGHT);
+		context.waitForScreen(ElementChoiceScreen.class);
+		centreCursor(context);
+		context.waitFor(mc -> mc.gui.screen() instanceof ElementChoiceScreen s && s.introDone());
+		context.waitTicks(4);
+		context.takeScreenshot("magic-rebind-choice-gui4");
+		int seals = sp.getServer().computeOnServer(server -> player(server).getMainHandItem().getCount());
+		if (seals != 2) throw new AssertionError("opening the choice must not spend a seal, have " + seals);
+
+		// Put the seal away on the server: the bind can't take, so the screen returns to confirm with an error.
+		hoverSigil(context, Element.WATER.ordinal());
+		context.waitTicks(3);
+		hoverSigil(context, Element.WATER.ordinal());
+		context.waitTicks(1);
+		context.getInput().pressMouse(MOUSE_LEFT);
+		context.waitTicks(20);
+		ItemStack[] stash = new ItemStack[1];
+		sp.getServer().runOnServer(server -> {
+			stash[0] = player(server).getMainHandItem().copy();
+			player(server).setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+		});
+		context.waitTicks(2);
+		context.clickScreenButton("magic.office.bind");
+		context.waitFor(mc -> mc.gui.screen() instanceof ElementChoiceScreen s && s.state() == ElementChoiceScreen.State.CONFIRM, 80);
+		context.waitTicks(4);
+		context.takeScreenshot("magic-rebind-failed-gui4");
+		Optional<Element> still = sp.getServer().computeOnServer(server -> MagicAttachments.get(player(server)).element());
+		if (!still.equals(Optional.of(Element.FIRE))) throw new AssertionError("a failed bind keeps the old element, got " + still);
+
+		sp.getServer().runOnServer(server -> player(server).setItemInHand(InteractionHand.MAIN_HAND, stash[0]));
+		context.waitTicks(3);
+		context.clickScreenButton("magic.office.bind");
+		context.waitFor(mc -> mc.gui.screen() instanceof ElementChoiceScreen s && s.state() == ElementChoiceScreen.State.BOUND, 40);
+		context.waitFor(mc -> mc.gui.screen() == null, 60);
+		Optional<Element> now = sp.getServer().computeOnServer(server -> MagicAttachments.get(player(server)).element());
+		if (!now.equals(Optional.of(Element.WATER))) throw new AssertionError("rebound to WATER expected, got " + now);
+		seals = sp.getServer().computeOnServer(server -> player(server).getMainHandItem().getCount());
+		if (seals != 1) throw new AssertionError("exactly one seal spent, have " + seals);
 	}
 
 	// ---- helpers ----

@@ -106,9 +106,10 @@ public final class GrimoireScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
-		if (event.isUp() || event.isDown()) {
+		if (event.isUp() || event.isDown() || event.isCycleFocus()) {
+			boolean back = event.isUp() || (event.isCycleFocus() && event.hasShiftDown());
 			int from = focus >= 0 ? focus : selectedRow();
-			focus = Math.floorMod((from < 0 ? 0 : from) + (event.isDown() ? 1 : -1), GrimoireLayout.ROWS);
+			focus = Math.floorMod((from < 0 ? 0 : from) + (back ? -1 : 1), GrimoireLayout.ROWS);
 			hover = -1;
 			return true;
 		}
@@ -263,15 +264,18 @@ public final class GrimoireScreen extends Screen {
 		}
 	}
 
+	/** "Home: x y z (Dimension)"; the dimension from {@code magic.office.dim.<path>}, else its path made readable. */
 	static Component homeText(GlobalPos h) {
-		String dim = h.dimension().identifier().getPath().replace('_', ' ');
+		Identifier id = h.dimension().identifier();
 		StringBuilder nice = new StringBuilder();
-		for (String w : dim.split(" ")) {
+		for (String w : id.getPath().replace('/', ' ').replace('_', ' ').split(" ")) {
 			if (w.isEmpty()) continue;
 			if (nice.length() > 0) nice.append(' ');
 			nice.append(Character.toUpperCase(w.charAt(0))).append(w.substring(1));
 		}
-		return Component.translatable("magic.office.home", h.pos().getX(), h.pos().getY(), h.pos().getZ(), nice.toString());
+		String key = id.getNamespace().equals("minecraft") ? "magic.office.dim." + id.getPath() : "magic.office.dim." + id.getNamespace() + "." + id.getPath();
+		Component dim = Component.translatableWithFallback(key, nice.toString());
+		return Component.translatable("magic.office.home", h.pos().getX(), h.pos().getY(), h.pos().getZ(), dim);
 	}
 
 	private void rightPage(GuiGraphicsExtractor g, GrimoireLayout.Layout l, MagicData d, Element e, long now, float dt) {
@@ -393,11 +397,13 @@ public final class GrimoireScreen extends Screen {
 		if (slot == Slots.ULTIMATE && cost.xpLevels() > 0) {
 			line = line.copy().append("  ").append(Component.translatable("magic.office.plus_levels", cost.xpLevels()));
 		}
-		UiKit.text(g, font, line, tx, y, s, UiKit.alpha(UiKit.INK_SOFT, k), false);
+		// The line shrinks (crisp) to fit the row; the seconds left only show when they fit beside it.
+		float ls = UiKit.fit(font.width(line), right - tx, s);
+		UiKit.text(g, font, line, tx, y + 4f * (s - ls), ls, UiKit.alpha(UiKit.INK_SOFT, k), false);
 		if (left > 0) {
 			Component cd = Component.literal(seconds(left) + "s");
-			float w = font.width(cd) * s;
-			if (tx + font.width(line) * s + 4 * s < right - w) UiKit.text(g, font, cd, right - w, y, s, UiKit.alpha(LOCK_RED, k), false);
+			float w = font.width(cd) * ls;
+			if (tx + font.width(line) * ls + 4 * ls < right - w) UiKit.text(g, font, cd, right - w, y + 4f * (s - ls), ls, UiKit.alpha(LOCK_RED, k), false);
 		}
 	}
 

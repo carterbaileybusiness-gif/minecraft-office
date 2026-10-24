@@ -19,23 +19,38 @@ public final class ManaBarLayout {
 
 	/**
 	 * @param manaY top of the mana number: vanilla's XP-level spot ({@code h − 24 − 9 − 2}) lifted 2 so its outline clears the bar
-	 * @param xpX   left of the XP level text
 	 * @param xpY   top of the XP level text (centred on the bar)
 	 */
-	public record Layout(int w, int h, Rect bar, int manaY, int xpX, int xpY) {
+	public record Layout(int w, int h, Rect bar, int manaY, int xpY) {
 		/** The mana number's box for a text {@code textWidth} wide (outline included), centred on the bar. */
 		public Rect manaText(int textWidth) {
 			return new Rect(bar.x() + (WIDTH - textWidth) / 2 - 1, manaY - 1, textWidth + 2, GLYPH + 2);
 		}
 
-		/** The XP level's box for a text {@code textWidth} wide (outline included). */
-		public Rect xpText(int textWidth) {
-			return new Rect(xpX - 1, xpY - 1, textWidth + 2, GLYPH + 2);
+		/**
+		 * Left of the XP level text: at the bar's right end, or at its left end when the off-hand slot sits on the right
+		 * (left-handed players), so the slot never covers it.
+		 */
+		public int xpX(int textWidth, boolean offhandRight) {
+			return offhandRight ? bar.x() - XP_GAP - textWidth : bar.right() + XP_GAP;
 		}
 
-		/** Top of the spell-name label: vanilla's held-item name line (14 lower when there are no hearts). */
-		public int labelY(boolean hasHearts) {
-			return h - 59 + (hasHearts ? 0 : 14);
+		/** The XP level's box for a text {@code textWidth} wide (outline included). */
+		public Rect xpText(int textWidth, boolean offhandRight) {
+			return new Rect(xpX(textWidth, offhandRight) - 1, xpY - 1, textWidth + 2, GLYPH + 2);
+		}
+
+		/** Vanilla's off-hand slot (29 × 24 at {@code h − 23}, beside the hotbar on the off-hand side). */
+		public Rect offhandSlot(boolean right) {
+			return new Rect(right ? w / 2 + 91 : w / 2 - 91 - 29, h - 23, 29, 24);
+		}
+
+		/**
+		 * Top of the spell-name label: vanilla's held-item name line for players with hearts ({@code h − 59}). Used whenever
+		 * the mana bar shows, creative included (vanilla's lower creative line would sit on the mana number).
+		 */
+		public int labelY() {
+			return h - 59;
 		}
 	}
 
@@ -44,9 +59,17 @@ public final class ManaBarLayout {
 	public static Layout layout(int w, int h) {
 		Rect bar = new Rect((w - WIDTH) / 2, h - 24 - HEIGHT, WIDTH, HEIGHT);
 		int manaY = h - 24 - LINE - 4;
-		int xpX = bar.right() + XP_GAP;
 		int xpY = bar.y() + HEIGHT / 2 - GLYPH / 2;
-		return new Layout(w, h, bar, manaY, xpX, xpY);
+		return new Layout(w, h, bar, manaY, xpY);
+	}
+
+	/**
+	 * Casting stance: the mana bar replaces the XP bar only for a bound player with a grimoire in the main hand, or in the off
+	 * hand with the main hand empty, and not on a jumpable mount (its jump bar wins). Any other time vanilla's XP and locator
+	 * bars show, even with a grimoire in the off hand.
+	 */
+	public static boolean shows(boolean bound, boolean mainGrimoire, boolean mainEmpty, boolean offGrimoire, boolean jumpableMount) {
+		return bound && !jumpableMount && (mainGrimoire || (offGrimoire && mainEmpty));
 	}
 
 	/** Filled width of the bar for {@code mana} of {@code max}. */

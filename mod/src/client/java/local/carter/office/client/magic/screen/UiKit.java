@@ -1,6 +1,8 @@
 package local.carter.office.client.magic.screen;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import local.carter.office.OfficeMod;
 import local.carter.office.magic.core.Element;
@@ -157,11 +159,38 @@ public final class UiKit {
 		g.text(font, s, x, y, argb, false);
 	}
 
+	private record WrapKey(Component text, int room, int max, int maxLines, int guiScale, String language) {}
+
+	private record Wrapped(float scale, List<FormattedCharSequence> lines) {}
+
+	/** Recent {@link #wrap} results: screens wrap the same few texts every frame. */
+	private static final Map<WrapKey, Wrapped> WRAPS = new LinkedHashMap<>(64, 0.75f, true) {
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<WrapKey, Wrapped> eldest) {
+			return size() > 96;
+		}
+	};
+
 	/**
 	 * Wraps {@code s} into at most {@code maxLines} lines that fit {@code room} wide, at the largest crisp scale up to
-	 * {@code max}. Returns the scale; the lines go into {@code out}.
+	 * {@code max}. Returns the scale; the lines go into {@code out}. Cached per (text, room, scale, lines, GUI scale, language).
 	 */
 	public static float wrap(Font font, Component s, float room, float max, int maxLines, List<FormattedCharSequence> out) {
+		WrapKey key = new WrapKey(s, Math.round(room * 16), Math.round(max * 64), maxLines, guiScale(),
+				Minecraft.getInstance().options.languageCode);
+		Wrapped w = WRAPS.get(key);
+		if (w == null) {
+			List<FormattedCharSequence> lines = new java.util.ArrayList<>();
+			float scale = wrapNow(font, s, room, max, maxLines, lines);
+			w = new Wrapped(scale, List.copyOf(lines));
+			WRAPS.put(key, w);
+		}
+		out.clear();
+		out.addAll(w.lines());
+		return w.scale();
+	}
+
+	private static float wrapNow(Font font, Component s, float room, float max, int maxLines, List<FormattedCharSequence> out) {
 		float scale = crisp(max);
 		float step = 1f / guiScale();
 		for (int guard = 0; guard < 64; guard++) {
