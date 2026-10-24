@@ -20,6 +20,7 @@ import local.carter.office.hologram.StarterKit;
 import local.carter.office.net.OfficePayloads.MoveHologram;
 import local.carter.office.net.OfficePayloads.RemoveHologram;
 import local.carter.office.net.OfficePayloads.ResizeHologram;
+import local.carter.office.net.OfficePayloads.SetMirrorDisplay;
 import local.carter.office.net.OfficePayloads.SetWorking;
 import local.carter.office.net.OfficePayloads.UpdateHologram;
 import local.carter.office.net.OfficePayloads.WorkingPlayers;
@@ -63,6 +64,7 @@ public final class HologramActions {
 		ServerPlayNetworking.registerGlobalReceiver(MoveHologram.TYPE, (p, ctx) -> apply(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(SetWorking.TYPE, (p, ctx) -> apply(ctx.player(), p));
 		ServerPlayNetworking.registerGlobalReceiver(RemoveHologram.TYPE, (p, ctx) -> apply(ctx.player(), p));
+		ServerPlayNetworking.registerGlobalReceiver(SetMirrorDisplay.TYPE, (p, ctx) -> apply(ctx.player(), p));
 	}
 
 	/** Applies one payload as {@code player}; returns whether anything changed (false = silently rejected). */
@@ -73,6 +75,8 @@ public final class HologramActions {
 			case MoveHologram m -> edit(player, m.pos(), s -> move(s, m));
 			case SetWorking w -> setWorking(player, w.working());
 			case RemoveHologram r -> remove(player, r.pos());
+			case SetMirrorDisplay d -> (d.display() == null || isMonitorId(d.display()))
+					&& edit(player, d.pos(), s -> s.withMirrorDisplay(d.display()));
 			default -> false;
 		};
 	}
@@ -213,7 +217,7 @@ public final class HologramActions {
 		double newHeight = s.width() / u.shape().aspect();
 		double offY = s.offY() - s.height() / 2 + newHeight / 2;
 		return new HologramSpec(s.owner(), u.shape(), u.mode(), privacy, slot, u.windowKey(), s.width(), s.offX(), offY,
-				s.offZ(), s.yaw());
+				s.offZ(), s.yaw(), s.mirrorDisplay());
 	}
 
 	private static HologramSpec move(final HologramSpec s, final MoveHologram m) {
@@ -222,7 +226,21 @@ public final class HologramActions {
 		}
 		float yaw = ((m.yaw() % 360f) + 360f) % 360f;
 		return new HologramSpec(s.owner(), s.shape(), s.mode(), s.privacy(), s.displaySlot(), s.windowKey(), s.width(),
-				m.offX(), m.offY(), m.offZ(), yaw);
+				m.offX(), m.offY(), m.offZ(), yaw, s.mirrorDisplay());
+	}
+
+	/** A monitor id as the client sends it: 1..64 printable ASCII characters (it is shown nowhere, only matched). */
+	public static boolean isMonitorId(final String id) {
+		if (id.isEmpty() || id.length() > OfficePayloads.MAX_MONITOR_ID) {
+			return false;
+		}
+		for (int i = 0; i < id.length(); i++) {
+			char c = id.charAt(i);
+			if (c < 0x20 || c > 0x7E) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static boolean okOffset(final double v) {

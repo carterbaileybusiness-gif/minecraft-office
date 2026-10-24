@@ -211,6 +211,7 @@ public class HologramBlockEntity extends BlockEntity {
 		m.put("mode", in.getStringOr("mode", Mode.EXTEND.name()));
 		m.put("privacy", in.getStringOr("privacy", Privacy.Level.PUBLIC.name()));
 		in.getString("windowKey").ifPresent(v -> m.put("windowKey", v));
+		in.getString("mirrorDisplay").ifPresent(v -> m.put("mirrorDisplay", v));
 		List<String> allowed = new ArrayList<>();
 		in.listOrEmpty("allowed", Codec.STRING).stream().forEach(allowed::add);
 		m.put("allowed", allowed);

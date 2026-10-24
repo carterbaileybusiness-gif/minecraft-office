@@ -28,6 +28,8 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 public final class OfficePayloads {
 	public static final int MAX_WINDOW_KEY = 512;
 	public static final int MAX_ALLOWED = 64;
+	/** Max characters of a monitor id (CGDisplay UUID string on a Mac, a device name such as {@code \\.\DISPLAY2} on Windows). */
+	public static final int MAX_MONITOR_ID = 64;
 	/** Max bytes of a stream datagram carried in a fallback payload (either direction). */
 	public static final int MAX_FALLBACK_DATAGRAM = 30 * 1024;
 
@@ -84,6 +86,26 @@ public final class OfficePayloads {
 
 		@Override
 		public Type<MoveHologram> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * Owner-only: which real monitor a Mirror copies ({@code display} = its opaque id; null = the main display). Its own
+	 * payload rather than an {@link UpdateHologram} field, so an older server never sees a longer packet it can't decode;
+	 * clients send it only when the server registered it. Monitor names never travel, only the id.
+	 */
+	public record SetMirrorDisplay(BlockPos pos, @Nullable String display) implements CustomPacketPayload {
+		public static final Type<SetMirrorDisplay> TYPE = new Type<>(OfficeMod.id("set_mirror_display"));
+		public static final StreamCodec<FriendlyByteBuf, SetMirrorDisplay> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeBlockPos(p.pos);
+					buf.writeNullable(p.display, (b, s) -> b.writeUtf(s, MAX_MONITOR_ID));
+				},
+				buf -> new SetMirrorDisplay(buf.readBlockPos(), buf.readNullable(b -> b.readUtf(MAX_MONITOR_ID))));
+
+		@Override
+		public Type<SetMirrorDisplay> type() {
 			return TYPE;
 		}
 	}
@@ -302,5 +324,6 @@ public final class OfficePayloads {
 		c2s.register(MoveHologram.TYPE, MoveHologram.CODEC);
 		c2s.register(SetWorking.TYPE, SetWorking.CODEC);
 		c2s.register(RemoveHologram.TYPE, RemoveHologram.CODEC);
+		c2s.register(SetMirrorDisplay.TYPE, SetMirrorDisplay.CODEC);
 	}
 }

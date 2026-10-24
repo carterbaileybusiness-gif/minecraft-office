@@ -105,6 +105,15 @@ class MountTest {
     }
 
     @Test
+    void remountKeepsMirrorDisplay() {
+        HologramSpec lg = spec(3.0, 0.7, 0.3, 1.5, 90f).withMirrorDisplay("LG-UUID");
+        assertEquals("LG-UUID", Mount.WALL.constrain(lg, 0f).mirrorDisplay(), "onto a wall");
+        for (Mount m : Mount.values()) {
+            assertEquals("LG-UUID", m.scrollResize(lg, 2).mirrorDisplay(), m + " scroll resize");
+        }
+    }
+
+    @Test
     void scrollClampsToTheSizeLimits() {
         HologramSpec big = Mount.FLOOR.scrollResize(spec(11.5, 0, 4, 0, 0f), 1);
         assertEquals(HologramSpec.MAX_WIDTH, big.width(), EPS);

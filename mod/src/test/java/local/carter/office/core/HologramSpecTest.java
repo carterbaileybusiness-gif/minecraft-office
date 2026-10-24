@@ -1,6 +1,7 @@
 package local.carter.office.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.List;
@@ -79,6 +80,27 @@ class HologramSpecTest {
         assertEquals(0.9, wide.height(), 1e-9);
         HologramSpec ultra = sample(Shape.ULTRA_21_9, Mode.EXTEND, Privacy.PUBLIC, null).withWidth(2.56);
         assertEquals(1.08, ultra.height(), 1e-9);
+    }
+
+    @Test
+    void mirrorDisplayRoundTripsAndIsOptional() {
+        HologramSpec plain = sample(Shape.WIDE_16_9, Mode.MIRROR, Privacy.PRIVATE, null);
+        assertNull(plain.mirrorDisplay(), "fresh specs follow the main display");
+        assertFalse(plain.toMap().containsKey("mirrorDisplay"), "no key when null (old saves look the same)");
+        assertEquals(plain, HologramSpec.fromMap(plain.toMap()));
+        HologramSpec lg = plain.withMirrorDisplay("LG-UUID");
+        assertEquals("LG-UUID", lg.toMap().get("mirrorDisplay"));
+        assertEquals(lg, HologramSpec.fromMap(lg.toMap()));
+        assertNull(lg.withMirrorDisplay(null).mirrorDisplay());
+    }
+
+    @Test
+    void copiesKeepMirrorDisplay() {
+        HologramSpec lg = sample(Shape.WIDE_16_9, Mode.MIRROR, Privacy.PRIVATE, null).withMirrorDisplay("LG-UUID");
+        assertEquals("LG-UUID", lg.withWidth(5.0).mirrorDisplay());
+        assertEquals("LG-UUID", lg.withMode(Mode.EXTEND).mirrorDisplay());
+        assertEquals("LG-UUID", lg.withMode(Mode.EXTEND).withMode(Mode.MIRROR).mirrorDisplay());
+        assertEquals("LG-UUID", lg.withPrivacy(Privacy.PUBLIC).mirrorDisplay());
     }
 
     @Test

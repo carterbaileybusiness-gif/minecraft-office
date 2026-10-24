@@ -307,7 +307,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		level.setBlockAndUpdate(pos, OfficeBlocks.HOLOGRAM_EMITTER.defaultBlockState());
 		HologramBlockEntity be = (HologramBlockEntity) level.getBlockEntity(pos);
 		HologramSpec spec = new HologramSpec(owner, old.shape(), old.mode(), old.privacy(), old.displaySlot(), old.windowKey(), old.width(),
-				old.offX(), old.offY(), old.offZ(), old.yaw());
+				old.offX(), old.offY(), old.offZ(), old.yaw(), old.mirrorDisplay());
 		be.setSpec(spec);
 		be.onServerLoad(level);
 		be.setSpec(spec);
