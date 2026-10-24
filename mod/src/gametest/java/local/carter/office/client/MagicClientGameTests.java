@@ -1196,7 +1196,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 	 * An 854 × 480 window with the GUI scale set to 4 (the game caps it at the largest that window allows): the mana bar, the
 	 * wheel, the hand-sign prompt, the grimoire and the element choice all lie inside the screen, and each of their widgets is
 	 * drawn (at least 20 % non-background pixels in its rect). The background is one plain bright face filling the view (the white
-	 * concrete floor seen straight down, its top face fully shaded, with night vision, full brightness and FOV 30), sampled in each
+	 * concrete floor seen straight down, its top face fully lit, with night vision, full brightness and FOV 30), sampled in each
 	 * screenshot away from the widgets, so a dark panel or tile counts as drawn. Exempt from the pixel share (checked inside the
 	 * screen only): the wheel labels and the grimoire footer, whose rects are layout anchors much wider than the short text drawn
 	 * in them.
