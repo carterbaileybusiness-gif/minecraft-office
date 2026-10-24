@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:nether_star",
+    "minecraft:book"
+  ],
+  "result": {
+    "id": "office:rebinding_seal"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "parent": "minecraft:recipes/root",
+  "criteria": {
+    "has_book": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {
+        "items": [
+          {
+            "items": "minecraft:book"
+          }
+        ]
+      }
+    },
+    "has_iron_ingot": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {
+        "items": [
+          {
+            "items": "minecraft:iron_ingot"
+          }
+        ]
+      }
+    },
+    "has_the_recipe": {
+      "trigger": "minecraft:recipe_unlocked",
+      "conditions": {
+        "recipes": "office:grimoire"
+      }
+    }
+  },
+  "requirements": [
+    [
+      "has_the_recipe",
+      "has_book",
+      "has_iron_ingot"
+    ]
+  ],
+  "rewards": {
+    "recipes": [
+      "office:grimoire"
+    ]
+  }
+}

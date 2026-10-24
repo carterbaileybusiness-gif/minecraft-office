@@ -1,0 +1,76 @@
+{
+  "model": {
+    "type": "minecraft:select",
+    "property": "minecraft:custom_model_data",
+    "index": 0,
+    "cases": [
+      {
+        "when": "t0",
+        "model": {
+          "type": "minecraft:model",
+          "model": "office:item/grimoire_t0",
+          "tints": [
+            {
+              "type": "minecraft:custom_model_data",
+              "index": 0,
+              "default": -7644629
+            }
+          ]
+        }
+      },
+      {
+        "when": "t1",
+        "model": {
+          "type": "minecraft:model",
+          "model": "office:item/grimoire_t1",
+          "tints": [
+            {
+              "type": "minecraft:custom_model_data",
+              "index": 0,
+              "default": -7644629
+            }
+          ]
+        }
+      },
+      {
+        "when": "t2",
+        "model": {
+          "type": "minecraft:model",
+          "model": "office:item/grimoire_t2",
+          "tints": [
+            {
+              "type": "minecraft:custom_model_data",
+              "index": 0,
+              "default": -7644629
+            }
+          ]
+        }
+      },
+      {
+        "when": "t3",
+        "model": {
+          "type": "minecraft:model",
+          "model": "office:item/grimoire_t3",
+          "tints": [
+            {
+              "type": "minecraft:custom_model_data",
+              "index": 0,
+              "default": -7644629
+            }
+          ]
+        }
+      }
+    ],
+    "fallback": {
+      "type": "minecraft:model",
+      "model": "office:item/grimoire_t0",
+      "tints": [
+        {
+          "type": "minecraft:custom_model_data",
+          "index": 0,
+          "default": -7644629
+        }
+      ]
+    }
+  }
+}

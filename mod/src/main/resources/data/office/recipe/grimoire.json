@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    "minecraft:book",
+    "minecraft:feather",
+    "minecraft:iron_ingot"
+  ],
+  "result": {
+    "id": "office:grimoire"
+  }
+}
