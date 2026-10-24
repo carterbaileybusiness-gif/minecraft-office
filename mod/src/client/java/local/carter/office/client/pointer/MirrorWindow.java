@@ -1,19 +1,17 @@
 package local.carter.office.client.pointer;
 
 /**
- * Minecraft's own window while the laptop screen is a hologram (spec 5.10, Mac). Pure; {@link PointerClient} feeds it
- * and applies {@link #layer} to the real window every frame ({@link PointerPort#windowLayer}).
+ * Minecraft's own window while the player works on their Mac through the holograms (spec 5.10, Mac). Pure; {@link
+ * PointerClient} feeds it and applies {@link #layer} to the real window every frame ({@link PointerPort#windowLayer}).
  *
  * <ul>
- * <li><b>Floating</b> (above normal windows) while in a world and Minecraft is in front or the player is using a
- * hologram: the apps the Mirror shows, which the helper brings forward under Minecraft, never cover the game. When the
- * player switches to another app themselves (not interacting), it drops back so that app shows normally.</li>
- * <li><b>Click-through</b> only while the player uses the Mirror: from the moment a click or drag on it reaches the helper
- * until it is over (the drag's release; typing mode until Esc / Minecraft is back), and for {@link #SCROLL_MS} after each
- * scroll on it. Then the events the helper posts at the main display reach the app under Minecraft.</li>
- * <li>Never either outside a world: leaving, a disconnect, the helper dying (which ends its drag and typing) or a crash
- * of the session all end in {@link Layer#NORMAL}. A session whose drag and typing are both over is ended on the next
- * {@link #layer} call even if no end event came.</li>
+ * <li><b>Work mode</b> (from the click on a hologram until Esc / ⌘-Tab back): floating above normal windows, so the apps
+ * the player uses (their windows on the main display come forward) never cover the game, and click-through, so the
+ * real cursor's clicks on the main display reach the app under Minecraft.</li>
+ * <li>A <b>scroll</b> on the Mirror outside work mode: the same for {@link #SCROLL_MS}, so the helper's scroll event at the
+ * main display reaches the app under Minecraft.</li>
+ * <li>Otherwise <b>normal</b>: an ordinary window that takes its own clicks. Never anything else outside a world: leaving,
+ * a disconnect, the helper dying or the game closing all end in {@link Layer#NORMAL}.</li>
  * </ul>
  */
 public final class MirrorWindow {
@@ -22,10 +20,11 @@ public final class MirrorWindow {
 
 	public record Layer(boolean floating, boolean clickThrough) {
 		public static final Layer NORMAL = new Layer(false, false);
+		public static final Layer WORKING = new Layer(true, true);
 	}
 
 	private boolean inWorld;
-	private boolean session;
+	private boolean working;
 	private long scrollUntil = Long.MIN_VALUE;
 
 	/** A world was joined (the player can use holograms). */
@@ -33,18 +32,23 @@ public final class MirrorWindow {
 		inWorld = true;
 	}
 
-	/** Left the world, disconnected, the pointer port went away: nothing stays floating or click-through. */
+	/** Left the world, disconnected, the pointer port went away: back to normal. */
 	public void leaveWorld() {
 		inWorld = false;
-		session = false;
+		working = false;
 		scrollUntil = Long.MIN_VALUE;
 	}
 
-	/** A click or the start of a drag on the Mirror is about to go to the helper. */
-	public void mirrorPressed() {
+	/** Work mode began (before the helper gets WORK_BEGIN). */
+	public void workBegan() {
 		if (inWorld) {
-			session = true;
+			working = true;
 		}
+	}
+
+	/** Work mode ended (any way). */
+	public void workEnded() {
+		working = false;
 	}
 
 	/** A scroll on the Mirror is about to go to the helper. */
@@ -54,27 +58,12 @@ public final class MirrorWindow {
 		}
 	}
 
-	/** The drag ended / typing mode ended (any reason). */
-	public void interactionEnded() {
-		session = false;
-	}
-
 	public boolean clickThrough(final long now) {
-		return inWorld && (session || now < scrollUntil);
+		return inWorld && (working || now < scrollUntil);
 	}
 
-	/**
-	 * The window's layer now. {@code focused}: Minecraft is the active app; {@code interacting}: a press, drag or typing
-	 * session (on any hologram) is going on.
-	 */
-	public Layer layer(final long now, final boolean focused, final boolean interacting) {
-		if (!inWorld) {
-			return Layer.NORMAL;
-		}
-		if (!interacting) {
-			session = false; // nothing of the Mirror's is going on any more
-		}
-		boolean through = clickThrough(now);
-		return new Layer(focused || interacting || through, through);
+	/** The window's layer now. */
+	public Layer layer(final long now) {
+		return clickThrough(now) ? Layer.WORKING : Layer.NORMAL;
 	}
 }

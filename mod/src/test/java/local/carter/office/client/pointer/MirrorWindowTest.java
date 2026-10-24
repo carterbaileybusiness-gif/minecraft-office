@@ -8,82 +8,53 @@ import org.junit.jupiter.api.Test;
 
 import local.carter.office.client.pointer.MirrorWindow.Layer;
 
-/** Minecraft's window: floating while in a world, click-through only while the Mirror is used — and every way out. */
+/** Minecraft's window: floating + click-through exactly while working (or a Mirror scroll's moment) — and every way out. */
 class MirrorWindowTest {
-	private static final Layer FLOAT = new Layer(true, false);
-	private static final Layer THROUGH = new Layer(true, true);
-
 	@Test
-	void outsideAWorldNothingEvenWhilePressed() {
+	void outsideAWorldAlwaysNormalEvenIfAskedToWork() {
 		MirrorWindow w = new MirrorWindow();
-		w.mirrorPressed();
+		w.workBegan();
 		w.mirrorScrolled(0);
-		assertEquals(Layer.NORMAL, w.layer(10, true, true));
+		assertEquals(Layer.NORMAL, w.layer(10));
 		assertFalse(w.clickThrough(10));
 	}
 
 	@Test
-	void inAWorldFloatingWhileInFrontOrInUseNotWhenThePlayerWentElsewhere() {
+	void inAWorldNormalUntilWorkModeThenFloatingAndClickThroughUntilItEnds() {
 		MirrorWindow w = new MirrorWindow();
 		w.enterWorld();
-		assertEquals(FLOAT, w.layer(0, true, false), "playing: above the apps the Mirror shows");
-		assertEquals(Layer.NORMAL, w.layer(0, false, false), "the player switched to another app themselves: it shows normally");
-		assertEquals(FLOAT, w.layer(0, false, true), "an Extend drag or typing took the focus: still on top");
+		assertEquals(Layer.NORMAL, w.layer(0), "playing: an ordinary window (Cmd-Tab shows other apps normally)");
+		w.workBegan(); // the click on a hologram
+		assertEquals(Layer.WORKING, w.layer(1));
+		assertEquals(new Layer(true, true), w.layer(60_000), "however long the player works");
+		w.workEnded(); // Esc / ⌘-Tab back to Minecraft / helper gone / timeout
+		assertEquals(Layer.NORMAL, w.layer(60_001), "Esc: back to normal");
 	}
 
 	@Test
-	void aMirrorClickIsClickThroughUntilTypingEndsWithEsc() {
+	void leavingTheWorldWhileWorkingEndsIt() {
 		MirrorWindow w = new MirrorWindow();
 		w.enterWorld();
-		w.mirrorPressed(); // CLICK about to go out
-		assertEquals(THROUGH, w.layer(0, true, true));
-		assertEquals(THROUGH, w.layer(500, false, true), "typing in the app under Minecraft: still click-through");
-		w.interactionEnded(); // TYPING_EXIT esc
-		assertEquals(FLOAT, w.layer(600, true, false));
-	}
-
-	@Test
-	void aMirrorDragIsClickThroughUntilItsRelease() {
-		MirrorWindow w = new MirrorWindow();
+		w.workBegan();
+		w.leaveWorld();
+		assertEquals(Layer.NORMAL, w.layer(1));
+		w.workBegan();
+		assertEquals(Layer.NORMAL, w.layer(2), "no work mode outside a world");
 		w.enterWorld();
-		w.mirrorPressed(); // POINTER_DOWN about to go out
-		assertEquals(THROUGH, w.layer(0, false, true));
-		w.interactionEnded(); // DRAG_ENDED released
-		assertEquals(FLOAT, w.layer(10, true, false));
+		assertEquals(Layer.NORMAL, w.layer(3), "rejoining starts clean");
 	}
 
 	@Test
-	void everyOtherWayOutEndsClickThrough() {
-		// typing timed out / the hint replaced / focus came back / helper died: the client sees no interaction any more
-		MirrorWindow a = new MirrorWindow();
-		a.enterWorld();
-		a.mirrorPressed();
-		assertEquals(new Layer(true, false), a.layer(5, true, false), "nothing going on: never left click-through");
-		assertFalse(a.clickThrough(6), "and it stays off");
-		// leaving the world (or a disconnect, or the port going away) in the middle of a drag
-		MirrorWindow b = new MirrorWindow();
-		b.enterWorld();
-		b.mirrorPressed();
-		b.leaveWorld();
-		assertEquals(Layer.NORMAL, b.layer(1, true, true));
-		b.mirrorPressed();
-		assertEquals(Layer.NORMAL, b.layer(2, true, true), "no session starts outside a world");
-		// rejoining starts clean
-		b.enterWorld();
-		assertEquals(FLOAT, b.layer(3, true, false));
-	}
-
-	@Test
-	void aScrollIsAMomentOfClickThrough() {
+	void aMirrorScrollIsAMomentOfClickThrough() {
 		MirrorWindow w = new MirrorWindow();
 		w.enterWorld();
 		w.mirrorScrolled(1_000);
 		assertTrue(w.clickThrough(1_000));
-		assertEquals(THROUGH, w.layer(1_000 + MirrorWindow.SCROLL_MS - 1, true, false), "no press needed for a scroll");
-		assertEquals(FLOAT, w.layer(1_000 + MirrorWindow.SCROLL_MS, true, false), "over after SCROLL_MS");
+		assertEquals(Layer.WORKING, w.layer(1_000 + MirrorWindow.SCROLL_MS - 1));
+		assertEquals(Layer.NORMAL, w.layer(1_000 + MirrorWindow.SCROLL_MS), "over after SCROLL_MS");
 		w.mirrorScrolled(2_000);
-		w.mirrorScrolled(2_300); // the wheel keeps going: extended
-		assertTrue(w.clickThrough(2_600));
+		w.mirrorScrolled(2_300);
+		assertTrue(w.clickThrough(2_600), "the wheel keeps going: extended");
 		w.leaveWorld();
 		assertFalse(w.clickThrough(2_301));
 	}

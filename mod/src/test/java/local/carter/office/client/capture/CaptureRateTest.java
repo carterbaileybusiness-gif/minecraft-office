@@ -11,11 +11,22 @@ import local.carter.office.core.Vec3d;
 
 class CaptureRateTest {
 	@Test
-	void fiveWhileVisibleZeroWhenNotThirtyWhileZoomed() {
-		assertEquals(5, CaptureRate.fps(true, false));
+	void thirtyWhileVisibleZeroWhenNotSixtyWhileWorking() {
+		// own screens must feel immediate (spec 5.10 round 2): 5 fps measured 143 ms median, 30 fps 38 ms, 60 fps 30 ms
+		assertEquals(30, CaptureRate.fps(true, false));
 		assertEquals(0, CaptureRate.fps(false, false));
-		assertEquals(30, CaptureRate.fps(true, true));
-		assertEquals(30, CaptureRate.fps(false, true), "zoomed wins (the camera is inside the panel's frustum edge)");
+		assertEquals(60, CaptureRate.fps(true, true));
+		assertEquals(60, CaptureRate.fps(false, true), "working / zoomed wins (the camera is inside the panel's frustum edge)");
+	}
+
+	@Test
+	void sixtyOnlyForTheVisibleScreenTheCursorIsOn() {
+		assertEquals(60, CaptureRate.fps(true, false, true), "the screen the real cursor is on");
+		assertEquals(30, CaptureRate.fps(true, false, false), "the other visible screens");
+		assertEquals(60, CaptureRate.fps(false, false, true),
+				"the cursor's screen even while not (yet) visible: the view follows the cursor there, no stale second");
+		assertEquals(0, CaptureRate.fps(false, false, false), "not visible, no cursor: nothing");
+		assertEquals(60, CaptureRate.fps(false, true, false), "zoomed in (Windows)");
 	}
 
 	@Test

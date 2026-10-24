@@ -139,11 +139,15 @@ struct TypingMachine {
     private(set) var swallowingEscape = false
     /// The app being typed into (the one the click brought forward; nil = the first app activated after the click).
     private(set) var target: pid_t?
+    /// Work mode (spec 5.10 round 2): the player uses the Mac with the real mouse, so other apps coming forward is
+    /// normal; only Esc and Minecraft coming back end it.
+    private(set) var work = false
 
-    mutating func enter(target: pid_t? = nil) -> [Effect] {
+    mutating func enter(target: pid_t? = nil, work: Bool = false) -> [Effect] {
         guard !active else { return [] }
         active = true
         self.target = target
+        self.work = work
         return swallowingEscape ? [] : [.armTap]
     }
 
@@ -154,6 +158,7 @@ struct TypingMachine {
     mutating func appActivated(pid: pid_t, isMinecraft: Bool) -> [Effect] {
         guard active else { return [] }
         if isMinecraft { return minecraftActivated() }
+        if work { return [] } // working on the Mac: clicking into another app is just using it
         guard let target else { self.target = pid; return [] }
         if pid == target { return [] }
         active = false
@@ -228,4 +233,133 @@ struct SecureInputWatch: Equatable {
 
     /// Typing ended: the next session starts from "off" (the mod forgets it when typing ends).
     mutating func reset() { reported = false }
+}
+
+/// Work mode: where the real cursor is, for the hologram that shows that display (pure). Slot 0 = the main display (the
+/// Mirror), in its points; slots 1-4 = virtual displays, in their pixels (what the hologram's picture is made of), so the
+/// drawn cursor lands on the pixel the click goes to. Off all of them (another physical display): slot -1.
+enum CursorLocator {
+    static func locate(_ p: CGPoint, main: CGRect, displays: [(slot: Int, bounds: CGRect, width: Int, height: Int)]) -> CursorPayload {
+        if main.contains(p) {
+            return CursorPayload(slot: PointerTarget.mainSlot, x: Int((p.x - main.minX).rounded(.down)), y: Int((p.y - main.minY).rounded(.down)),
+                                 w: Int(main.width), h: Int(main.height))
+        }
+        for d in displays where d.bounds.contains(p) {
+            let x = Int(((p.x - d.bounds.minX) * Double(d.width) / d.bounds.width).rounded(.down))
+            let y = Int(((p.y - d.bounds.minY) * Double(d.height) / d.bounds.height).rounded(.down))
+            return CursorPayload(slot: d.slot, x: min(x, d.width - 1), y: min(y, d.height - 1), w: d.width, h: d.height)
+        }
+        return CursorPayload(slot: -1, x: 0, y: 0, w: 0, h: 0)
+    }
+}
+
+/// Where the other monitors were just before Office displays were created (pure). macOS shoves a monitor aside to fit a
+/// new display in; the arranges that follow put it back where it was. The mod sends every CREATE_DISPLAY at once on each
+/// (re)connect, so the record stays until the arrange of the last create still pending has run — each new display may
+/// shove the monitor again — and is used by no later arrange. So a monitor the user moves while Office displays are up
+/// stays where they put it. The record carries its time: older than `pendingLimit` it is ignored (a create whose arrange
+/// never came). Any create that ends without its arrange (failed, timed out, nothing to create) clears it unless another
+/// create is still pending.
+struct MonitorHomes {
+    private(set) var homes: [UInt32: CGPoint] = [:]
+    private(set) var recordedAt: Double?
+    /// Slots created whose arrange is still to come.
+    private(set) var pending: Set<Int> = []
+    static let pendingLimit = 5.0
+
+    private func fresh(at t: Double) -> Bool { recordedAt.map { t - $0 < Self.pendingLimit } ?? false }
+
+    private mutating func clear() {
+        homes = [:]
+        recordedAt = nil
+        pending = []
+    }
+
+    /// Just before creating display `slot` at time `t` (seconds): the monitors' positions now. Overwrites the record,
+    /// unless an earlier create is still pending (and its record fresh): then the monitor may be shoved already, and the
+    /// earlier record stands.
+    mutating func beforeCreate(slot: Int, _ now: [UInt32: CGPoint], at t: Double) {
+        if pending.isEmpty || !fresh(at: t) {
+            homes = now
+            recordedAt = t
+            pending = []
+        }
+        pending.insert(slot)
+    }
+
+    /// A create of `slot` ended without its arrange: it failed, its display never came online, it was removed meanwhile,
+    /// or there was nothing to create (identical spec). Cleared unless another create is still pending.
+    mutating func createEnded(slot: Int) {
+        pending.remove(slot)
+        if pending.isEmpty { clear() }
+    }
+
+    /// For arrange at time `t` (after the create of `slot`, or nil after a remove): each monitor's rect to arrange around
+    /// (where it was before the creates, else where it is) and the monitors to put back. A stale record is ignored. The
+    /// record goes once no create is pending.
+    mutating func forArrange(_ now: [UInt32: CGRect], at t: Double, after slot: Int?) -> (rects: [CGRect], restores: [(id: UInt32, to: CGPoint)]) {
+        let use = fresh(at: t) ? homes : [:]
+        var rects: [CGRect] = []
+        var restores: [(id: UInt32, to: CGPoint)] = []
+        for id in now.keys.sorted() {
+            let r = now[id]!
+            if let home = use[id], home != r.origin {
+                rects.append(CGRect(origin: home, size: r.size))
+                restores.append((id, home))
+            } else {
+                rects.append(r)
+            }
+        }
+        if let slot { pending.remove(slot) }
+        if pending.isEmpty || !fresh(at: t) { clear() }
+        return (rects, restores)
+    }
+
+    /// A CREATE_DISPLAY for a display that already exists as asked (nothing created, no shove): the record goes unless
+    /// another create is pending (a pending create of this same slot keeps its own record too).
+    mutating func nothingCreated() {
+        if pending.isEmpty { clear() }
+    }
+
+    /// No Office display left (removed, ended by the window server): nothing is to be put back — unless a create is
+    /// still pending (its arrange still needs the record).
+    mutating func noneLeft() {
+        if pending.isEmpty { clear() }
+    }
+
+    /// After a remove: macOS re-applies the layout it remembers for the remaining set of displays, which can carry a
+    /// monitor back to where it was long ago. The monitors (still online) that moved since `before` — the positions
+    /// just before the remove — and where they go back to.
+    static func movedSince(_ before: [UInt32: CGPoint], now: [UInt32: CGPoint]) -> [(id: UInt32, to: CGPoint)] {
+        before.keys.sorted().compactMap { id in
+            guard let was = before[id], let is_ = now[id], is_ != was else { return nil }
+            return (id, was)
+        }
+    }
+}
+
+/// Where the Office displays sit in the display arrangement (pure): in slot order in a row along the main display's top
+/// edge, starting at its right edge — so moving the cursor off the Mirror's right edge carries it onto display 1, like a
+/// laptop and its monitors. If another display (a real monitor) already touches the main display's right edge, the row
+/// goes to its left instead: next to the main display's left edge, or, when a monitor sits there too, past the
+/// leftmost display in that band (so nothing overlaps).
+enum DisplayArrangement {
+    static func origins(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)]) -> [Int: CGPoint] {
+        let sorted = ours.sorted { $0.slot < $1.slot }
+        let totalWidth = sorted.reduce(0) { $0 + $1.size.width }
+        let height = sorted.map(\.size.height).max() ?? 0
+        let rightBand = CGRect(x: main.maxX, y: main.minY, width: max(totalWidth, 1), height: max(height, 1))
+        let rightFree = !others.contains { $0.intersects(rightBand) || ($0.minX == main.maxX && $0.maxY > main.minY && $0.minY < main.maxY) }
+        var out: [Int: CGPoint] = [:]
+        if rightFree {
+            var x = main.maxX
+            for d in sorted { out[d.slot] = CGPoint(x: x, y: main.minY); x += d.size.width }
+        } else {
+            let leftBand = CGRect(x: main.minX - max(totalWidth, 1), y: main.minY, width: max(totalWidth, 1), height: max(height, 1))
+            let inTheWay = others.filter { $0.intersects(leftBand) || ($0.maxX == main.minX && $0.maxY > main.minY && $0.minY < main.maxY) }
+            var x = min(main.minX, inTheWay.map(\.minX).min() ?? main.minX)
+            for d in sorted { x -= d.size.width; out[d.slot] = CGPoint(x: x, y: main.minY) }
+        }
+        return out
+    }
 }

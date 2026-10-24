@@ -150,6 +150,35 @@ extended screens, just like hooking up a laptop to monitors."
 - Minecraft defaults to a borderless window filling the screen (not macOS's separate full-screen Space, where the other
   windows aren't on the mirrored display).
 
+**Work mode — replaces "the crosshair is the mouse" while working (round 2, after Carter's play-test, ~22:30).**
+Carter: "when I clicked into the screen and moved my mouse, my entire minecraft screen would turn away, and the mouse in
+the screen wouldn't match with my cursor… it just didn't parity well at all." Ruling:
+1. A click on your own hologram enters **work mode** until **Esc** (the helper's tap swallows Esc as before; ⌘-Tab back
+   to Minecraft works too). The camera is frozen — the view never turns while working — and movement keys go to the app.
+2. The mouse drives the **real Mac cursor 1:1** (macOS acceleration, like a real mouse). The hologram shows exactly where
+   that cursor is (drawn from the helper's reported position, on the pixel a click goes to); the system cursor is hidden,
+   so no second cursor strays over Minecraft's view.
+3. Moving the cursor off the Mirror's edge carries it onto the adjacent Extend display (the helper places the Office
+   displays next to the main display in the arrangement), so dragging a window from the Mirror to an Extend screen is a
+   normal drag. Press / hold / release are the real button's: no synthetic drag machine that can drop or stick.
+4. Own screens must feel immediate: ≥30 fps and ≲100 ms (measured through the helper, laptop-round2-probe.log: 5 fps →
+   143 ms median; now 30 fps for visible own screens → 32 ms, 60 fps for the one the cursor is on → 33 ms). Dynamic FPS
+   (in the pack) must not throttle the unfocused game while working (the mod tells it the game is "focused" then; without
+   that it renders 1 fps and a change takes ~2 s to show — the lag Carter saw), nor may vanilla's AFK frame limit. In
+   game (laptop-fixround-probe.log, Mirror in work mode, Minecraft inactive): 60 fps, picture arrival → on screen 27 ms
+   median (p90 36), so change → seen ≈ 35 + 27 ≈ 60 ms. The frame path reuses its pixel arrays (no garbage per frame).
+6. **The view follows the cursor** (Carter, after playing round 2): while working, the camera turns each frame so the
+   crosshair sits on the cursor's point on whichever own hologram it is on (also across Mirror → Extend), lightly smoothed
+   (settles within ~100 ms). The real cursor still maps 1:1 and clicks land where it's drawn; on a real monitor (not one
+   of the player's screens) the view holds still; the body doesn't move.
+7. **Extend holograms go where their displays are**: the helper places the Office displays right of the laptop screen,
+   or left when a real monitor is there; a newly placed Extend hologram is moved beside the Mirror on that same side, and
+   chat says which edge of the Mirror leads to it.
+5. Esc leaves work mode: Minecraft focused, mouse grabbed, camera turns again, its window normal.
+- Also: a Mirror starts **Private** (owner only; Extend / Window keep Public), and switching a screen to Mirror makes it
+  Private (it can be made Public afterwards). The Dock shows the apps' own icons.
+- Windows keeps its current behaviour (zoom).
+
 ## 6. How the screens work (architecture)
 
 Three parts **(my call; based on research)**:

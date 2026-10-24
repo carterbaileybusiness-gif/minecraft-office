@@ -193,6 +193,111 @@ enum PointerTests {
             expectEqual(e.appActivated(pid: 3, isMinecraft: false), [.sendExit("elsewhere")], "Esc still held: its tap stays for the release")
         }
 
+        run("work mode: only Esc or Minecraft end it; other apps coming forward is just using the Mac") {
+            var t = TypingMachine()
+            expectEqual(t.enter(target: 42, work: true), [.armTap])
+            expect(t.work, "work mode")
+            expectEqual(t.appActivated(pid: 77, isMinecraft: false), [], "clicking into Safari while working")
+            expectEqual(t.appActivated(pid: 78, isMinecraft: false), [], "and Finder")
+            expect(t.active, "still working")
+            let esc = t.key(code: TypingMachine.escape, down: true, modifiers: [])
+            expect(esc.swallow && esc.effects == [.activateMinecraft, .sendExit("esc")], "Esc ends it (and is swallowed): \(esc)")
+            var m = TypingMachine()
+            _ = m.enter(target: 42, work: true)
+            expectEqual(m.appActivated(pid: 9, isMinecraft: true), [.disarmTap, .sendExit("minecraft")], "⌘-Tab back to Minecraft")
+            var typing = TypingMachine()
+            _ = typing.enter(target: 42)
+            expectEqual(typing.appActivated(pid: 77, isMinecraft: false), [.disarmTap, .sendExit("elsewhere")], "plain typing keeps round 1's rule")
+        }
+
+        run("work mode cursor: where the real cursor is, on the grid the hologram's picture is made of") {
+            let main = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            let ours = [(slot: 1, bounds: CGRect(x: 1440, y: 0, width: 1920, height: 1080), width: 1920, height: 1080),
+                        (slot: 2, bounds: CGRect(x: 3360, y: 0, width: 960, height: 540), width: 1920, height: 1080)]
+            expectEqual(CursorLocator.locate(CGPoint(x: 720.6, y: 450.2), main: main, displays: ours),
+                        CursorPayload(slot: 0, x: 720, y: 450, w: 1440, h: 900), "on the Mirror: main display points")
+            expectEqual(CursorLocator.locate(CGPoint(x: 1440, y: 0), main: main, displays: ours),
+                        CursorPayload(slot: 1, x: 0, y: 0, w: 1920, h: 1080), "off the Mirror's right edge: display 1's first pixel")
+            expectEqual(CursorLocator.locate(CGPoint(x: 3360 + 480.5, y: 270.5), main: main, displays: ours),
+                        CursorPayload(slot: 2, x: 961, y: 541, w: 1920, h: 1080), "a HiDPI display: its pixels, not points")
+            expectEqual(CursorLocator.locate(CGPoint(x: -50, y: 10), main: main, displays: ours).slot, -1, "another monitor")
+        }
+
+        run("arrangement: Office displays in a row right of the main display, or left when a monitor is there") {
+            let main = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            let ours = [(slot: 2, size: CGSize(width: 1920, height: 1080)), (slot: 1, size: CGSize(width: 1920, height: 1080))]
+            expectEqual(DisplayArrangement.origins(main: main, others: [], ours: ours),
+                        [1: CGPoint(x: 1440, y: 0), 2: CGPoint(x: 3360, y: 0)], "slot order from the right edge")
+            let monitor = CGRect(x: 1440, y: -180, width: 1920, height: 1080)
+            expectEqual(DisplayArrangement.origins(main: main, others: [monitor], ours: ours),
+                        [1: CGPoint(x: -1920, y: 0), 2: CGPoint(x: -3840, y: 0)], "a real monitor on the right: to the left")
+            let leftToo = CGRect(x: -1280, y: 0, width: 1280, height: 800)
+            expectEqual(DisplayArrangement.origins(main: main, others: [monitor, leftToo], ours: ours),
+                        [1: CGPoint(x: -3200, y: 0), 2: CGPoint(x: -5120, y: 0)], "monitors on both sides: past the left one")
+            expectThrows("RATE outside 1...60") { _ = try Message.decode(type: .rate, payload: Data(#"{"fps":0,"surface":1}"#.utf8)) }
+            let above = CGRect(x: 0, y: -1080, width: 1920, height: 1080)
+            expectEqual(DisplayArrangement.origins(main: main, others: [above], ours: ours)[1], CGPoint(x: 1440, y: 0),
+                        "a monitor above doesn't block the right side")
+        }
+
+        run("monitor homes: a shoved monitor goes back after each pending create; one the user moved stays; stale or ended records go") {
+            let size = CGSize(width: 1920, height: 1080)
+            func at(_ x: Double, _ y: Double) -> CGRect { CGRect(origin: CGPoint(x: x, y: y), size: size) }
+            var h = MonitorHomes()
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 0)
+            let shoved = h.forArrange([7: at(3360, 0)], at: 0.5, after: 1)
+            expectEqual(shoved.rects, [at(1440, 0)], "arranged around where it was")
+            expectEqual(shoved.restores.map(\.id), [7], "and put back")
+            expectEqual(shoved.restores.first?.to, CGPoint(x: 1440, y: 0))
+            // the user moves it while the displays are up; a remove's arrange keeps it there
+            let afterRemove = h.forArrange([7: at(0, 900)], at: 50, after: nil)
+            expectEqual(afterRemove.restores.count, 0, "nothing put back after a remove")
+            expectEqual(afterRemove.rects, [at(0, 900)])
+
+            // back-to-back creates (the mod sends them all at once): the record lasts until the last pending arrange
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 100)
+            h.beforeCreate(slot: 2, [7: CGPoint(x: 3360, y: 0)], at: 100.1) // display 1 already shoved it
+            h.beforeCreate(slot: 3, [7: CGPoint(x: 5280, y: 0)], at: 100.2)
+            expectEqual(h.homes, [7: CGPoint(x: 1440, y: 0)], "the first record stands while creates are pending")
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 100.4, after: 1).restores.first?.to, CGPoint(x: 1440, y: 0))
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 100.6, after: 2).restores.first?.to, CGPoint(x: 1440, y: 0),
+                        "display 2 shoved it again: back again (the record wasn't used up by display 1's arrange)")
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 100.8, after: 3).restores.first?.to, CGPoint(x: 1440, y: 0))
+            expectEqual(h.homes.count, 0, "gone after the last pending arrange")
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 101, after: nil).restores.count, 0)
+
+            // stale: a record older than pendingLimit is ignored by arrange (and a create then records afresh)
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 200)
+            expectEqual(h.forArrange([7: at(0, 900)], at: 200 + MonitorHomes.pendingLimit + 1, after: 1).restores.count, 0,
+                        "a stale record puts nothing back")
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 300)
+            h.beforeCreate(slot: 2, [7: CGPoint(x: 0, y: 900)], at: 300 + MonitorHomes.pendingLimit + 1)
+            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "a create whose arrange never came goes stale: recorded afresh")
+
+            // creates that end without their arrange (failed, timed out, identical, removed meanwhile)
+            h.createEnded(slot: 1)
+            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "kept while display 2's create is pending")
+            h.createEnded(slot: 2)
+            expectEqual(h.homes.count, 0, "cleared when none is pending")
+            h.beforeCreate(slot: 4, [7: CGPoint(x: 1, y: 1)], at: 400)
+            h.nothingCreated()
+            expectEqual(h.homes.count, 1, "an identical CREATE_DISPLAY while a create is pending: kept")
+            h.noneLeft()
+            expectEqual(h.homes.count, 1, "no display left, but a create is pending: kept for its arrange")
+            h.createEnded(slot: 4)
+            h.noneLeft()
+            expectEqual(h.homes.count, 0)
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 2, y: 2)], at: 500)
+            _ = h.forArrange([7: at(2, 2)], at: 500.5, after: 1)
+            h.nothingCreated()
+            expectEqual(h.homes.count, 0, "an identical CREATE_DISPLAY with nothing pending: nothing kept")
+            // after a remove: only a monitor that moved since just before it goes back, to that place; gone ones are left
+            let back = MonitorHomes.movedSince([7: CGPoint(x: 0, y: 900), 8: CGPoint(x: -1280, y: 0), 9: CGPoint(x: 9, y: 9)],
+                                               now: [7: CGPoint(x: 1440, y: 0), 8: CGPoint(x: -1280, y: 0)])
+            expectEqual(back.map(\.id), [7], "the moved one only (8 stayed, 9 is unplugged)")
+            expectEqual(back.first?.to, CGPoint(x: 0, y: 900), "back where the user had it")
+        }
+
         run("secure input: each change is reported once, a new typing session starts from off") {
             var w = SecureInputWatch()
             expectEqual(w.sample(false), nil as Bool?, "off at the start: nothing to say")

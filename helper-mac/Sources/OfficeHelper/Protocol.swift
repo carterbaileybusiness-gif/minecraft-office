@@ -59,12 +59,18 @@ enum MessageType: UInt8, CaseIterable {
     // 17, 18 (the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK: windows never move by themselves any more, spec 5.10)
     /// The mini Dock (spec 5.10): the installed apps, their icons, and opening one onto a hologram's display.
     case listApps = 19, appIcons = 20, openApp = 21
+    /// Work mode (spec 5.10, round 2): the real cursor goes to this point, the real mouse drives it until Esc.
+    case workBegin = 22
+    /// A live capture's frame rate changes (no stream rebuild): own screens at 60 fps only where the cursor is.
+    case rate = 23
     // Helper → mod
     case welcome = 64, windows = 65, display = 66, frame = 67, patch = 68, ended = 69, exitZoom = 70, error = 71
     case typingExit = 72, dragDelta = 73, dragEnded = 74
     case apps = 75, icons = 76, appResult = 77
     /// While typing: secure input (a password field) went on / off — Esc can't be seen then; ⌘-Tab still returns.
     case secureInput = 78
+    /// Work mode: where the real cursor is (for the hologram to draw it), about 120 times a second while it moves.
+    case cursor = 79
 }
 
 enum ProtocolError: Error, Equatable {
@@ -156,6 +162,9 @@ struct OpenAppPayload: Codable, Equatable {
     var bottom: Int? = nil
 }
 struct SecureInputPayload: Codable, Equatable { var on: Bool }
+/// The real cursor while working: on display `slot` (0 = the main display, 1-4 = virtual displays; -1 = none of them)
+/// at (x, y) of a `w` × `h` grid: the display's pixels for slots 1-4, the main display's points for slot 0.
+struct CursorPayload: Codable, Equatable { var slot: Int; var x: Int; var y: Int; var w: Int; var h: Int }
 /// How an OPEN_APP went. `target` = its bundle id or url.
 struct AppResultPayload: Codable, Equatable { var target: String; var ok: Bool; var message: String }
 struct ReasonPayload: Codable, Equatable { var reason: String }
@@ -164,7 +173,14 @@ struct DeltaPayload: Codable, Equatable { var dx: Int; var dy: Int }
 
 struct WelcomePayload: Codable, Equatable { var version: Int; var screenRecording: Bool; var accessibility: Bool }
 struct WindowInfo: Codable, Equatable { var windowKey: String; var app: String; var title: String; var w: Int; var h: Int }
-struct DisplayPayload: Codable, Equatable { var slot: Int; var displayId: UInt32; var w: Int; var h: Int }
+/// `x`, `y`: the display's origin in the arrangement (global points); `side`: "left" or "right" of the main display —
+/// which edge of the laptop screen the cursor crosses to get there (the mod places Extend holograms to match).
+struct DisplayPayload: Codable, Equatable {
+    var slot: Int; var displayId: UInt32; var w: Int; var h: Int
+    var x: Int? = nil; var y: Int? = nil; var side: String? = nil
+}
+/// A live capture's new frame rate (1...60).
+struct RatePayload: Codable, Equatable { var surface: Int; var fps: Int }
 struct EndedPayload: Codable, Equatable { var surface: Int; var reason: String }
 struct ErrorPayload: Codable, Equatable { var code: String; var message: String }
 
@@ -235,6 +251,9 @@ enum Message: Equatable {
     case icons(IconsPayload)
     case appResult(AppResultPayload)
     case secureInput(SecureInputPayload)
+    case workBegin(PointerPayload)
+    case cursor(CursorPayload)
+    case rate(RatePayload)
 
     var type: MessageType {
         switch self {
@@ -272,6 +291,9 @@ enum Message: Equatable {
         case .icons: return .icons
         case .appResult: return .appResult
         case .secureInput: return .secureInput
+        case .workBegin: return .workBegin
+        case .cursor: return .cursor
+        case .rate: return .rate
         }
     }
 
@@ -290,7 +312,9 @@ enum Message: Equatable {
         switch self {
         case .hello(let p): return try Self.json(p)
         case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .listApps: return try Self.json(Empty())
-        case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p): return try Self.json(p)
+        case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p), .workBegin(let p): return try Self.json(p)
+        case .cursor(let p): return try Self.json(p)
+        case .rate(let p): return try Self.json(p)
         case .scroll(let p): return try Self.json(p)
         case .appIcons(let p): return try Self.json(p)
         case .openApp(let p): return try Self.json(p)
@@ -385,15 +409,21 @@ enum Message: Equatable {
         case .zoomIn: return .zoomIn(try decodeJSON(ZoomInPayload.self, payload))
         case .zoomOut: return .zoomOut
         case .requestPermissions: return .requestPermissions
-        case .pointerDown, .pointerUp, .click:
+        case .pointerDown, .pointerUp, .click, .workBegin:
             let p = try decodeJSON(PointerPayload.self, payload)
             guard p.button != nil else { throw ProtocolError.badPayload("\(type) needs button") }
             try checkMainPicture(slot: p.slot, w: p.w, h: p.h)
             switch type {
             case .pointerDown: return .pointerDown(p)
             case .pointerUp: return .pointerUp(p)
+            case .workBegin: return .workBegin(p)
             default: return .click(p)
             }
+        case .cursor: return .cursor(try decodeJSON(CursorPayload.self, payload))
+        case .rate:
+            let p = try decodeJSON(RatePayload.self, payload)
+            guard (1...60).contains(p.fps) else { throw ProtocolError.badPayload("RATE fps must be 1...60") }
+            return .rate(p)
         case .pointerMove:
             let p = try decodeJSON(PointerPayload.self, payload)
             try checkMainPicture(slot: p.slot, w: p.w, h: p.h)

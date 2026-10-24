@@ -17,30 +17,25 @@ public interface PointerPort {
 	/** Why the pointer can't work right now (a short sentence for the action bar), or null when it can. */
 	@Nullable String problem();
 
-	/** Start a drag the helper drives at the press point. */
-	default void pointerDown(final PointerPoint p) {}
+	/**
+	 * Work mode at {@code p} (spec 5.10 round 2): the helper puts the real cursor there, presses {@code button} there
+	 * (just the press when the real button is still held, so the hand finishes it) and leaves the real mouse to the Mac
+	 * until Esc (TYPING_EXIT).
+	 */
+	default void workBegin(final PointerPoint p, final PointerButton button) {}
 
-	default void pointerMove(final PointerPoint p) {}
-
-	/** Cancel a drag from the mod's side. */
-	default void pointerUp(final PointerPoint p) {}
-
-	/** A real click there; the app gets the keyboard (typing mode). */
-	default void click(final PointerPoint p, final PointerButton button) {}
+	/** Where the real cursor is while working: {slot, x, y, w, h} ({@link WorkCursor}), or null. */
+	default int @Nullable [] workCursor() {
+		return null;
+	}
 
 	/** Scroll there, pixels of content motion (dy &gt; 0 = up). */
 	default void scroll(final PointerPoint p, final int dx, final int dy) {}
 
 	default void exitTyping() {}
 
-	/** Physical mouse motion (points) during a helper-driven drag since the last call: {dx, dy}. */
-	default int[] drainDragDelta() {
-		return new int[] {0, 0};
-	}
-
+	/** Work mode ended in the helper (Esc, Minecraft active again) or the helper went away ("helper"). */
 	default void onTypingExit(final Consumer<String> listener) {}
-
-	default void onDragEnded(final Consumer<String> listener) {}
 
 	/** Bring Minecraft to the front again (the helper that would have done it is gone). */
 	default void activateMinecraft() {}

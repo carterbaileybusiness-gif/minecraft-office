@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
 
 import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Mode;
 import local.carter.office.core.Privacy;
 import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.hologram.HologramEmitterBlock;
@@ -152,6 +153,9 @@ public final class HologramActions {
 		Privacy privacy = u.privacy().allowed().size() > OfficePayloads.MAX_ALLOWED ? null : u.privacy();
 		if (privacy == null) {
 			return null;
+		}
+		if (s.mode() != Mode.MIRROR && u.mode() == Mode.MIRROR) {
+			privacy = HologramSpec.defaultPrivacy(Mode.MIRROR); // becoming a Mirror (your whole screen): Private first
 		}
 		// Keep the bottom edge where it was when the shape (and so the height) changes.
 		double newHeight = s.width() / u.shape().aspect();

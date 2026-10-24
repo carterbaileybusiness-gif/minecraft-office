@@ -135,3 +135,54 @@ enum EventInjector {
         return true
     }
 }
+
+/// The window server's private calls, looked up at run time: if a macOS drops them, the cursor just isn't hidden.
+private enum CGSPrivate {
+    typealias DefaultConnection = @convention(c) () -> Int32
+    typealias SetConnectionProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+    static let defaultConnection: DefaultConnection? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_CGSDefaultConnection")
+        .map { unsafeBitCast($0, to: DefaultConnection.self) }
+    static let setConnectionProperty: SetConnectionProperty? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGSSetConnectionProperty")
+        .map { unsafeBitCast($0, to: SetConnectionProperty.self) }
+}
+
+/// Hides the system cursor while the player works through a hologram (the hologram draws it instead, so no second
+/// cursor floats over Minecraft's view). A background app may only hide the cursor with the window server's
+/// "SetsCursorInBackground" connection property (the long-standing trick cursor-hiding utilities use). The hide is tied
+/// to this process's connection: if the helper dies, the cursor comes back by itself. Another app becoming active
+/// shows the cursor again (measured on macOS 26), so while hidden the helper re-asserts it on every app activation and
+/// once a second (`reassert`); `show` undoes every hide.
+@MainActor enum CursorVeil {
+    private(set) static var hidden = false
+    private static var hides = 0
+
+    static var log: (String) -> Void = { _ in }
+
+    static func hide() {
+        guard !hidden else { return }
+        guard let connection = CGSPrivate.defaultConnection, let setProperty = CGSPrivate.setConnectionProperty else {
+            log("cursor not hidden: this macOS lacks the window server's background-cursor calls")
+            return
+        }
+        let cid = connection()
+        let set = setProperty(cid, cid, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        hidden = true
+        reassert()
+        log("cursor hidden (connection \(cid), background property \(set == 0 ? "set" : "error \(set)"))")
+    }
+
+    static func reassert() {
+        guard hidden else { return }
+        let result = CGDisplayHideCursor(CGMainDisplayID())
+        hides += 1
+        if result != .success { log("cursor hide failed: \(result.rawValue)") }
+    }
+
+    static func show() {
+        guard hidden else { return }
+        for _ in 0..<max(1, hides) { CGDisplayShowCursor(CGMainDisplayID()) }
+        log("cursor shown (\(hides) hides undone)")
+        hides = 0
+        hidden = false
+    }
+}

@@ -139,7 +139,7 @@ enum CaptureError: Error, CustomStringConvertible {
             let width = min(pixelsWide, maxWidth)
             configuration.width = width
             configuration.height = max(1, Int((Double(pixelsHigh) * Double(width) / Double(pixelsWide)).rounded()))
-            configuration.showsCursor = true
+            configuration.showsCursor = false // the hologram draws the cursor from CURSOR reports (work mode)
             filter = SCContentFilter(display: display, excludingWindows: [])
             capturedWindowSize = nil
         case .main(let excludedPid):
@@ -150,7 +150,7 @@ enum CaptureError: Error, CustomStringConvertible {
             let width = min(pixelsWide, maxWidth)
             configuration.width = width
             configuration.height = max(1, Int((Double(pixelsHigh) * Double(width) / Double(pixelsWide)).rounded()))
-            configuration.showsCursor = true
+            configuration.showsCursor = false // the hologram draws the cursor from CURSOR reports (work mode)
             let minecraft = content.applications.filter { excludedPid != nil && $0.processID == excludedPid! }
             guard !minecraft.isEmpty else { throw CaptureError.minecraftNotListed(excludedPid ?? -1) } // checked above
             filter = SCContentFilter(display: display, excludingApplications: minecraft, exceptingWindows: [])
@@ -190,6 +190,12 @@ enum CaptureError: Error, CustomStringConvertible {
     }
 
     func setZoomed(_ zoomed: Bool) { setFrameRate(zoomed ? Self.zoomedFPS : requestedFPS) }
+
+    /// RATE: a new frame rate on the live stream (SCStream.updateConfiguration; the stream and surface stay).
+    func setRate(_ fps: Int) {
+        requestedFPS = max(1, min(60, fps))
+        setFrameRate(requestedFPS)
+    }
 
     private func setFrameRate(_ fps: Int) {
         guard let stream, let configuration, configuration.minimumFrameInterval.timescale != CMTimeScale(fps) else { return }

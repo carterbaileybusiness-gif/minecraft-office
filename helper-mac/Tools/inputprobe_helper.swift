@@ -106,16 +106,43 @@ extension Probe {
         check("E0 helper WELCOME: Accessibility granted to the signed helper", w.accessibility, "screen recording \(w.screenRecording)")
         helperPid = NSRunningApplication.runningApplications(withBundleIdentifier: "local.carter.office-helper").first?.processIdentifier
 
+        // PROBE_MONITOR=1: a "real monitor" (a probe-owned virtual display) at the main display's right edge before the
+        // Office displays exist — they must go to the left (W6), and the cursor on it is shown (W5).
+        if ProcessInfo.processInfo.environment["PROBE_MONITOR"] != nil {
+            let main = CGDisplayBounds(CGMainDisplayID())
+            var placed = CGRect.zero
+            if let id = makeProbeMonitor() {
+                _ = await VirtualDisplays.waitOnline(id)
+                placeDisplay(id, at: CGPoint(x: main.maxX, y: main.minY))
+                await sleep(1.0)
+                placed = CGDisplayBounds(id)
+                if placed.minX == main.maxX { probeMonitorID = id }
+            }
+            check("W6 setup: a probe monitor sits at the main display's right edge", probeMonitorID != nil, "main \(main), monitor \(placed)")
+        }
         var ids: [Int: CGDirectDisplayID] = [:]
+        var sides: [Int: String] = [:]
         for slot in [1, 2] {
             client.send(.createDisplay(CreateDisplayPayload(slot: slot, w: 1920, h: 1080)))
-            if case .display(let d)? = await waitFor(5, { if case .display(let d) = $0 { return d.slot == slot }; return false }) { ids[slot] = d.displayId }
+            if case .display(let d)? = await waitFor(5, { if case .display(let d) = $0 { return d.slot == slot }; return false }) {
+                ids[slot] = d.displayId
+                sides[slot] = d.side
+            }
         }
         guard let idA = ids[1], let idB = ids[2] else { check("E0 helper created displays 1 and 2", false); return }
         await sleep(1.0)
         let boundsA = CGDisplayBounds(idA), boundsB = CGDisplayBounds(idB)
         let mainBounds = CGDisplayBounds(CGMainDisplayID())
         check("E0 helper created displays 1 and 2", true, "1: \(boundsA), 2: \(boundsB), main \(mainBounds)")
+        if probeMonitorID != nil {
+            check("W6 with a monitor at the main display's right edge the Office displays go to its left, in slot order, and DISPLAY says \"left\"",
+                  boundsA.maxX == mainBounds.minX && boundsB.maxX == boundsA.minX && boundsA.minY == mainBounds.minY
+                    && sides[1] == "left" && sides[2] == "left",
+                  "main \(mainBounds), 1: \(boundsA), 2: \(boundsB), sides \(sides)")
+        } else {
+            check("E0 DISPLAY says which side of the main display the display is on (right here)", sides[1] == "right" && sides[2] == "right",
+                  "sides \(sides)")
+        }
         /// The hologram's picture size the mod sends for a Mirror (slot 0): its 16:9 shape's pixels.
         let pictureW = 1920, pictureH = 1080
         /// A global point → (slot, pixel) the way the mod sends it: display pixels of a 1920×1080 Office display, or — with
@@ -163,6 +190,65 @@ extension Probe {
         axSetFrame(win, homeOnMain) // where a player's window would be: on the laptop screen
         await sleep(0.4)
         let before = axFrame(win) ?? .zero
+        if ProcessInfo.processInfo.environment["PROBE_ONLY_WORK"] != nil { // just the work-mode checks (W0-W4)
+            await runWork(client: client, inbox: { inbox }, clearInbox: { inbox.removeAll() }, waitFor: waitFor, px: px, with: with,
+                          te: te, win: win, homeOnMain: homeOnMain, idA: idA, mainBounds: mainBounds)
+            if let mid = probeMonitorID {
+                // W7: the user moves the monitor while the Office displays are up (below the laptop screen); removing
+                // the displays must leave it there — no "restore" to where it was when they were created.
+                placeDisplay(mid, at: CGPoint(x: mainBounds.minX, y: mainBounds.maxY))
+                await sleep(1.0)
+                let placed = CGDisplayBounds(mid).origin
+                // display 2 goes: the helper re-arranges (display 1 stays) and must not put the monitor "back"
+                client.send(.removeDisplay(SlotPayload(slot: 2)))
+                await sleep(1.5)
+                let afterOne = CGDisplayBounds(mid).origin
+                check("W7 a monitor moved while the Office displays are up stays where the user put it when one is removed",
+                      afterOne == placed && placed.y == mainBounds.maxY,
+                      "moved to \(placed), after removing display 2: \(afterOne)")
+                client.send(.removeDisplay(SlotPayload(slot: 1)))
+                await sleep(1.5)
+                let afterAll = CGDisplayBounds(mid).origin
+                check("W7 …and when the last one is removed (macOS's remembered layout would carry it back; the helper keeps it put)",
+                      afterAll == placed, "after removing display 1 too: \(afterAll)")
+
+                // W8: the mod sends every CREATE_DISPLAY at once on each (re)connect. With the monitor at the laptop
+                // screen's right edge, three back-to-back creates: each new display may shove it; it must end where the
+                // user had it, the Office displays to the left in slot order.
+                await sleep(3.5) // the post-remove window is over
+                placeDisplay(mid, at: CGPoint(x: mainBounds.maxX, y: mainBounds.minY))
+                await sleep(1.0)
+                let userPlace = CGDisplayBounds(mid).origin
+                inbox.removeAll()
+                // as the mod sends them; a small gap (PROBE_CREATE_GAP seconds, default none) lets a display come online
+                // between two creates, which is when a shove can slip between a create and its arrange
+                let gap = Double(ProcessInfo.processInfo.environment["PROBE_CREATE_GAP"] ?? "") ?? 0
+                for slot in 1...3 {
+                    client.send(.createDisplay(CreateDisplayPayload(slot: slot, w: 1920, h: 1080)))
+                    if gap > 0 { await sleep(gap) }
+                }
+                var shown: [Int: CGDirectDisplayID] = [:]
+                for _ in 0..<80 where shown.count < 3 {
+                    await sleep(0.1)
+                    for m in inbox { if case .display(let d) = m { shown[d.slot] = d.displayId } }
+                }
+                await sleep(1.5)
+                let monitorNow = CGDisplayBounds(mid).origin
+                let b = (1...3).map { shown[$0].map { CGDisplayBounds($0) } ?? .null }
+                check("W8 three back-to-back creates: the monitor ends where the user had it, displays 1-3 left of the laptop screen in slot order",
+                      userPlace == CGPoint(x: mainBounds.maxX, y: mainBounds.minY) && monitorNow == userPlace && shown.count == 3
+                        && b[0].maxX == mainBounds.minX && b[1].maxX == b[0].minX && b[2].maxX == b[1].minX,
+                      "monitor \(userPlace) → \(monitorNow); 1: \(b[0]), 2: \(b[1]), 3: \(b[2])")
+                for slot in [3, 2, 1] {
+                    client.send(.removeDisplay(SlotPayload(slot: slot)))
+                    await sleep(0.8)
+                }
+                await sleep(1.5)
+                check("W8 …and it stays there when they are removed again", CGDisplayBounds(mid).origin == userPlace,
+                      "monitor now \(CGDisplayBounds(mid).origin)")
+            }
+            return
+        }
 
         // E1: the Dock's OPEN_APP brings TextEdit's front window onto display 1 (nothing moves by itself any more).
         await activateProbe()
@@ -263,7 +349,9 @@ extension Probe {
               boundsB.contains(grab) && d2.ended == .dragEnded(ReasonPayload(reason: "released")) && d2.front,
               "window \(frame.origin) → \(after.origin), ended \(d2.ended.map { "\($0)" } ?? "none")")
 
-        // Scroll where the window is now.
+        // Scroll on display 2 (the window wholly on it: one that straddles two displays is drawn on one of them only).
+        axSetFrame(win, CGRect(x: boundsB.minX + 100, y: boundsB.minY + 100, width: 900, height: 600))
+        await sleep(0.4)
         if let sa = axFind(win, role: kAXScrollAreaRole), let saFrame = axFrame(sa), let p = px(CGPoint(x: saFrame.midX, y: saFrame.midY)) {
             await activateProbe()
             let s0 = axScrollValue(sa) ?? 0
@@ -309,6 +397,8 @@ extension Probe {
 
         await runMirror(client: client, inbox: { inbox }, clearInbox: { inbox.removeAll() }, waitFor: waitFor, headDrag: headDrag,
                         px: px, with: with, te: te, win: win, homeOnMain: homeOnMain, boundsB: boundsB, mainBounds: mainBounds)
+        await runWork(client: client, inbox: { inbox }, clearInbox: { inbox.removeAll() }, waitFor: waitFor, px: px, with: with,
+                      te: te, win: win, homeOnMain: homeOnMain, idA: idA, mainBounds: mainBounds)
 
         // Leaving: the helper removes its displays and quits; no window was moved on join, so none is moved back (a
         // window on a removed display goes to the main display by macOS itself).
@@ -489,5 +579,233 @@ extension Probe {
         await activateProbe()
     }
 
+    // MARK: Work mode (spec 5.10, round 2): the real mouse drives the real cursor; Esc ends it
+
+    /// A mouse move / drag as the real mouse makes it: a HID event at the new cursor position (acceleration already
+    /// applied, as the window server does for a real mouse), unmarked, with its deltas.
+    func hand(_ type: CGEventType, to p: CGPoint, from q: CGPoint) {
+        guard let e = CGEvent(mouseEventSource: hid, mouseType: type, mouseCursorPosition: p, mouseButton: .left) else { return }
+        e.setIntegerValueField(.mouseEventDeltaX, value: Int64((p.x - q.x).rounded()))
+        e.setIntegerValueField(.mouseEventDeltaY, value: Int64((p.y - q.y).rounded()))
+        e.post(tap: .cghidEventTap)
+    }
+
+    var cursorNow: CGPoint { CGEvent(source: nil)?.location ?? .zero }
+
+    func runWork(client: HelperSocket, inbox: () -> [Message], clearInbox: () -> Void, waitFor: (Double, (Message) -> Bool) async -> Message?,
+                 px: (CGPoint, Bool) -> PointerPayload?, with: (PointerPayload, PointerButton?) -> PointerPayload,
+                 te: NSRunningApplication, win: AXUIElement, homeOnMain: CGRect, idA: CGDirectDisplayID, mainBounds: CGRect) async {
+        let boundsA = CGDisplayBounds(idA)
+        check("W0 display 1 sits right next to the main display (the arrangement), top edges aligned",
+              (boundsA.minX == mainBounds.maxX || boundsA.maxX == mainBounds.minX) && boundsA.minY == mainBounds.minY,
+              "main \(mainBounds), display 1 \(boundsA)")
+        axSetFrame(win, homeOnMain)
+        await sleep(0.4)
+        standIn(true)
+        relativeMode(false)
+        await activateProbe()
+        await sleep(0.4)
+        guard let scrollArea = axFind(win, role: kAXScrollAreaRole), let text = axFind(scrollArea, role: kAXTextAreaRole),
+              let scrollFrame = axFrame(scrollArea) else { check("W found TextEdit's text area", false); standIn(false); return }
+        let textPoint = CGPoint(x: scrollFrame.minX + 80, y: scrollFrame.minY + 60)
+        guard let textPx = px(textPoint, true) else { check("W text point maps to slot 0", false); standIn(false); return }
+
+        // W1: a click (button already up): the real cursor goes to the point, TextEdit gets the click, the cursor hides.
+        axSetRange(text, CFRange(location: 0, length: 0))
+        clearInbox()
+        clickThrough(true) // the mod: work mode = floating + click-through
+        client.send(.workBegin(with(textPx, .left)))
+        await sleep(0.8)
+        let caret = axRange(text)?.location ?? 0
+        let cursor = cursorNow
+        var hidden = !cursorDrawn(at: cursor)
+        if ProcessInfo.processInfo.environment["PROBE_CURSOR_TIMELINE"] != nil {
+            for t in [0.3, 0.6, 1.2] { await sleep(t); note("W1 timeline +\(t) s: cursor drawn \(cursorDrawn(at: cursorNow)) at \(cursorNow)") }
+            hidden = !cursorDrawn(at: cursorNow)
+        }
+        check("W1 WORK_BEGIN on the Mirror: the real cursor is at the clicked point, TextEdit got the click and the keyboard, the system cursor is hidden",
+              hypot(cursor.x - textPoint.x, cursor.y - textPoint.y) < 2 && caret > 0
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == te.processIdentifier && hidden,
+              "cursor \(cursor) vs \(textPoint), caret \(caret), frontmost \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"), hidden \(hidden)")
+
+        // W2: the real mouse moves the real cursor 1:1; CURSOR reports where it is, to the pixel.
+        var p = cursorNow
+        for _ in 0..<20 {
+            let next = CGPoint(x: p.x + 9, y: p.y + 4)
+            hand(.mouseMoved, to: next, from: p)
+            p = next
+            await sleep(0.01)
+        }
+        await sleep(0.2)
+        let real = cursorNow
+        let reports = inbox().compactMap { m -> CursorPayload? in if case .cursor(let c) = m { return c }; return nil }
+        let last = reports.last
+        let reportedAt = last.map { CGPoint(x: mainBounds.minX + Double($0.x) * mainBounds.width / Double($0.w),
+                                            y: mainBounds.minY + Double($0.y) * mainBounds.height / Double($0.h)) }
+        check("W2 the hand moves the real cursor (180 pt right, 80 down) and CURSOR reports it on the Mirror within 1 pt",
+              hypot(real.x - (textPoint.x + 180), real.y - (textPoint.y + 80)) < 2 && last?.slot == 0
+                && reportedAt.map { abs($0.x - real.x) <= 1 && abs($0.y - real.y) <= 1 } == true,
+              "real \(real), \(reports.count) reports, last \(last.map { "\($0)" } ?? "none")")
+
+        // W5 (PROBE_MONITOR): the cursor on a real monitor — no hologram shows it — is the system cursor, shown; back on
+        // the Mirror it is hidden again.
+        if let mid = probeMonitorID {
+            let mb = CGDisplayBounds(mid)
+            showProbeMonitorWindow(mid)
+            await sleep(0.3)
+            clearInbox()
+            let onMonitor = CGPoint(x: mb.midX, y: mb.midY)
+            hand(.mouseMoved, to: onMonitor, from: cursorNow)
+            await sleep(0.5)
+            let there = inbox().compactMap { m -> CursorPayload? in if case .cursor(let c) = m { return c }; return nil }.last
+            let shown = cursorDrawn(at: cursorNow)
+            check("W5 the cursor onto a real monitor: CURSOR slot -1 and the system cursor is shown there",
+                  there?.slot == -1 && shown && mb.contains(cursorNow), "cursor \(cursorNow), last \(there.map { "\($0)" } ?? "none"), drawn \(shown)")
+            clearInbox()
+            hand(.mouseMoved, to: real, from: cursorNow)
+            await sleep(0.5)
+            let back = inbox().compactMap { m -> CursorPayload? in if case .cursor(let c) = m { return c }; return nil }.last
+            let hiddenAgain = !cursorDrawn(at: cursorNow)
+            check("W5 back onto the Mirror: CURSOR slot 0 and the system cursor hidden again",
+                  back?.slot == 0 && hiddenAgain, "cursor \(cursorNow), last \(back.map { "\($0)" } ?? "none"), hidden \(hiddenAgain)")
+            probeMonitorWindow?.orderOut(nil)
+        }
+
+        // W4 (before W3, so W3 starts from a press): Esc ends work mode; the cursor shows again, reports stop.
+        key(53)
+        let exit = await waitFor(2) { if case .typingExit = $0 { return true }; return false }
+        clickThrough(false)
+        await sleep(0.4)
+        clearInbox()
+        hand(.mouseMoved, to: CGPoint(x: real.x - 30, y: real.y), from: real)
+        await sleep(0.3)
+        let after = inbox().contains { if case .cursor = $0 { return true }; return false }
+        check("W4 Esc → TYPING_EXIT esc, Minecraft frontmost, system cursor visible again, no more CURSOR reports",
+              exit == .typingExit(ReasonPayload(reason: "esc")) && probeFrontmost && cursorDrawn(at: cursorNow) && !after,
+              "\(exit.map { "\($0)" } ?? "none"), frontmost \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"), reports after: \(after)")
+
+        // W3: a real press on TextEdit's title bar on the Mirror, a real drag off the main display's right edge onto
+        // display 1, a real release: the window is on display 1. The helper posts only the down; the hand does the rest.
+        axSetFrame(win, homeOnMain)
+        await sleep(0.4)
+        await activateProbe()
+        let frame = axFrame(win) ?? .zero
+        let title = CGPoint(x: frame.minX + frame.width * 0.6, y: frame.minY + 12)
+        guard let titlePx = px(title, true) else { check("W3 title maps to slot 0", false); standIn(false); return }
+        counts = [:]
+        physical(.leftMouseDown) // the player presses in Minecraft (the stand-in gets it, as Minecraft would)
+        await sleep(0.05)
+        clickThrough(true)
+        clearInbox()
+        client.send(.workBegin(with(titlePx, .left)))
+        await sleep(0.6)
+        var q = cursorNow
+        let target = CGPoint(x: boundsA.minX + 500, y: boundsA.minY + 200)
+        let steps = 40
+        for i in 1...steps {
+            let next = CGPoint(x: title.x + (target.x - title.x) * Double(i) / Double(steps), y: title.y + (target.y - title.y) * Double(i) / Double(steps))
+            hand(.leftMouseDragged, to: next, from: q)
+            q = next
+            await sleep(0.015)
+        }
+        await sleep(0.1)
+        hand(.leftMouseUp, to: q, from: q)
+        await sleep(0.5)
+        let moved = axFrame(win) ?? .zero
+        let grab = CGPoint(x: moved.minX + (title.x - frame.minX), y: moved.minY + (title.y - frame.minY))
+        let onA = inbox().compactMap { m -> CursorPayload? in if case .cursor(let c) = m { return c }; return nil }.last
+        check("W3 real press + real drag + real release carry TextEdit's window from the Mirror across the edge onto display 1",
+              boundsA.contains(grab) && onA?.slot == 1,
+              "window \(frame.origin) → \(moved.origin) (display 1 \(boundsA)), last CURSOR \(onA.map { "\($0)" } ?? "none")")
+        let stuck = CGEventSource.buttonState(.hidSystemState, button: .left)
+        check("W3 nothing stuck: the button is up", !stuck, "button down \(stuck)")
+        key(53)
+        _ = await waitFor(2) { if case .typingExit = $0 { return true }; return false }
+        clickThrough(false)
+        await sleep(0.3)
+        axSetFrame(win, homeOnMain)
+        standIn(false)
+        await activateProbe()
+    }
+
     var helperRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: "local.carter.office-helper").isEmpty }
+}
+
+// MARK: A "real monitor" for W5 / W6: a probe-owned virtual display (not one of the helper's Office displays)
+
+@MainActor var probeMonitor: CGVirtualDisplay?
+@MainActor var probeMonitorID: CGDirectDisplayID?
+@MainActor var probeMonitorWindow: NSWindow?
+
+@MainActor func makeProbeMonitor() -> CGDirectDisplayID? {
+    let d = CGVirtualDisplayDescriptor()
+    d.queue = DispatchQueue.main
+    d.name = "Probe Monitor"
+    d.maxPixelsWide = 1920
+    d.maxPixelsHigh = 1080
+    d.sizeInMillimeters = CGSize(width: 443, height: 249)
+    d.serialNum = 0x5052_0001 // not an Office display's "MO" serial
+    d.productID = 0x0002
+    d.vendorID = 0x5052
+    d.redPrimary = CGPoint(x: 0.64, y: 0.33)
+    d.greenPrimary = CGPoint(x: 0.30, y: 0.60)
+    d.bluePrimary = CGPoint(x: 0.15, y: 0.06)
+    d.whitePoint = CGPoint(x: 0.3127, y: 0.3290)
+    d.terminationHandler = { _, _ in }
+    guard let display = CGVirtualDisplay(descriptor: d) else { return nil }
+    let settings = CGVirtualDisplaySettings()
+    settings.hiDPI = 0
+    settings.modes = [CGVirtualDisplayMode(width: 1920, height: 1080, refreshRate: 60)]
+    guard display.apply(settings) else { return nil }
+    probeMonitor = display
+    return display.displayID
+}
+
+@MainActor func placeDisplay(_ id: CGDirectDisplayID, at origin: CGPoint) {
+    var config: CGDisplayConfigRef?
+    guard CGBeginDisplayConfiguration(&config) == .success, let config else { return }
+    CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y))
+    _ = CGCompleteDisplayConfiguration(config, .forSession)
+}
+
+/// A plain window over the probe monitor, so the cursor check there has a flat background.
+@MainActor func showProbeMonitorWindow(_ id: CGDirectDisplayID) {
+    guard let screen = NSScreen.screens.first(where: {
+        ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id
+    }) else { return }
+    let w = probeMonitorWindow ?? NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    w.isReleasedWhenClosed = false
+    w.level = .floating
+    w.backgroundColor = NSColor(calibratedWhite: 0.45, alpha: 1)
+    w.ignoresMouseEvents = true
+    w.setFrame(screen.frame, display: true)
+    w.orderFrontRegardless()
+    probeMonitorWindow = w
+}
+
+/// Is a cursor drawn on screen around `p`? `screencapture -C` (with the cursor) of a 48-pt square there over the plain
+/// stand-in window: more than a few pixels unlike the background = a cursor. (CGCursorIsVisible only reports the
+/// calling process's own state.) PROBE_KEEP_SHOTS=<dir> keeps the screenshots.
+func cursorDrawn(at p: CGPoint) -> Bool {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("office-probe-cursor-\(getpid()).png")
+    let t = Process()
+    t.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    t.arguments = ["-x", "-C", "-R", "\(Int(p.x) - 8),\(Int(p.y) - 8),48,48", file.path]
+    try? t.run(); t.waitUntilExit()
+    defer {
+        if let keep = ProcessInfo.processInfo.environment["PROBE_KEEP_SHOTS"] { // debugging: keep the screenshots
+            try? FileManager.default.copyItem(at: file, to: URL(fileURLWithPath: keep).appendingPathComponent("cursor-\(Int(Date().timeIntervalSince1970 * 1000)).png"))
+        }
+        try? FileManager.default.removeItem(at: file)
+    }
+    guard let rep = NSBitmapImageRep(data: (try? Data(contentsOf: file)) ?? Data()) else { return true }
+    // the background is whatever the bottom-right corner shows (the cursor's tip is near the top-left); a cursor is
+    // a few dozen pixels clearly different from it
+    var odd = 0
+    guard let bg = rep.colorAt(x: rep.pixelsWide - 1, y: rep.pixelsHigh - 1) else { return true }
+    for y in 0..<rep.pixelsHigh { for x in 0..<rep.pixelsWide {
+        guard let c = rep.colorAt(x: x, y: y) else { continue }
+        if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent) + abs(c.blueComponent - bg.blueComponent) > 0.3 { odd += 1 }
+    } }
+    return odd > 20
 }

@@ -60,6 +60,10 @@ public final class HelperProtocol {
     public static final int LIST_APPS = 19;
     public static final int APP_ICONS = 20;
     public static final int OPEN_APP = 21;
+    /** Work mode (spec 5.10 round 2): the real cursor goes to this point and the real mouse drives it until Esc. */
+    public static final int WORK_BEGIN = 22;
+    /** A live capture's new frame rate (no stream rebuild). */
+    public static final int RATE = 23;
     // Helper -> mod
     public static final int WELCOME = 64;
     public static final int WINDOWS = 65;
@@ -77,6 +81,8 @@ public final class HelperProtocol {
     public static final int APP_RESULT = 77;
     /** While typing: secure input (a password field) went on / off; Esc can't be seen then, ⌘-Tab still returns. */
     public static final int SECURE_INPUT = 78;
+    /** Work mode: where the real cursor is (slot -1: on none of the player's screens). */
+    public static final int CURSOR = 79;
     /** Pointer slot 0: the main display (a Mirror hologram); x, y are then a pixel of a w x h picture of it. */
     public static final int MAIN_SLOT = 0;
 
@@ -96,7 +102,7 @@ public final class HelperProtocol {
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
             ZoomIn, ZoomOut, RequestPermissions, PointerDown, PointerMove, PointerUp, Scroll, Click, ExitTyping,
             ListApps, AppIcons, OpenApp, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
-            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput {
+            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput, WorkBegin, Cursor, Rate {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -134,6 +140,9 @@ public final class HelperProtocol {
                 case Icons m -> ICONS;
                 case AppResult m -> APP_RESULT;
                 case SecureInput m -> SECURE_INPUT;
+                case WorkBegin m -> WORK_BEGIN;
+                case Cursor m -> CURSOR;
+                case Rate m -> RATE;
             };
         }
     }
@@ -285,7 +294,15 @@ public final class HelperProtocol {
 
     public record Windows(List<WindowInfo> windows) implements Message {}
 
-    public record Display(int slot, long displayId, int w, int h) implements Message {}
+    /**
+     * {@code x}, {@code y}: the display's origin in the arrangement (global points); {@code side}: "left" or "right" of
+     * the main display, the laptop screen's edge the cursor crosses to get there. All three null from older helpers.
+     */
+    public record Display(int slot, long displayId, int w, int h, Integer x, Integer y, String side) implements Message {
+        public Display(int slot, long displayId, int w, int h) {
+            this(slot, displayId, w, h, null, null, null);
+        }
+    }
 
     /** {@code rgba} is a read-only view of width*height*4 bytes (rows top to bottom); position 0, limit = size. */
     public record Frame(int surface, long generation, int width, int height, ByteBuffer rgba) implements Message {}
@@ -321,6 +338,18 @@ public final class HelperProtocol {
 
     /** Secure input on / off while typing. */
     public record SecureInput(boolean on) implements Message {}
+
+    /** Enter work mode at this point (slot 0 = the main display, with the picture size w, h). */
+    public record WorkBegin(int slot, int x, int y, PointerButton button, Integer w, Integer h) implements Message {}
+
+    /**
+     * The real cursor while working: on display {@code slot} (0 = main, its points; 1-4 = a virtual display, its pixels;
+     * -1 = none of them) at (x, y) of a w x h grid.
+     */
+    public record Cursor(int slot, int x, int y, int w, int h) implements Message {}
+
+    /** A live capture's new frame rate, 1..60. */
+    public record Rate(int surface, int fps) implements Message {}
 
     /** ERROR message. Named HelperError so it does not clash with {@link java.lang.Error}. */
     public record HelperError(String code, String message) implements Message {
@@ -442,6 +471,9 @@ public final class HelperProtocol {
             case AppIcons m -> map("bundles", List.copyOf(m.bundles()), "size", m.size());
             case OpenApp m -> map("bottom", m.bottom(), "bundle", m.bundle(), "slot", m.slot(), "url", m.url());
             case SecureInput m -> map("on", m.on());
+            case WorkBegin m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case Cursor m -> map("h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case Rate m -> map("fps", m.fps(), "surface", m.surface());
             case Apps m -> {
                 List<Object> list = new ArrayList<>();
                 for (AppInfo a : m.apps()) list.add(map("bundle", a.bundle(), "name", a.name()));
@@ -465,7 +497,8 @@ public final class HelperProtocol {
                 }
                 yield list;
             }
-            case Display m -> map("displayId", m.displayId(), "h", m.h(), "slot", m.slot(), "w", m.w());
+            case Display m -> map("displayId", m.displayId(), "h", m.h(), "side", m.side(), "slot", m.slot(), "w", m.w(),
+                    "x", m.x(), "y", m.y());
             case Ended m -> map("reason", m.reason(), "surface", m.surface());
             case ExitZoom m -> map();
             case HelperError m -> map("code", m.code(), "message", m.message());
@@ -599,6 +632,22 @@ public final class HelperProtocol {
             }
             case SECURE_INPUT:
                 return new SecureInput(bool(object(root), "on"));
+            case WORK_BEGIN: {
+                JsonObject o = object(root);
+                int slot = integer(o, "slot");
+                Integer[] wh = picture(o, slot);
+                return new WorkBegin(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
+            }
+            case CURSOR: {
+                JsonObject o = object(root);
+                return new Cursor(integer(o, "slot"), integer(o, "x"), integer(o, "y"), integer(o, "w"), integer(o, "h"));
+            }
+            case RATE: {
+                JsonObject o = object(root);
+                int fps = integer(o, "fps");
+                if (fps < 1 || fps > 60) throw bad("RATE fps must be 1...60");
+                return new Rate(integer(o, "surface"), fps);
+            }
             case TYPING_EXIT:
                 return new TypingExit(str(object(root), "reason"));
             case DRAG_DELTA: {
@@ -626,7 +675,8 @@ public final class HelperProtocol {
                 JsonObject o = object(root);
                 long id = number(o, "displayId").longValueExact0();
                 if (id < 0 || id > 0xFFFFFFFFL) throw bad("displayId out of range");
-                return new Display(integer(o, "slot"), id, integer(o, "w"), integer(o, "h"));
+                return new Display(integer(o, "slot"), id, integer(o, "w"), integer(o, "h"), optInteger(o, "x"), optInteger(o, "y"),
+                        optStr(o, "side"));
             }
             case ENDED: {
                 JsonObject o = object(root);
@@ -897,7 +947,18 @@ public final class HelperProtocol {
         private long length = -1; // 1 + payload bytes, once known
         private int type = -1;
         private byte[] payload;
+        private int payloadLength;
         private int payloadGot;
+        /**
+         * The newest FRAME / PATCH payloads handed out and not yet {@link #release released} (bounded: a caller that never
+         * releases just leaves them to the GC, as before), and released ones to reuse.
+         */
+        private final ArrayDeque<Lent> lent = new ArrayDeque<>();
+        private final ArrayDeque<byte[]> spare = new ArrayDeque<>();
+        private static final int SPARES = 3;
+        private static final int LENT = 4;
+
+        private record Lent(Message message, byte[] payload) {}
 
         public FrameReader(int maxLength) {
             this.maxLength = maxLength;
@@ -935,6 +996,46 @@ public final class HelperProtocol {
             }
         }
 
+        /**
+         * The caller is done with {@code m} (a FRAME / PATCH whose pixels it no longer reads): its payload array is reused
+         * for a later picture, so a steady stream of frames allocates nothing. Without it each picture gets a fresh array.
+         */
+        public void release(Message m) {
+            for (java.util.Iterator<Lent> it = lent.iterator(); it.hasNext(); ) {
+                Lent l = it.next();
+                if (l.message() == m) {
+                    it.remove();
+                    if (spare.size() >= SPARES) spare.pollFirst();
+                    spare.addLast(l.payload());
+                    return;
+                }
+            }
+        }
+
+        /** Payloads lent out and tracked (tests). */
+        int lent() {
+            return lent.size();
+        }
+
+        /** A payload array of at least {@code n} bytes: a spare one that fits, else a new one. */
+        private byte[] payloadArray(int n, boolean picture) {
+            if (picture) {
+                for (java.util.Iterator<byte[]> it = spare.iterator(); it.hasNext(); ) {
+                    byte[] b = it.next();
+                    if (b.length >= n && b.length <= n + (n >> 2)) {
+                        it.remove();
+                        return b;
+                    }
+                }
+            }
+            return new byte[n];
+        }
+
+        /** Spare arrays held (tests). */
+        int spares() {
+            return spare.size();
+        }
+
         /** The next complete message, or null when more bytes are needed. */
         public Message next() throws ProtocolException {
             Message m = ready.poll();
@@ -958,15 +1059,20 @@ public final class HelperProtocol {
                 int t = data[pos++] & 0xFF;
                 if (!isKnownType(t)) throw new ProtocolException("unknown message type " + t);
                 type = t;
-                payload = new byte[(int) length - 1];
+                payloadLength = (int) length - 1;
+                payload = payloadArray(payloadLength, t == FRAME || t == PATCH);
                 payloadGot = 0;
             }
-            int n = Math.min(end - pos, payload.length - payloadGot);
+            int n = Math.min(end - pos, payloadLength - payloadGot);
             System.arraycopy(data, pos, payload, payloadGot, n);
             payloadGot += n;
             pos += n;
-            if (payloadGot == payload.length) {
-                Message m = decode(type, payload);
+            if (payloadGot == payloadLength) {
+                Message m = decode(type, payload, 0, payloadLength);
+                if (m instanceof Frame || m instanceof Patch) {
+                    if (lent.size() >= LENT) lent.pollFirst(); // never released: forget it (no leak)
+                    lent.addLast(new Lent(m, payload));
+                }
                 ready.add(m);
                 lengthGot = 0;
                 length = -1;
@@ -978,6 +1084,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= OPEN_APP) || (t >= WELCOME && t <= SECURE_INPUT);
+        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= RATE) || (t >= WELCOME && t <= CURSOR);
     }
 }

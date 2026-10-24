@@ -119,6 +119,15 @@ public final class MacHelper implements HelperConnection.Listener {
 	private final Set<String> iconsAsked = ConcurrentHashMap.newKeySet();
 	private final List<Consumer<AppResult>> appResultListeners = new CopyOnWriteArrayList<>();
 	private final List<Consumer<Boolean>> secureInputListeners = new CopyOnWriteArrayList<>();
+	/** Which edge of the laptop screen leads to the Office displays ("left" / "right"), from DISPLAY; null until known. */
+	private volatile @Nullable String displaySide;
+
+	public @Nullable String displaySide() {
+		return displaySide;
+	}
+
+	/** The real cursor while working (CURSOR), the newest one; null when none arrived since work mode began. */
+	private volatile HelperProtocol.@Nullable Cursor cursor;
 	/** Icon size asked of the helper (pixels): crisp on a big hologram. */
 	public static final int ICON_PX = 128;
 
@@ -453,6 +462,17 @@ public final class MacHelper implements HelperConnection.Listener {
 		appResultListeners.add(listener);
 	}
 
+	/** Work mode at this point (spec 5.10 round 2): the helper puts the real cursor there and hands it the real mouse. */
+	public boolean workBegin(final PointerPoint p, final PointerButton button) {
+		cursor = null;
+		return send(new HelperProtocol.WorkBegin(p.slot(), p.x(), p.y(), button, w(p), h(p)));
+	}
+
+	/** Where the real cursor is while working, or null. */
+	public HelperProtocol.@Nullable Cursor cursor() {
+		return cursor;
+	}
+
 	/** Called on the client thread when secure input goes on / off while typing (and off when the helper is gone). */
 	public void onSecureInput(final Consumer<Boolean> listener) {
 		secureInputListeners.add(listener);
@@ -557,6 +577,9 @@ public final class MacHelper implements HelperConnection.Listener {
 				synchronized (this) {
 					online.put(d.slot(), new Size(d.w(), d.h()));
 				}
+				if (d.side() != null) {
+					displaySide = d.side();
+				}
 				for (MacHelperSource s : attached) {
 					s.displayOnline(d.slot(), d.w(), d.h());
 				}
@@ -626,6 +649,7 @@ public final class MacHelper implements HelperConnection.Listener {
 					}
 				}
 			}
+			case HelperProtocol.Cursor c -> cursor = c;
 			case HelperProtocol.SecureInput s -> {
 				for (Consumer<Boolean> l : secureInputListeners) {
 					clientThread.execute(() -> l.accept(s.on()));

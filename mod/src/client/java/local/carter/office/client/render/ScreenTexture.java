@@ -100,6 +100,7 @@ public class ScreenTexture implements FrameSink {
 	private boolean dirtyAll;
 	private volatile boolean needsFull = true;
 	private volatile @Nullable String endedReason;
+	private long changedNanos; // FrameStats: when the oldest not-yet-uploaded change arrived (0 = none)
 
 	// ---- GPU side (render thread, also guarded by lock) ----
 	private int gpuW;
@@ -233,8 +234,12 @@ public class ScreenTexture implements FrameSink {
 		if (superseded) {
 			return;
 		}
+		long arrived = FrameStats.recording() ? System.nanoTime() : 0;
 		lock.lock();
 		try {
+			if (changedNanos == 0) {
+				changedNanos = arrived;
+			}
 			claimId();
 			if (levels == null || w != frameW || h != frameH) {
 				allocateCpu(w, h);
@@ -269,12 +274,16 @@ public class ScreenTexture implements FrameSink {
 		if (superseded) {
 			return;
 		}
+		long arrived = FrameStats.recording() ? System.nanoTime() : 0;
 		lock.lock();
 		try {
 			ByteBuffer[] lv = levels;
 			if (lv == null) {
 				needsFull = true; // nothing to patch yet
 				return;
+			}
+			if (changedNanos == 0) {
+				changedNanos = arrived;
 			}
 			Rect r = Rect.clip(x, y, w, h, frameW, frameH);
 			if (r == null) {
@@ -385,6 +394,7 @@ public class ScreenTexture implements FrameSink {
 				dirtyAll = false;
 				dirty.clear();
 				gpuHasFrame = true;
+				uploadedChange();
 			} else if (!dirty.isEmpty()) {
 				for (Rect r : dirty) {
 					for (int k = 0; k < lv.length; k++) {
@@ -396,10 +406,19 @@ public class ScreenTexture implements FrameSink {
 					}
 				}
 				dirty.clear();
+				uploadedChange();
 			}
 			return gpuHasFrame;
 		} finally {
 			lock.unlock();
+		}
+	}
+
+	/** Under the lock, render thread: the pending change is on the GPU now. */
+	private void uploadedChange() {
+		if (changedNanos != 0) {
+			FrameStats.uploaded(changedNanos);
+			changedNanos = 0;
 		}
 	}
 
@@ -454,6 +473,7 @@ public class ScreenTexture implements FrameSink {
 			frameH = 0;
 			dirty.clear();
 			dirtyAll = false;
+			changedNanos = 0;
 			staging = null;
 			needsFull = true;
 			if (claimed) {

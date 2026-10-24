@@ -18,6 +18,7 @@ import net.minecraft.client.Minecraft;
 public abstract class MinecraftFrameMixin {
 	@Inject(method = "renderFrame", at = @At("HEAD"))
 	private void office$zoomFrame(final boolean advanceGameTime, final CallbackInfo ci) {
+		local.carter.office.client.render.FrameStats.frameStart(); // measurements only (off by default)
 		ZoomClient.frame();
 		PointerClient.frame();
 	}

@@ -43,7 +43,8 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * changes owner, or the player disconnects. Client thread only.
  *
  * <p>Default source: this computer's own capture ({@link Platform#newOwnSource}: the Mac helper with an adaptive rate,
- * {@link CaptureRate}: 5 fps while the hologram's front is on screen, 0 when not, 30 while zoomed in; or Windows'
+ * {@link CaptureRate}: 30 fps while the hologram's front is on screen, 0 when not, 60 for the one the cursor is on while
+ * working (or zoomed in); or Windows'
  * {@link JavaDesktopSource}, which paces itself under {@link #MAX_FPS}). With
  * {@code -Doffice.testPattern=true} (dev override) every own hologram shows a {@link TestPatternSource} at 30 fps
  * instead. Without either, own holograms are not fed.
@@ -116,6 +117,23 @@ public final class OwnScreens {
 		stopAll();
 	}
 
+	/**
+	 * Measurements (client GameTest): feed own holograms from {@code sourceFactory} with the real visibility / cursor
+	 * rate (30 visible, 60 with the cursor there, 0 hidden), as the Mac helper is fed. Null = the platform's own capture
+	 * (the Mac helper). Client thread.
+	 */
+	public static void useAdaptiveSourceForTesting(final @Nullable Supplier<CaptureSource> sourceFactory) {
+		factory = sourceFactory != null ? sourceFactory : () -> Platform.current().newOwnSource();
+		adaptiveRate = true;
+		stopAll();
+	}
+
+	/** The capture rate the own hologram {@code id} is asking for now (0 = no feed). Client thread. */
+	public static int fpsForTesting(final UUID id) {
+		Feed f = FEEDS.get(id);
+		return f == null ? 0 : f.fps;
+	}
+
 	/** Installs the share taps (Task 14's sender). */
 	public static void setShareTaps(final @Nullable Function<UUID, @Nullable FrameSink> taps) {
 		shareTaps = taps == null ? id -> null : taps;
@@ -172,7 +190,7 @@ public final class OwnScreens {
 			// Debounced (1 s) so sweeping the camera past a hologram doesn't STOP / CAPTURE the helper over and over.
 			int fps = adaptiveRate
 					? CaptureRate.fps(visibility.update(visible(camera, be.getBlockPos(), spec), System.nanoTime() / 1_000_000L),
-							HologramRenderer.isZoomed(id))
+							HologramRenderer.isZoomed(id), local.carter.office.client.pointer.PointerClient.cursorOnScreen(spec))
 					: MAX_FPS;
 			if (adaptiveRate && shared(id)) {
 				// a source that paces itself (Windows: 10 fps, 30 while working) already runs fast enough to share

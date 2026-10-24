@@ -60,6 +60,11 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 	public static final Identifier OFFLINE = OfficeMod.id("textures/misc/offline.png");
 	public static final Identifier SCANLINES = OfficeMod.id("textures/misc/scanlines.png");
 	public static final Identifier ICONS = OfficeMod.id("textures/misc/icons.png");
+	/** The real cursor while working (16 x 24 arrow, tip at the top-left pixel, nearest filtering: crisp). */
+	public static final Identifier CURSOR = OfficeMod.id("textures/misc/cursor.png");
+	/** Cursor height as a share of the hologram's height (a 32 px pointer on a 1080 px screen). */
+	static final float CURSOR_SHARE = 0.032f;
+
 	/** The Dock bar's tint: dark glass, like macOS's Dock. */
 	static final int DOCK_BAR = 0xC81C2129;
 	/** A missing icon's placeholder tint. */
@@ -118,6 +123,7 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		st.dockIcons.clear();
 		st.dockHover = -1;
 		st.dockLabel = "";
+		st.cursor = false;
 		if (spec == null) {
 			return;
 		}
@@ -150,8 +156,15 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			st.handles = true;
 			st.hoverCorner = hover.corner();
 		}
-		// The mini Dock: only the owner's client draws it (the icons are theirs), only on a live Extend screen. The
-		// crosshair is the pointer: no cursor is drawn (Carter).
+		// Work mode: the real Mac cursor, where the helper says it is, on the hologram that shows its display (the
+		// capture leaves the cursor out; the system cursor is hidden meanwhile).
+		double[] cursor = isOwner && st.look == State.LIVE ? PointerClient.cursorOn(spec) : null;
+		if (cursor != null) {
+			st.cursor = true;
+			st.cursorU = (float) cursor[0];
+			st.cursorV = (float) cursor[1];
+		}
+		// The mini Dock: only the owner's client draws it (the icons are theirs), only on a live Extend screen.
 		PointerPort port = isOwner && st.look == State.LIVE && Dock.on(spec, true) ? PointerClient.currentPort() : null;
 		List<DockItem> items = Dock.items(port);
 		if (port != null && items != null) {
@@ -241,6 +254,15 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		DockLayout dock = st.dock;
 		if (dock != null) {
 			submitDock(poseStack, collector.order(5), st, dock, hw, hh);
+		}
+		if (st.cursor) {
+			float ch = Math.max(0.035f, 2 * hh * CURSOR_SHARE);
+			float cw = ch * (16f / 24f);
+			float cx = (st.cursorU - 0.5f) * 2 * hw;
+			float cy = (0.5f - st.cursorV) * 2 * hh;
+			collector.order(5).submitCustomGeometry(poseStack, RenderTypes.text(CURSOR), (pose, buf) -> {
+				textured(buf, pose, cx, cy - ch, cx + cw, cy, 0.009f, 0f, 0f, 1f, 1f, 0xFFFFFFFF);
+			});
 		}
 		poseStack.popPose();
 

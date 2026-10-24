@@ -5,10 +5,13 @@ import local.carter.office.core.Vec3d;
 
 /** How often to capture one of the player's own screens (pure logic for {@link OwnScreens}). */
 public final class CaptureRate {
-	/** While the hologram is on screen. */
-	public static final int VISIBLE_FPS = 5;
-	/** While the player works on it (zoomed in). */
-	public static final int ZOOMED_FPS = 30;
+	/**
+	 * While the hologram is on screen. Measured through the real helper (inputprobe --latency, laptop-round2-probe.log):
+	 * at 5 fps a change took 143 ms (median, p90 209) to arrive; at 30 fps 32 ms (p90 45); at 60 fps 33 ms (p90 40).
+	 */
+	public static final int VISIBLE_FPS = 30;
+	/** The screen the real cursor is on while working (work mode), or the one zoomed into (Windows). */
+	public static final int ZOOMED_FPS = 60;
 	/** Same as the hologram renderer's view distance. */
 	public static final double VIEW_DISTANCE = 64.0;
 
@@ -47,6 +50,18 @@ public final class CaptureRate {
 	public static int fps(final boolean visible, final boolean zoomed) {
 		if (zoomed) {
 			return ZOOMED_FPS;
+		}
+		return visible ? VISIBLE_FPS : 0;
+	}
+
+	/**
+	 * Own screens: zoomed in (Windows) or the real cursor on it while working → 60, even before it is in view (the view
+	 * follows the cursor there, so it must not show a picture a second old when it arrives); else visible → 30, not
+	 * visible → 0. Only one screen at a time runs at 60.
+	 */
+	public static int fps(final boolean visible, final boolean zoomed, final boolean cursorHere) {
+		if (zoomed || cursorHere) {
+			return ZOOMED_FPS; // the cursor's screen even before it is in view: the view follows the cursor there at once
 		}
 		return visible ? VISIBLE_FPS : 0;
 	}

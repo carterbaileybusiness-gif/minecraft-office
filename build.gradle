@@ -169,6 +169,24 @@ if (System.getenv('OFFICE_GRAPHICS_BACKEND')) {
 	}
 }
 
+// Opt-in measurements in the client gametest (Mac, fix round A): in-game fps / latency in work mode, with the real helper.
+//   ./gradlew runClientGameTest -Doffice.measure=true [-Doffice.helperPath=<OfficeHelper.app>] [-Doffice.frameStats=true]
+loom.runs.matching { it.name == 'clientGameTest' }.configureEach {
+	['office.measure', 'office.helperPath', 'office.frameStats'].each { name ->
+		def value = System.getProperty(name)
+		if (value != null) {
+			vmArg "-D${name}=${value}"
+		}
+	}
+}
+
+// Opt-in: extra mods on the gametest runtime for such a run, e.g. the pack's Dynamic FPS: -Doffice.extraMods=<dir of jars>
+if (System.getProperty('office.extraMods')) {
+	dependencies {
+		gametestRuntimeOnly fileTree(dir: System.getProperty('office.extraMods'), include: '*.jar')
+	}
+}
+
 // Loom registers runGameTest / runClientGameTest; expose the spellings used by CI and docs too.
 tasks.register('runGametest') {
 	group = 'verification'

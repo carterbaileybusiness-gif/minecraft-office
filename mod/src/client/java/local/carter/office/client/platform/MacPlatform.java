@@ -65,6 +65,15 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  */
 public final class MacPlatform implements Platform {
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
+	/** Measurements (client GameTest): make Minecraft inactive for real (false) or active again (true). Main thread. */
+	public static void setActiveForTesting(final boolean active) {
+		if (active) {
+			MacApp.activate(true);
+		} else {
+			MacApp.deactivate();
+		}
+	}
+
 	public static final String SCREEN_RECORDING_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 	public static final String ACCESSIBILITY_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
@@ -101,6 +110,7 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void register() {
 		helper.onStatusChange(this::statusChanged);
+		installBesideMirror();
 		HologramLook.setOwnDetailProvider(OwnScreens::ownDetail); // why a capture ended, under "Screens unavailable"
 		helper.onWindows(() -> {
 			if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
@@ -191,23 +201,14 @@ public final class MacPlatform implements Platform {
 		}
 
 		@Override
-		public void pointerDown(final PointerPoint p) {
-			helper.pointerDown(p);
+		public void workBegin(final PointerPoint p, final PointerButton button) {
+			helper.workBegin(p, button);
 		}
 
 		@Override
-		public void pointerMove(final PointerPoint p) {
-			helper.pointerMove(p);
-		}
-
-		@Override
-		public void pointerUp(final PointerPoint p) {
-			helper.pointerUp(p);
-		}
-
-		@Override
-		public void click(final PointerPoint p, final PointerButton button) {
-			helper.click(p, button);
+		public int @Nullable [] workCursor() {
+			HelperProtocol.Cursor c = helper.cursor();
+			return c == null ? null : new int[] {c.slot(), c.x(), c.y(), c.w(), c.h()};
 		}
 
 		@Override
@@ -221,18 +222,8 @@ public final class MacPlatform implements Platform {
 		}
 
 		@Override
-		public int[] drainDragDelta() {
-			return helper.drainDragDelta();
-		}
-
-		@Override
 		public void onTypingExit(final java.util.function.Consumer<String> listener) {
 			helper.onTypingExit(listener);
-		}
-
-		@Override
-		public void onDragEnded(final java.util.function.Consumer<String> listener) {
-			helper.onDragEnded(listener);
 		}
 
 		@Override
@@ -417,6 +408,68 @@ public final class MacPlatform implements Platform {
 				Component.literal("This downloads the small Minecraft Office helper app (" + HelperInstaller.sizeLabel(asset.size())
 						+ ") from GitHub."),
 				Component.literal("Yes"), Component.literal("Not now")));
+	}
+
+	/**
+	 * A new Extend hologram the player just placed goes beside their Mirror, on the side the helper put its display in
+	 * the arrangement (left when a real monitor takes the right), and chat says which edge of the Mirror leads there
+	 * (spec 5.10 round 2 review). The same "just placed by me" rule as Windows' switch to Mirror ({@link
+	 * PlacementDefault}); the move is a normal MoveHologram, which the server checks as any other.
+	 */
+	private void installBesideMirror() {
+		PlacementDefault placed = new PlacementDefault();
+		net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, level, hand, hit) -> {
+			if (level.isClientSide() && player.getItemInHand(hand).is(local.carter.office.hologram.OfficeBlocks.HOLOGRAM_EMITTER_ITEM)) {
+				net.minecraft.core.BlockPos bp = hit.getBlockPos();
+				placed.used(bp.getX(), bp.getY(), bp.getZ(), System.nanoTime() / 1_000_000);
+			}
+			return net.minecraft.world.InteractionResult.PASS;
+		});
+		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+			if (mc.player == null || mc.getConnection() == null) {
+				return;
+			}
+			java.util.UUID me = mc.player.getUUID();
+			long now = System.nanoTime() / 1_000_000;
+			for (HologramBlockEntity be : HologramTracker.loaded()) {
+				HologramSpec spec = be.spec();
+				net.minecraft.core.BlockPos pos = be.getBlockPos();
+				if (spec == null || !placed.shouldSwitch(be.hologramId(), spec, me.equals(spec.owner()), pos.getX(), pos.getY(), pos.getZ(), now)) {
+					continue;
+				}
+				boolean left = "left".equals(helper.displaySide());
+				HologramBlockEntity mirror = nearestOwnMirror(me, pos);
+				if (mirror != null) {
+					net.minecraft.core.BlockPos mp = mirror.getBlockPos();
+					BesideMirror.Placement at = BesideMirror.place(new local.carter.office.core.Vec3d(mp.getX(), mp.getY(), mp.getZ()),
+							mirror.spec(), new local.carter.office.core.Vec3d(pos.getX(), pos.getY(), pos.getZ()), spec, left);
+					if (at != null) {
+						net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.send(
+								new local.carter.office.net.OfficePayloads.MoveHologram(pos, at.offX(), at.offY(), at.offZ(), at.yaw()));
+						LOGGER.info("Office: display {} hologram placed {} of the Mirror", spec.displaySlot(), left ? "left" : "right");
+					}
+				}
+				chat(Component.literal(BesideMirror.hint(spec.displaySlot(), left)).withStyle(ChatFormatting.AQUA));
+			}
+		});
+	}
+
+	/** The player's Mirror hologram nearest to {@code pos}, or null. */
+	private static @Nullable HologramBlockEntity nearestOwnMirror(final java.util.UUID me, final net.minecraft.core.BlockPos pos) {
+		HologramBlockEntity best = null;
+		double bestDistance = Double.MAX_VALUE;
+		for (HologramBlockEntity be : HologramTracker.loaded()) {
+			HologramSpec s = be.spec();
+			if (s == null || s.mode() != Mode.MIRROR || !me.equals(s.owner())) {
+				continue;
+			}
+			double d = be.getBlockPos().distSqr(pos);
+			if (d < bestDistance) {
+				bestDistance = d;
+				best = be;
+			}
+		}
+		return best;
 	}
 
 	/** Once a second: an own Mirror hologram while Minecraft is in its own full-screen Space gets one chat hint. */

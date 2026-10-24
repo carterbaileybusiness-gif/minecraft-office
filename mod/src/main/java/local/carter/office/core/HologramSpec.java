@@ -42,6 +42,18 @@ public record HologramSpec(UUID owner, Shape shape, Mode mode, Privacy privacy, 
         return new HologramSpec(owner, shape, m, privacy, displaySlot, windowKey, width, offX, offY, offZ, yaw);
     }
 
+    public HologramSpec withPrivacy(Privacy p) {
+        return new HologramSpec(owner, shape, mode, p, displaySlot, windowKey, width, offX, offY, offZ, yaw);
+    }
+
+    /**
+     * Who sees a new hologram (spec 5.10 round 2): a Mirror shows your whole screen, so it starts Private (only you); an
+     * Extend or Window hologram starts Public, as before. Settings change it any time.
+     */
+    public static Privacy defaultPrivacy(Mode mode) {
+        return mode == Mode.MIRROR ? Privacy.PRIVATE : Privacy.PUBLIC;
+    }
+
     /** Plain-types codec (strings, numbers, lists) that the caller maps onto NBT. */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new HashMap<>();

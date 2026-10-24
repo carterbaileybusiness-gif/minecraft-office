@@ -100,7 +100,7 @@ public class HologramGameTests {
 		h.assertValueEqual(s.owner(), a.getUUID(), "owner");
 		h.assertValueEqual(s.shape(), Shape.WIDE_16_9, "shape");
 		h.assertValueEqual(s.mode(), Mode.MIRROR, "mode (the first hologram is your own screen, spec 5.10)");
-		h.assertValueEqual(s.privacy(), Privacy.PUBLIC, "privacy");
+		h.assertValueEqual(s.privacy(), Privacy.PRIVATE, "privacy (a Mirror starts Private: it shows your whole screen)");
 		h.assertValueEqual(s.width(), 2.0, "width");
 		h.assertValueEqual(s.displaySlot(), 1, "displaySlot");
 		h.assertTrue(s.windowKey() == null, "windowKey null");
@@ -131,6 +131,8 @@ public class HologramGameTests {
 		h.assertValueEqual(third.mode(), Mode.EXTEND, "third: Extend");
 		h.assertValueEqual(third.displaySlot(), 3, "third: display 3");
 		h.assertValueEqual(friends.mode(), Mode.MIRROR, "another player's first hologram mirrors their screen");
+		h.assertValueEqual(first.privacy(), Privacy.PRIVATE, "the Mirror starts Private");
+		h.assertValueEqual(second.privacy(), Privacy.PUBLIC, "an Extend screen starts Public, as before");
 		// Settings can still switch any of them; the index remembers it for the next placement.
 		BlockPos firstAbs = h.absolutePos(new BlockPos(1, 1, 1));
 		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(firstAbs, first.shape(), Mode.WINDOW, first.privacy(),
@@ -141,6 +143,24 @@ public class HologramGameTests {
 		HologramSpec fifth = place(h, a, new BlockPos(3, 1, 3)).spec();
 		h.assertValueEqual(fifth.mode(), Mode.EXTEND, "fifth: Extend");
 		h.assertValueEqual(fifth.displaySlot(), 4, "fifth: display 4 (1 is the Mirror's, 2 and 3 taken)");
+		h.succeed();
+	}
+
+	/** Switching a screen to Mirror (your whole screen) makes it Private; afterwards it can be made Public on purpose. */
+	@GameTest
+	public void switchingToMirrorMakesItPrivate(GameTestHelper h) {
+		ServerPlayer a = survivalPlayer(h, new BlockPos(1, 0, 5));
+		place(h, a, new BlockPos(1, 1, 1)); // the Mirror
+		HologramBlockEntity be = place(h, a, new BlockPos(3, 1, 1)); // Extend, Public
+		BlockPos abs = h.absolutePos(new BlockPos(3, 1, 1));
+		HologramSpec s = be.spec();
+		h.assertValueEqual(s.privacy(), Privacy.PUBLIC, "an Extend screen starts Public");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(abs, s.shape(), Mode.MIRROR, Privacy.PUBLIC, s.displaySlot(), null)),
+				"switch to Mirror");
+		h.assertValueEqual(be.spec().privacy(), Privacy.PRIVATE, "becoming a Mirror makes it Private");
+		h.assertTrue(HologramActions.apply(a, new OfficePayloads.UpdateHologram(abs, s.shape(), Mode.MIRROR, Privacy.PUBLIC, s.displaySlot(), null)),
+				"make the Mirror Public on purpose");
+		h.assertValueEqual(be.spec().privacy(), Privacy.PUBLIC, "an existing Mirror can be made Public");
 		h.succeed();
 	}
 

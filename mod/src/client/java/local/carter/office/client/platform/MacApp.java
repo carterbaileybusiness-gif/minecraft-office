@@ -91,4 +91,24 @@ final class MacApp {
 			LOGGER.debug("MacApp: couldn't activate Minecraft: {}", e.toString());
 		}
 	}
+
+	/** Measurements: {@code [NSApp deactivate]} — Minecraft stops being the active app (as when work mode hands a Mac app the keyboard). */
+	static void deactivate() {
+		if (!Platform.isMac()) {
+			return;
+		}
+		try {
+			LibC libc = Native.load("c", LibC.class);
+			if (libc.pthread_main_np() != 1) {
+				return;
+			}
+			ObjC objc = Native.load("objc", ObjC.class);
+			Pointer app = objc.objc_msgSend(objc.objc_getClass("NSApplication"), objc.sel_registerName("sharedApplication"));
+			if (app != null) {
+				objc.objc_msgSend(app, objc.sel_registerName("deactivate"));
+			}
+		} catch (Throwable e) {
+			LOGGER.debug("MacApp: couldn't deactivate Minecraft: {}", e.toString());
+		}
+	}
 }

@@ -38,6 +38,12 @@ import ScreenCaptureKit
             return bounds.isEmpty ? nil : (bounds, live.spec.width, live.spec.height)
         }
         input.mainBounds = { CGDisplayBounds(CGMainDisplayID()) }
+        CursorVeil.log = Log.write
+        input.cursorDisplays = { [weak self] in
+            guard let self else { return [] }
+            return self.displays.displays.map { (slot: $0.key, bounds: CGDisplayBounds($0.value.displayID), width: $0.value.spec.width,
+                                                  height: $0.value.spec.height) }
+        }
         launcher.send = { [weak self] message in self?.server.send(message) }
         launcher.display = { [weak self] slot in
             guard let live = self?.displays.displays[slot] else { return nil }
@@ -106,10 +112,11 @@ import ScreenCaptureKit
         case .removeDisplay(let p): removeDisplay(slot: p.slot)
         case .capture(let p): capture(p)
         case .stop(let p): stopCapture(surface: p.surface)
+        case .rate(let p): captures[p.surface]?.setRate(p.fps)
         case .zoomIn(let p): zoomIn(p)
         case .zoomOut: endZoom(notifyMod: false)
         case .requestPermissions: requestPermissions()
-        case .pointerDown, .pointerMove, .pointerUp, .click, .scroll, .exitTyping:
+        case .pointerDown, .pointerMove, .pointerUp, .click, .scroll, .exitTyping, .workBegin:
             if !AXIsProcessTrusted() { askAccessibilityOnce() }
             input.handle(message)
         case .listApps:
@@ -124,7 +131,7 @@ import ScreenCaptureKit
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
-             .apps, .icons, .appResult, .secureInput:
+             .apps, .icons, .appResult, .secureInput, .cursor:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
     }
@@ -142,6 +149,7 @@ import ScreenCaptureKit
         catch let e as DisplaySpecError { sendError(e.code, e.message); return }
         catch { sendError("bad_request", "\(error)"); return }
         let id: CGDirectDisplayID
+        let identical = displays.displays[p.slot]?.spec == spec
         do {
             if let old = displays.displays[p.slot], old.spec != spec { endCaptures(onSlot: p.slot, reason: "display removed") }
             id = try displays.create(spec)
@@ -149,13 +157,22 @@ import ScreenCaptureKit
             sendError("display_failed", "\(spec.name): \(error)")
             return
         }
+        if identical { displays.nothingCreated() } // nothing new: no shove to undo
         Task {
             guard await VirtualDisplays.waitOnline(id) else {
+                if !identical { self.displays.createEnded(slot: spec.slot) }
                 self.sendError("display_failed", "\(spec.name) did not come online")
                 return
             }
-            guard self.displays.displayID(slot: spec.slot) == id else { return } // removed meanwhile
-            self.server.send(.display(DisplayPayload(slot: spec.slot, displayId: id, w: spec.width, h: spec.height)))
+            guard self.displays.displayID(slot: spec.slot) == id else { // removed meanwhile
+                if !identical { self.displays.createEnded(slot: spec.slot) }
+                return
+            }
+            self.displays.arrange(after: identical ? nil : spec.slot) // next to the main display, like monitors next to a laptop
+            let origin = CGDisplayBounds(id).origin, main = CGDisplayBounds(CGMainDisplayID())
+            self.server.send(.display(DisplayPayload(slot: spec.slot, displayId: id, w: spec.width, h: spec.height,
+                                                     x: Int(origin.x), y: Int(origin.y),
+                                                     side: origin.x < main.minX ? "left" : "right")))
         }
     }
 
@@ -163,6 +180,7 @@ import ScreenCaptureKit
         guard (1...DisplaySpec.maxSlots).contains(slot) else { sendError("bad_slot", "slot must be 1...\(DisplaySpec.maxSlots), got \(slot)"); return }
         endCaptures(onSlot: slot, reason: "display removed")
         displays.remove(slot: slot)
+        displays.arrange() // the rest close up next to the main display
     }
 
     private func displayGone(slot: Int) { endCaptures(onSlot: slot, reason: "display removed") }

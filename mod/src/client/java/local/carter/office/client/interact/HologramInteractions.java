@@ -58,7 +58,8 @@ import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
  */
 public final class HologramInteractions {
 	/** Shown in the action bar while you look at your own hologram with an emitter in the main hand. */
-	public static final String HINT = "Hold right-click on a corner and drag to resize · Scroll to resize · Shift + hold right-click to move";
+	/** Shown while holding an emitter at your hologram (kept short: it must fit a small game window). */
+	public static final String HINT = "Resize: drag a corner (hold right-click) · Move: Shift + hold right-click";
 	/** Re-send the hint this often (ticks) while hovering, so it doesn't fade. */
 	private static final int HINT_EVERY_TICKS = 40;
 
