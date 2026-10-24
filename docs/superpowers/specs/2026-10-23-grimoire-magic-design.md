@@ -119,3 +119,17 @@ timing, file layout, test strategy (pure logic unit tests + server GameTests + c
 ## 8. Order
 
 After the monitor work (in-world interaction) is done and Carter has tested it **(Carter)**.
+
+## Carter's play-test rulings (2026-10-24)
+
+- **Animals are fair game.** Pulls, lifts, roots and damage from spells affect hostile mobs **and animals** (cows, pigs,
+  sheep, chickens, etc.). Still never: players, tamed pets, villagers and wandering traders, golems, **named mobs** (name
+  tag), armor stands, display/hanging entities, vehicles, bosses for control effects. Supersedes "control effects are
+  Enemy-only".
+- **Charge matters ~2×.** A full charge is about **2× a tap** in size/radius/reach and in damage (durations scale too),
+  and its circle and effects look visibly bigger; it costs **2× the tap's mana** (was 1.5×). Ultimates unchanged (always
+  charge 1, base mana).
+- **Every spell must visibly do something** in a normal situation (open field, a few animals or mobs around, day or
+  night). A spell whose only targets are absent should still show its effect on the world (particles, sound, pushed
+  items/animals), never look like a dud.
+- **Own charge circle is centred on the crosshair** in first person (others see it at chest height).
