@@ -69,7 +69,7 @@ enum MessageType: UInt8, CaseIterable {
     case apps = 75, icons = 76, appResult = 77
     /// While typing: secure input (a password field) went on / off — Esc can't be seen then; ⌘-Tab still returns.
     case secureInput = 78
-    /// Work mode: where the real cursor is (for the hologram to draw it), about 120 times a second while it moves.
+    /// Work mode: where the real cursor is (for the hologram to draw it), on every real mouse event while it moves.
     case cursor = 79
     /// Work mode, walk while dragging (round 3): the movement keys held for Minecraft (WASD, Space, Shift taken from the
     /// app while the mouse button is held), sent whenever that set changes; empty = stop.

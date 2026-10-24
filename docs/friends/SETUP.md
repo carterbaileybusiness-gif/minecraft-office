@@ -203,7 +203,8 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
      you. On a real second monitor it holds still.
    - **Walk while dragging:** hold the mouse button (dragging a window, say) and **W A S D / Space / Shift** walk you
      around, so you can carry a window to a screen further away. Let go of the button and those keys type into your app
-     again.
+     again. These are the keys in the W A S D / Space / Shift positions of your keyboard (on AZERTY: Z Q S D), whatever
+     your movement keys are set to in Minecraft.
    - Place a second screen and it moves next to your Mirror on the side your Mac put that display (chat says which edge
      of the Mirror to move the cursor across).
 7. **Work on it (Windows).** **Click your hologram.** The camera zooms in until it fills your view, and your real

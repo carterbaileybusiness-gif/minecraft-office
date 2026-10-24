@@ -30,6 +30,7 @@ import ScreenCaptureKit
         displays.log = Log.write; placement.log = Log.write; cursor.log = Log.write
         input.log = Log.write; launcher.log = Log.write
         input.send = { [weak self] message in self?.server.send(message) }
+        input.sendLatest = { [weak self] message in self?.server.sendLatest(message) }
         input.minecraftPid = { [weak self] in self?.minecraftPid }
         input.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
         input.display = { [weak self] slot in

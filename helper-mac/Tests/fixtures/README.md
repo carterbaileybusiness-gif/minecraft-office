@@ -128,12 +128,16 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   app activation and ten times a second), warps the real cursor to the point, waits for click-through on slot 0, brings
   the app there forward, then posts only a **down** if the physical button is still held (the hand finishes the press:
   real drags, the real release) or a **click** if it is already up. From then on the real mouse drives the real cursor;
-  the helper reports where it is about 120 times a second while it moves: `CURSOR {slot, x, y, w, h}` (slot 0 = the main
-  display in points, 1–4 = an Office display in its pixels, -1 = another monitor), on every real mouse event (round 3;
-  plus 30 times a second as a fallback). **Walk while dragging** (round 3): while a real mouse button is held, W A S D,
-  Space and Shift are taken from the app (swallowed by the key tap; Shift is also stripped from the app's events) and
-  reported as `WALK {keys}` whenever the set changes (forward, back, left, right, jump, sneak); the button's release
-  sends `WALK []` at once. A key taken stays taken until its key-up; a key already down in the app stays the app's.
+  the helper reports where it is on every real mouse event while it moves (round 3; plus 30 times a second as a
+  fallback): `CURSOR {slot, x, y, w, h}` (slot 0 = the main display in points, 1–4 = an Office display in its pixels,
+  -1 = another monitor). CURSOR and WALK are sent latest-only: one queued behind a slow write is replaced by a newer one.
+  **Walk while dragging** (round 3): while a real mouse button is held, the keys at the W A S D, Space and Shift
+  positions (key codes 13 0 1 2 49, Shift from the device flag bits) are taken from the app (swallowed by the key tap;
+  Shift is also stripped from the app's mouse, scroll and key events — an app that polls the modifier state itself may
+  still see it) and reported as `WALK {keys}` whenever the set changes (forward, back, left, right, jump, sneak). The
+  button's release (with no other button still down) sends `WALK []` at once. A key taken stays taken until its
+  key-up; a key already down in the app stays the app's. The state is resynced from the hardware (buttons, keys) 30
+  times a second and whenever a tap is re-enabled, and secure input (a password field) suspends walking (`WALK []`).
   On another monitor (slot -1: no
   hologram shows it) the system cursor is shown, and hidden again when it comes back. Esc (the tap) or Minecraft
   becoming active end it (`TYPING_EXIT esc|minecraft`), other apps coming forward do not; EXIT_TYPING ends it from the

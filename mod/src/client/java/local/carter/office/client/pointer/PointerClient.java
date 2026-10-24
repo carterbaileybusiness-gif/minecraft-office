@@ -118,6 +118,10 @@ public final class PointerClient {
 	private static volatile boolean cursorAtFrameStart;
 	/** Walk while dragging: the movement keys the helper holds for Minecraft now (names), and those set down by us. */
 	private java.util.Set<String> walking = java.util.Set.of();
+	/** Frames so far, and the cursor as drawn this frame (taken at the frame's first draw). */
+	private long frameNo;
+	private long cursorSnapFrame = -1;
+	private int @Nullable [] cursorSnap;
 	private final java.util.Set<String> walkApplied = new java.util.HashSet<>();
 	/** When the view last followed the cursor (System.nanoTime), for the smoothing; 0 = not following. */
 	private long followNanos;
@@ -220,11 +224,18 @@ public final class PointerClient {
 	}
 
 	private void walkKey(final net.minecraft.client.KeyMapping key, final String name, final java.util.Set<String> want) {
+		// the down state written directly: KeyMapping.setDown on a toggle key (Sneak: Toggle) flips it on every call
+		local.carter.office.mixin.client.KeyMappingAccessor raw = (local.carter.office.mixin.client.KeyMappingAccessor) key;
 		if (want.contains(name)) {
-			key.setDown(true); // every tick: vanilla may release all keys on a focus or screen change
-			walkApplied.add(name);
+			if (!walkApplied.contains(name)) {
+				if (key.isDown()) {
+					return; // already down by the player's own doing: theirs, we never release it
+				}
+				walkApplied.add(name);
+			}
+			raw.office$setDownRaw(true); // every tick: vanilla may release all keys on a focus or screen change
 		} else if (walkApplied.remove(name)) {
-			key.setDown(false);
+			raw.office$setDownRaw(false);
 		}
 	}
 
@@ -300,9 +311,14 @@ public final class PointerClient {
 		if (!c.typing.active()) {
 			return null;
 		}
-		// the newest report at draw time (round 3: not the one from the frame's start), unsmoothed
-		PointerPort port = cursorAtFrameStart ? null : port();
-		int[] now = port != null ? port.workCursor() : c.cursor;
+		// the newest report at draw time (round 3: not the one from the frame's start), unsmoothed; one snapshot per frame,
+		// taken by its first draw, so every hologram of the frame shows the same position
+		if (c.cursorSnapFrame != c.frameNo) {
+			PointerPort port = cursorAtFrameStart ? null : port();
+			c.cursorSnap = port != null ? port.workCursor() : c.cursor;
+			c.cursorSnapFrame = c.frameNo;
+		}
+		int[] now = c.cursorSnap;
 		double[] at = WorkCursor.on(spec, now);
 		if (at != null && now != null) {
 			local.carter.office.client.render.FrameStats.cursorDrawn(now[1], now[2]);
@@ -352,6 +368,7 @@ public final class PointerClient {
 	}
 
 	private void onFrame() {
+		frameNo++;
 		Minecraft mc = Minecraft.getInstance();
 		PointerPort port = port();
 		if (port == null || mc.player == null || mc.level == null) {

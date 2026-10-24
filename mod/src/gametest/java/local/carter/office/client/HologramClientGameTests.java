@@ -805,6 +805,13 @@ public class HologramClientGameTests implements FabricClientGameTest {
 						+ " (hologram centre " + hologramCenter(spec) + ", emitter " + emitter + ")");
 			}
 
+			// a WALK outside work mode (a late one) presses nothing
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("forward")));
+			context.waitTicks(2);
+			if (context.computeOnClient(mc -> mc.options.keyUp.isDown()) || !context.computeOnClient(mc -> PointerClient.walkingForTesting()).isEmpty()) {
+				throw new AssertionError("WALK outside work mode must be ignored");
+			}
+
 			// 1. work mode: a click on display 1's hologram → floating + click-through first, then WORK_BEGIN at its middle
 			fake.calls.clear();
 			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
@@ -882,8 +889,24 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			if (context.computeOnClient(mc -> mc.player.position()).subtract(stopped).horizontalDistance() > 0.01) {
 				throw new AssertionError("after WALK [] the player stands still");
 			}
+			// Sneak: Toggle on: sneak stays held (no flip each tick) while reported, and is off after the release
+			context.runOnClient(mc -> mc.options.toggleCrouch().set(true));
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("sneak")));
+			for (int i = 0; i < 4; i++) {
+				context.waitTick();
+				if (!context.computeOnClient(mc -> mc.options.keyShift.isDown() && mc.player.isShiftKeyDown())) {
+					throw new AssertionError("with Sneak: Toggle, WALK [sneak] must keep the player sneaking every tick (tick " + i + ")");
+				}
+			}
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of()));
+			context.waitTicks(2);
+			if (context.computeOnClient(mc -> mc.options.keyShift.isDown() || mc.player.isShiftKeyDown())) {
+				throw new AssertionError("with Sneak: Toggle, releasing must not leave sneak on");
+			}
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("sneak")));
+			context.waitTicks(2);
 			// walking again, then work mode ends (Esc): nothing stays pressed
-			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("left", "jump")));
+			context.runOnClient(mc -> fake.walk.accept(java.util.Set.of("left", "jump", "sneak")));
 			context.waitTicks(2);
 			sp.getServer().runOnServer(server -> player(server).teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5));
 			context.waitTicks(2);
@@ -903,8 +926,15 @@ public class HologramClientGameTests implements FabricClientGameTest {
 						+ context.computeOnClient(mc -> PointerClient.working()) + ", pressed " + context.computeOnClient(mc -> PointerClient.walkingForTesting())
 						+ ", key " + context.computeOnClient(mc -> mc.options.keyLeft.saveString()) + ")");
 			}
-			// Esc (the helper's TYPING_EXIT): the camera turns again, Minecraft's window is normal again, no cursor
-			context.runOnClient(mc -> fake.typingExit.accept("esc"));
+			// Esc (the helper's TYPING_EXIT): the camera turns again, Minecraft's window is normal again, no cursor; the
+			// movement keys are released right away, in the same tick (not at the next one)
+			boolean stillPressed = context.computeOnClient(mc -> {
+				fake.typingExit.accept("esc");
+				return mc.options.keyLeft.isDown() || mc.options.keyJump.isDown() || mc.options.keyShift.isDown();
+			});
+			if (stillPressed) {
+				throw new AssertionError("work mode ending must release the movement keys at once (same tick)");
+			}
 			context.runOnClient(mc -> PointerClient.setFocusForTesting(null));
 			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
 			context.waitTicks(3);
@@ -912,9 +942,11 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			if (!"layer normal".equals(lastLayer)) {
 				throw new AssertionError("after Esc Minecraft's window must be normal again, sent " + fake.calls);
 			}
-			if (context.computeOnClient(mc -> mc.options.keyLeft.isDown() || mc.options.keyJump.isDown())) {
-				throw new AssertionError("work mode ending must release the movement keys it pressed");
+			if (context.computeOnClient(mc -> mc.options.keyLeft.isDown() || mc.options.keyJump.isDown() || mc.options.keyShift.isDown()
+					|| mc.player.isShiftKeyDown())) {
+				throw new AssertionError("work mode ending must release the movement keys it pressed (Sneak: Toggle too)");
 			}
+			context.runOnClient(mc -> mc.options.toggleCrouch().set(false));
 			context.waitTicks(10); // the walk's momentum dies down, then back to the spot (twice: a moving client drifts once)
 			sp.getServer().runOnServer(server -> player(server).teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5));
 			context.waitTicks(10);

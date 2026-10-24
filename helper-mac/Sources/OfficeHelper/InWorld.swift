@@ -15,6 +15,8 @@ import CoreGraphics
 /// Everything needs Accessibility (posting events, event taps).
 @MainActor final class InWorldInput {
     var send: (Message) -> Void = { _ in }
+    /// For CURSOR / WALK from the taps: never waits; a newer one replaces one still queued.
+    var sendLatest: (Message) -> Void = { _ in }
     var log: (String) -> Void = { _ in }
     var minecraftPid: () -> pid_t? = { nil }
     /// Bounds (global points) and pixel size of a slot's virtual display.
@@ -211,7 +213,7 @@ import CoreGraphics
     private func startWorkTap() {
         if workTap == nil {
             let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp,
-                                        .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged]
+                                        .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .scrollWheel]
             let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
             workTap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                         eventsOfInterest: mask, callback: inWorldWorkTap, userInfo: nil)
@@ -224,25 +226,41 @@ import CoreGraphics
     /// the app's drag. Never swallows.
     fileprivate func workMouse(_ event: CGEvent, type: CGEventType) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let workTap, typing.active, typing.work { CGEvent.tapEnable(tap: workTap, enable: true) }
+            if let workTap, typing.active, typing.work {
+                CGEvent.tapEnable(tap: workTap, enable: true)
+                resyncWalk() // events were missed while it was off
+            }
             return
         }
         guard typing.active, typing.work else { return }
         switch type {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             sendWalk(walk.button(held: true))
+        case .mouseMoved:
+            sendWalk(walk.button(held: false)) // a plain move: no button is down
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
-            sendWalk(walk.button(held: false)) // stops at once, even with W still held
+            sendWalk(walk.button(held: Self.anyButtonDown(except: type))) // stops at once unless another button is down
         default:
             break
         }
-        if walk.shiftTaken { event.flags.remove(.maskShift) } // Shift is sneaking, not shift-dragging in the app
-        reportCursor(at: event.location)
+        if walk.shiftTaken { event.flags.remove(.maskShift) } // Shift is sneaking, not shift-dragging / -scrolling in the app
+        if type != .scrollWheel { reportCursor(at: event.location) }
+    }
+
+    /// A mouse button still down (an up event's own button doesn't count: the hardware state may lag it).
+    static func anyButtonDown(except up: CGEventType? = nil) -> Bool {
+        let buttons: [(CGMouseButton, CGEventType)] = [(.left, .leftMouseUp), (.right, .rightMouseUp), (.center, .otherMouseUp)]
+        return buttons.contains { $0.1 != up && CGEventSource.buttonState(.hidSystemState, button: $0.0) }
+    }
+
+    /// The walk state from the hardware: the buttons, and keys that are really down (a missed up can't leave one stuck).
+    private func resyncWalk() {
+        sendWalk(walk.resync(buttonHeld: Self.anyButtonDown(), isKeyDown: { CGEventSource.keyState(.hidSystemState, key: $0) }))
     }
 
     private func sendWalk(_ moves: Set<WalkKeys.Move>?) {
         guard let moves else { return }
-        send(.walk(WalkPayload(keys: WalkKeys.names(moves))))
+        sendLatest(.walk(WalkPayload(keys: WalkKeys.names(moves))))
     }
 
     private func reportCursor(at point: CGPoint? = nil) {
@@ -253,9 +271,10 @@ import CoreGraphics
             // on a real monitor (none of the player's screens) the system cursor is the only one they can see
             if here.slot < 0 { CursorVeil.show() } else if lastCursor.map({ $0.slot < 0 }) ?? true { CursorVeil.hide() }
             lastCursor = here
-            send(.cursor(here))
+            sendLatest(.cursor(here))
         }
         if point == nil {
+            resyncWalk() // 30 times a second: the hardware's word on buttons and keys
             cursorTicks += 1
             if cursorTicks % 3 == 0 { CursorVeil.reassert() } // ten times a second: an app setting its cursor (I-beam) shows it again
         }
@@ -297,6 +316,7 @@ import CoreGraphics
         guard typing.active else { secureTimer?.invalidate(); secureTimer = nil; return }
         if let on = secure.sample(IsSecureEventInputEnabled()) {
             log("typing: secure input \(on ? "on" : "off")")
+            sendWalk(walk.setSuspended(on)) // a password field's keys are its own: no walking (WALK [])
             send(.secureInput(SecureInputPayload(on: on)))
         }
     }
@@ -360,13 +380,16 @@ import CoreGraphics
     /// Key tap (main run loop). Returns true to swallow.
     fileprivate func key(_ event: CGEvent, type: CGEventType) -> Bool {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let keyTap, typing.active || typing.swallowingEscape { CGEvent.tapEnable(tap: keyTap, enable: true) }
+            if let keyTap, typing.active || typing.swallowingEscape {
+                CGEvent.tapEnable(tap: keyTap, enable: true)
+                if typing.active, typing.work { resyncWalk() } // key ups may have been missed
+            }
             return false
         }
         let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
         if typing.active, typing.work, !EventInjector.isInjected(event) {
             // walk while dragging: WASD / Space / Shift are Minecraft's while the button is held (WalkKeys)
-            let routed: (swallow: Bool, moves: Set<WalkKeys.Move>?) = type == .flagsChanged ? walk.modifier(code: code)
+            let routed: (swallow: Bool, moves: Set<WalkKeys.Move>?) = type == .flagsChanged ? walk.modifier(code: code, flags: event.flags.rawValue)
                 : (type == .keyDown || type == .keyUp) ? walk.key(code: code, down: type == .keyDown) : (false, nil)
             sendWalk(routed.moves)
             if routed.swallow { return true }
