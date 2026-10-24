@@ -58,6 +58,23 @@ public class SkillTreeClientGameTests implements FabricClientGameTest {
 			setGuiScale(context, 2);
 			context.waitTicks(8);
 			context.takeScreenshot("magic-tree-854x480-gui2");
+			// The narrowest GUIs with a fork's cards open (the review's sizes): 320 × 240, 427 × 240 and 480 × 270 (1080p on auto
+			// GUI scale), each with Fire Bolt III (cards to choose) and Fire Wall V (long names: Marching Wall, Backdraft).
+			int[][] narrow = {{640, 480, 2}, {854, 480, 2}, {1920, 1080, 4}};
+			for (int[] n : narrow) {
+				context.getInput().resizeWindow(n[0], n[1]);
+				setGuiScale(context, n[2]);
+				String size = (n[0] / n[2]) + "x" + (n[1] / n[2]);
+				context.runOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).treePage().select(0, 3, 1));
+				context.waitTicks(6);
+				context.takeScreenshot("magic-tree-fork-" + size);
+				context.runOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).treePage().select(1, 5, 2));
+				context.waitTicks(4);
+				context.takeScreenshot("magic-tree-fork5-" + size);
+				context.runOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).treePage().select(2, 1, 0));
+				context.waitTicks(4);
+				context.takeScreenshot("magic-tree-bump-" + size);
+			}
 			context.getInput().resizeWindow(1920, 1080);
 			setGuiScale(context, 3);
 			// A fork rank: Fire Bolt III's two cards.
