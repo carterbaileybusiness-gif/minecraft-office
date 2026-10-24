@@ -1,8 +1,13 @@
 package local.carter.office.magic.spell.earth;
 
-/** Earth spells. The earth lane fills {@link #register()}; {@code MagicMod.init} calls it once. */
+import local.carter.office.magic.spell.SpellRegistry;
+
+/** Earth spells. {@code MagicMod.init} calls {@link #register()} once (both sides). */
 public final class EarthSpells {
 	private EarthSpells() {}
 
-	public static void register() {}
+	public static void register() {
+		SpellRegistry.register(new StoneBullet());
+		SpellRegistry.register(new EarthWall());
+	}
 }
