@@ -76,6 +76,34 @@ enum ArrangementTests {
                         .success([1: CGPoint(x: 1920, y: -1080)]), "touching a monitor only")
         }
 
+        run("SET_ORIGINS: the whole layout stays one piece with the main display (shared vector V7)") {
+            func request(_ origins: [(Int, Int, Int)]) -> SetOriginsPayload {
+                SetOriginsPayload(origins: origins.map { SlotOrigin(slot: $0.0, x: $0.1, y: $0.2) })
+            }
+            // V7: monitor LG attached only through Office 1 (main | 1 | LG); 1 moved left of main would cut LG off
+            let one: [Int: CGRect] = [1: rect(1440, 0)]
+            let lg = rect(3360, 0)
+            if case .failure(let why) = OriginRequest.check(request([(1, -1920, 0)]), live: one, fixed: [main, lg]) {
+                expect(why.message.contains("monitor would be cut off"), "V7: \(why)")
+            } else { expect(false, "V7 rejected") }
+            expectEqual(OriginRequest.check(request([(1, 1440, 0)]), live: one, fixed: [main, lg]),
+                        .success([1: CGPoint(x: 1440, y: 0)]), "V7 as it is: one piece")
+            // an Office display touching only a monitor that is itself cut off from main is not joined
+            if case .failure(let why) = OriginRequest.check(request([(1, 5280, 0)]), live: one, fixed: [main, lg]) {
+                expect(why.message.contains("display 1 must touch a screen"), "joined only to a cut-off monitor: \(why)")
+            } else { expect(false, "joined only to a cut-off monitor rejected") }
+            // the main display is never moved, even when it is an Office display
+            let mainOffice: [Int: CGRect] = [1: main, 2: rect(1440, 0)]
+            if case .failure(let why) = OriginRequest.check(request([(1, 0, -900)]), live: mainOffice, fixed: [rect(-1920, 0)], mainSlot: 1) {
+                expect(why.message.contains("display 1 is the main display"), "moving the main display: \(why)")
+            } else { expect(false, "moving the main display rejected") }
+            expectEqual(OriginRequest.check(request([(2, 0, -1080)]), live: mainOffice, fixed: [rect(-1920, 0)], mainSlot: 1),
+                        .success([2: CGPoint(x: 0, y: -1080)]), "another display around an Office main display")
+            if case .failure(let why) = OriginRequest.check(request([(2, 1440, 900)]), live: mainOffice, fixed: [rect(-1920, 0)], mainSlot: 1) {
+                expect(why.message.contains("display 2 must touch a screen"), "seeded from the Office main display: \(why)")
+            } else { expect(false, "touching only the main display's corner rejected") }
+        }
+
         run("arrangement file: round trip, per main display, garbage is empty") {
             var saved = SavedArrangement()
             saved.record(forMain: "MAIN-A", [1: CGPoint(x: 1440, y: 0)])

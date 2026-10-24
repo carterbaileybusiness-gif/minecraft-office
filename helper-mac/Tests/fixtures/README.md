@@ -195,9 +195,12 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   - LIST_DISPLAYS → `DISPLAYS {displays:[{id, slot, main, name?, x, y, w, h}]}`: every online screen, global points
     (top-left origin); slot 0 = a real monitor, 1–4 = that Office display; `main` = the main display.
   - SET_ORIGINS `{origins:[{slot, x, y}]}` moves the listed Office displays to those origins in one display
-    configuration. Each must not overlap any screen and must share ≥ 1 pt of edge with a screen (else
-    `ERROR bad_request` — "… overlaps …" / "… must touch a screen" — and nothing moves); then DISPLAYS. The helper
-    remembers the arrangement and uses it when it creates the displays again.
+    configuration. Each must not overlap any screen, the main display never moves (also when it is an Office
+    display), and the whole new layout — monitors and Office displays — must stay one piece joined to the main display
+    by edges sharing ≥ 1 pt (else `ERROR bad_request` — "… overlaps …" / "… must touch a screen" / "a monitor would be
+    cut off" / "… is the main display" — and nothing moves; shared vector V7 with the mod's `DisplaySnap.layoutValid`).
+    If macOS refuses any one move the whole configuration is cancelled (`ERROR display_failed`). Then DISPLAYS. The
+    helper remembers the arrangement and uses it when it creates the displays again.
   - IDENTIFY `{labels:[{display, label}]}` shows each label big on that screen for 3 s (click-through overlays);
     unknown ids are skipped. No reply.
   - `display` on CAPTURE kind `main` = mirror that monitor instead of the main display (Minecraft still excluded; a

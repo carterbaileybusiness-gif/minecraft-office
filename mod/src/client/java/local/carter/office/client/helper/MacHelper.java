@@ -451,6 +451,15 @@ public final class MacHelper implements HelperConnection.Listener {
 		return connected && w != null && w.has(HelperProtocol.FEATURE_SCREENS);
 	}
 
+	/**
+	 * Whether a Mirror of {@code wanted} must wait before it captures: a "screens" helper whose first DISPLAYS since
+	 * connecting hasn't come yet can't tell whether that monitor is plugged in, and capturing the main display meanwhile
+	 * would flash it on a Public Mirror meant to show another monitor. Never for the main display or an older helper.
+	 */
+	public boolean mirrorWaitsForScreens(final @Nullable String wanted) {
+		return wanted != null && supportsScreens() && helperScreens == null;
+	}
+
 	/** What {@link #screens} shows without a "screens" helper (called on the thread that asks for the screens). */
 	public void setFallbackScreens(final Supplier<List<Screen>> fallback) {
 		fallbackScreens = fallback;

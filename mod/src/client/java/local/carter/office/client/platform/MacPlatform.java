@@ -192,6 +192,16 @@ public final class MacPlatform implements Platform {
 		return helper.setOrigins(origins);
 	}
 
+	/** SET_ORIGINS refused (bad_request) or macOS refused it (display_failed): the helper's ERROR, then its DISPLAYS. */
+	@Override
+	public void onMoveRefused(final java.util.function.Consumer<@Nullable String> r) {
+		helper.onError(e -> {
+			if ("bad_request".equals(e.code()) || "display_failed".equals(e.code())) {
+				r.accept(e.message());
+			}
+		});
+	}
+
 	@Override
 	public boolean identifyScreens(final java.util.Map<String, String> labelsById) {
 		return helper.identify(labelsById);
@@ -244,6 +254,12 @@ public final class MacPlatform implements Platform {
 		@Override
 		public @Nullable String workCursorDisplay() {
 			return helper.workCursorDisplay();
+		}
+
+		@Override
+		public CursorReport workCursorReport() {
+			HelperProtocol.Cursor c = helper.cursor(); // one read: position and monitor from the same CURSOR
+			return c == null ? new CursorReport(null, null) : new CursorReport(new int[] {c.slot(), c.x(), c.y(), c.w(), c.h()}, c.display());
 		}
 
 		@Override

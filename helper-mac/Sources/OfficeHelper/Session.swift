@@ -229,9 +229,12 @@ import ScreenCaptureKit
     private func setOrigins(_ p: SetOriginsPayload) {
         let live = displays.displays.mapValues { CGDisplayBounds($0.displayID) }
         let ours = Set(displays.displays.values.map(\.displayID))
-        let fixed = ScreenCatalog.activeIDs().filter { !ours.contains($0) }.map { CGDisplayBounds($0) }
+        let mainID = CGMainDisplayID()
+        let mainSlot = displays.displays.first { $0.value.displayID == mainID }?.key // the user made an Office display main
+        let others = ScreenCatalog.activeIDs().filter { !ours.contains($0) && $0 != mainID }
+        let fixed = (mainSlot == nil ? [mainID] + others : others).map { CGDisplayBounds($0) } // the main display first
         let moves: [Int: CGPoint]
-        switch OriginRequest.check(p, live: live, fixed: fixed) {
+        switch OriginRequest.check(p, live: live, fixed: fixed, mainSlot: mainSlot) {
         case .failure(let problem):
             sendError("bad_request", problem.message)
             sendDisplays()

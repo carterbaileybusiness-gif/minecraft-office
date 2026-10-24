@@ -37,6 +37,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Util;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
@@ -145,6 +146,18 @@ public class HologramSettingsScreen extends Screen {
 					s.screensChanged();
 				}
 			});
+			Platform.current().onMoveRefused(message -> {
+				if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
+					s.moveRefused(message);
+				}
+			});
+		}
+	}
+
+	/** The helper refused or failed a move (its screen list follows): the map says so for a few seconds. Client thread. */
+	public void moveRefused(final @Nullable String message) {
+		if (mapModel != null && mapModel.failed(message, Util.getMillis())) {
+			mapChanged();
 		}
 	}
 
@@ -245,7 +258,7 @@ public class HologramSettingsScreen extends Screen {
 			note(left, y, "Shows the owner's screen");
 		} else if (mode == Mode.MIRROR) {
 			note(left, y, "Your screen, minus Minecraft");
-			addMap(left, y + LABEL, Platform.current().supportsZoom() ? "Zoom in to use your real desktop" : "Your laptop screen: click, type and drag here");
+			addMap(left, y + LABEL, Platform.current().supportsZoom() ? "Zoom in to use your real desktop" : "This screen: click, type and drag here");
 		} else if (mode == Mode.EXTEND && extendUnavailable) {
 			note(left, y, "Extend is coming soon here:");
 			note(left, y + LABEL, "pick Mirror or Window");
@@ -399,7 +412,7 @@ public class HologramSettingsScreen extends Screen {
 	private void applyMoves() {
 		DisplayMapModel model = mapModel;
 		if (model != null && model.canApply() && Platform.current().applyOrigins(model.pending())) {
-			model.applied();
+			model.applied(Util.getMillis()); // "Applying…" until the helper's screen list (or a refusal, or 2 s)
 			mapChanged();
 		}
 	}
@@ -563,6 +576,10 @@ public class HologramSettingsScreen extends Screen {
 		super.tick();
 		if (be.isRemoved() || be.spec() == null) {
 			onClose();
+			return;
+		}
+		if (mapModel != null && mapModel.tick(Util.getMillis())) {
+			mapChanged(); // an unanswered Apply timed out: Apply and drags unlock
 		}
 	}
 }

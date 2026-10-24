@@ -111,12 +111,12 @@ public final class StarterKit {
 		return new Replaced(replaced, hasCurrent);
 	}
 
-	/** Body of the handbook page with this title (what follows the bold title and blank line). */
 	/** Every handbook page title, in book order. */
 	public static List<String> pageTitles() {
 		return Arrays.stream(PAGES).map(page -> page[0]).toList();
 	}
 
+	/** Body of the handbook page with this title (what follows the bold title and blank line). */
 	public static String pageBody(final String title) {
 		for (String[] page : PAGES) {
 			if (page[0].equals(title)) {
