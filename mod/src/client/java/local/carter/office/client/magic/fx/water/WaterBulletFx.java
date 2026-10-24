@@ -28,6 +28,8 @@ import net.minecraft.world.phys.Vec3;
 public final class WaterBulletFx implements SpellFx {
 	/** The wake starts this far out, so the caster's view stays clear. */
 	private static final double CLEAR = 1.8;
+	/** Wake motes per tick, at most (with its two drip trails, about 12 particles a tick). */
+	private static final int MAX_WAKE = 9;
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
@@ -39,6 +41,8 @@ public final class WaterBulletFx implements SpellFx {
 		double radius = data.length > 1 ? data[1] : WaterBullet.RADIUS;
 		ProjectileSpec spec = new ProjectileSpec(origin, dir.scale(speed), 0, radius, WaterBullet.MAX_TICKS, false);
 		double stop = e.target().distanceTo(origin);
+		// The server names the wall it meets, or the end of its range: a jet that runs out just falls apart.
+		boolean spent = stop >= speed * WaterBullet.MAX_TICKS - 0.01;
 
 		// The muzzle: a quick circle facing the caster, a puff of spray and a ring of light thrown out in its plane.
 		Vec3 muzzle = origin.add(dir.scale(1.7)).add(0, -0.15, 0);
@@ -65,7 +69,7 @@ public final class WaterBulletFx implements SpellFx {
 			// The wake, drawn only past the clear zone.
 			double w0 = Math.max(a, CLEAR);
 			if (headAt > w0) {
-				int n = Math.max(2, (int) Math.round((headAt - w0) / spacing));
+				int n = Math.min(MAX_WAKE, Math.max(2, (int) Math.round((headAt - w0) / spacing)));
 				for (int i = 0; i < n; i++) {
 					double at = w0 + (headAt - w0) * (i + level.getRandom().nextDouble()) / n;
 					Vec3 p = origin.add(dir.scale(at));
@@ -83,9 +87,16 @@ public final class WaterBulletFx implements SpellFx {
 			}
 			if (hit.isPresent() || wall) {
 				done[0] = true;
-				impact(kit, level, head, dir, c, hit.isPresent());
+				if (hit.isEmpty() && spent) dissipate(kit, head, dir);
+				else impact(kit, level, head, dir, c, hit.isPresent());
 			}
 		});
+	}
+
+	/** Out of range: the jet loses its shape and rains down in drips, no burst. */
+	private static void dissipate(FxKit kit, Vec3 at, Vec3 dir) {
+		kit.trail(at.subtract(dir.scale(2.5)), at, ParticleTypes.FALLING_WATER, 10);
+		kit.motes(at.subtract(dir.scale(0.8)), WaterFx.BODY, 4, 0.6, dir.scale(0.05), 0.02, GlowMote.Drift.FALL, 0.12F, 12);
 	}
 
 	/** The splash: spray, popping bubbles, a ring of light in the plane facing back along the jet, and a slap. */

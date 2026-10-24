@@ -25,16 +25,17 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * Tidal Push: a circle opens under the caster and another before them, spray is flung across the whole cone, and a wave of
- * water rolls out from the caster's feet along {@link TidalWaveGeometry} — translucent water blocks rising in each air cell the
- * front passes (each living {@link TidalWaveGeometry#CELL_LIFE} ticks), a crest that leaps and throws foam, climbing one-block
- * steps, pouring down drops and breaking on walls — until it crashes down eight blocks out. Nothing is placed in the world.
- * In the caster's own first-person view the wave shows from {@link #OWN_CLEAR} blocks out, so it never fills their screen.
+ * water rolls out from the caster's feet along {@link TidalWaveGeometry}, its columns following the ground by the same rule
+ * the server uses ({@link TidalWaveGeometry#step}: climbing steps, pouring down drops, breaking on walls in a burst of spray).
+ * Its crest is a row of translucent water-glass blocks rising in the air cells it passes; below it a curtain of falling water
+ * runs down the front face, spray flies off the crest, glowing water lights it from inside, and drops patter down behind it,
+ * until it crashes eight blocks out. Nothing is placed in the world. In the caster's own first-person view the wave shows
+ * from {@link #OWN_CLEAR} blocks out, so it never fills their screen.
  */
 public final class TidalPushFx implements SpellFx {
-	/** The wave's body and its leaping crest (client-only ghost blocks: never placed). */
-	static final BlockState BODY = Blocks.STAINED_GLASS.lightBlue().defaultBlockState();
+	/** The wave's crest (client-only ghost blocks: never placed). */
 	static final BlockState CREST = Blocks.STAINED_GLASS.lightBlue().defaultBlockState();
-	/** The crest falls back sooner than the body, so the wave is tall at its front and low behind. */
+	/** The crest falls back fast, so the wave is tall at its front and low behind. */
 	static final int CREST_LIFE = 4;
 	/** How far from the caster their own first-person view starts showing the wave. */
 	static final double OWN_CLEAR = 2.6;
@@ -67,7 +68,7 @@ public final class TidalPushFx implements SpellFx {
 		int[] shoved = e.entities();
 		for (int i = 0; i < Math.min(shoved.length, 6); i++) {
 			Entity en = level.getEntity(shoved[i]);
-			if (en != null) kit.burst(en.position().add(0, en.getBbHeight() * 0.5, 0), ParticleTypes.SPLASH, 6, 0.25);
+			if (en != null) kit.burst(en.position().add(0, en.getBbHeight() * 0.5, 0), ParticleTypes.SPLASH, 3, 0.25);
 		}
 		level.playLocalSound(front.x, front.y, front.z, SoundEvents.PLAYER_SPLASH_HIGH_SPEED, SoundSource.PLAYERS, 0.8F, 0.75F + 0.1F * (1 - c), false);
 		level.playLocalSound(start.x, start.y, start.z, SoundEvents.TRIDENT_RIPTIDE_2.value(), SoundSource.PLAYERS, 0.55F, 1.15F, false);
@@ -78,72 +79,70 @@ public final class TidalPushFx implements SpellFx {
 		// instead of filling their screen; everyone else sees it rise at their feet.
 		Minecraft mc = Minecraft.getInstance();
 		boolean own = mc.player != null && mc.player.getId() == e.casterId() && mc.options.getCameraType().isFirstPerson();
-		Roll roll = new Roll(wave, level, kit, BlockPos.containing(start).getY(), own ? OWN_CLEAR : 0);
+		Roll roll = new Roll(wave, level, kit, own ? OWN_CLEAR : 0);
 		kit.simulate(1, TidalWaveGeometry.DURATION, t -> roll.step(t + 1));
 	}
 
-	/** The rolling wave's client state: each column's height as it climbs and falls, and which cells already showed. */
+	/** The rolling wave's client state: the columns (moved by the shared rule) and which crest cells already showed. */
 	private static final class Roll {
 		final TidalWaveGeometry wave;
 		final ClientLevel level;
 		final FxKit kit;
-		final int[] colY = new int[TidalWaveGeometry.WIDTH];
+		final int[] colY;
 		final boolean[] broken = new boolean[TidalWaveGeometry.WIDTH];
 		final Set<BlockPos> shown = new HashSet<>();
 		final double clear;
 
-		Roll(TidalWaveGeometry wave, ClientLevel level, FxKit kit, int y, double clear) {
-			this.clear = clear;
+		Roll(TidalWaveGeometry wave, ClientLevel level, FxKit kit, double clear) {
 			this.wave = wave;
 			this.level = level;
 			this.kit = kit;
-			java.util.Arrays.fill(colY, y);
+			this.clear = clear;
+			this.colY = wave.columns();
 		}
 
 		/** Geometry tick {@code t} (the server's age). */
 		void step(int t) {
 			if (!TidalWaveGeometry.frontActive(t)) return;
+			int broke = wave.step(t, colY, broken, this::free);
 			double d = TidalWaveGeometry.distance(t);
 			int h = TidalWaveGeometry.height(d);
 			Vec3 dir = wave.dir();
 			int half = TidalWaveGeometry.WIDTH / 2;
-			for (int k = -half; k <= half; k++) {
-				int i = k + half;
-				if (broken[i]) continue;
+			for (int i = 0; i < TidalWaveGeometry.WIDTH; i++) {
+				int k = i - half;
 				BlockPos col = wave.column(t, k);
 				BlockPos base = new BlockPos(col.getX(), colY[i], col.getZ());
-				if (!free(base)) {
-					if (free(base.above()) && free(base.above(2))) {
-						base = base.above(); // climbs a step
-					} else {
-						broken[i] = true; // breaks on the wall
-						Vec3 at = Vec3.atCenterOf(base).subtract(dir.scale(0.6)).add(0, 0.4, 0);
-						kit.burst(at, ParticleTypes.SPLASH, 10, 0.3);
-						kit.motes(at, WaterFx.FOAM, 3, 0.4, new Vec3(0, 0.18, 0).subtract(dir.scale(0.08)), 0.08, GlowMote.Drift.FALL, 0.2F, 12);
-						continue;
-					}
-				} else if (free(base.below())) {
-					base = base.below(); // pours down
+				if ((broke & (1 << i)) != 0) {
+					// Breaks on the wall: a burst of spray thrown back up off it.
+					Vec3 at = Vec3.atCenterOf(base).subtract(dir.scale(0.6)).add(0, 0.4, 0);
+					kit.burst(at, ParticleTypes.SPLASH, 8, 0.3);
+					kit.motes(at, WaterFx.FOAM, 2, 0.4, new Vec3(0, 0.18, 0).subtract(dir.scale(0.08)), 0.08, GlowMote.Drift.FALL, 0.2F, 12);
+					continue;
 				}
-				colY[i] = base.getY();
-				if (d < clear) continue;
-				for (int y = 0; y < h; y++) {
-					BlockPos cell = base.above(y);
-					if (!shown.add(cell) || !air(cell)) continue;
-					boolean crest = y == h - 1 && h > 1;
-					kit.ghostBlock(cell, crest ? CREST : BODY, Vec3.ZERO, crest ? CREST_LIFE : TidalWaveGeometry.CELL_LIFE,
-							GhostBlocks.Motion.RISE);
+				if (broken[i] || d < clear) continue;
+				boolean even = (t + i) % 2 == 0;
+				// The crest: a water-glass block rising in its air cell.
+				BlockPos crest = base.above(h - 1);
+				if (shown.add(crest) && air(crest)) kit.ghostBlock(crest, CREST, Vec3.ZERO, CREST_LIFE, GhostBlocks.Motion.RISE);
+				Vec3 p = wave.frontPoint(t, k);
+				double floor = colY[i];
+				// The front face: a curtain of falling water from the crest down to the ground.
+				Vec3 face = new Vec3(p.x, floor, p.z).add(dir.scale(0.45));
+				kit.trail(face.add(wave.side().scale(-0.35)).add(0, h - 0.1, 0), face.add(wave.side().scale(0.35)).add(0, 0.2, 0),
+						ParticleTypes.FALLING_WATER, h >= 3 ? 2 : 1);
+				Vec3 top = new Vec3(p.x, floor + h + 0.1, p.z);
+				if (even) {
+					// Spray off the crest, and light inside the water.
+					kit.burst(top, ParticleTypes.SPLASH, 1, 0.18);
+					kit.motes(new Vec3(p.x, floor + 0.5, p.z), WaterFx.BODY, 1, 0.35, dir.scale(0.1), 0.02, GlowMote.Drift.FALL, 0.42F, 5);
+				} else {
+					// Foam thrown forward, and drops pattering down where the wave has passed.
+					kit.motes(top, k % 2 == 0 ? WaterFx.FOAM : WaterFx.LIGHT, 1, 0.3, dir.scale(0.16).add(0, 0.06, 0), 0.03,
+							GlowMote.Drift.FALL, 0.17F, 9);
+					Vec3 behind = new Vec3(p.x, floor + 0.05, p.z).subtract(dir.scale(1.2 + 0.6 * kit.random().nextDouble()));
+					kit.burst(behind, ParticleTypes.RAIN, 1, 0.0);
 				}
-				// Light inside the water, so it glows blue in the dark.
-				Vec3 heart = Vec3.atBottomCenterOf(base).add(0, 0.5, 0);
-				kit.motes(heart, WaterFx.BODY, 1, 0.35, dir.scale(0.1), 0.02, GlowMote.Drift.FALL, 0.42F, 5);
-				if (h >= 3) kit.motes(heart.add(0, 1.4, 0), WaterFx.LIGHT, 1, 0.35, dir.scale(0.12), 0.02, GlowMote.Drift.FALL, 0.38F, 5);
-				// The crest: foam and spray thrown forward off the top.
-				Vec3 top = wave.frontPoint(t, k);
-				top = new Vec3(top.x, base.getY() + h + 0.1, top.z);
-				kit.motes(top, k % 2 == 0 ? WaterFx.FOAM : WaterFx.LIGHT, 1, 0.3, dir.scale(0.16).add(0, 0.06, 0), 0.03, GlowMote.Drift.FALL,
-						0.17F, 9);
-				if ((t + i) % 2 == 0) kit.burst(top, ParticleTypes.SPLASH, 1, 0.15);
 			}
 			Vec3 mid = wave.frontCentre(t);
 			if (t % 4 == 0) {
@@ -155,23 +154,23 @@ public final class TidalPushFx implements SpellFx {
 		/** The end: the front collapses in a burst of spray and foam. */
 		private void crash(int t) {
 			int half = TidalWaveGeometry.WIDTH / 2;
-			for (int k = -half; k <= half; k++) {
-				if (broken[k + half]) continue;
-				Vec3 p = wave.frontPoint(t, k);
-				Vec3 at = new Vec3(p.x, colY[k + half] + 0.6, p.z);
-				kit.burst(at, ParticleTypes.SPLASH, 7, 0.3);
-				kit.motes(at, WaterFx.FOAM, 2, 0.4, wave.dir().scale(0.08).add(0, 0.12, 0), 0.06, GlowMote.Drift.FALL, 0.2F, 12);
+			for (int i = 0; i < TidalWaveGeometry.WIDTH; i++) {
+				if (broken[i]) continue;
+				Vec3 p = wave.frontPoint(t, i - half);
+				Vec3 at = new Vec3(p.x, colY[i] + 0.6, p.z);
+				kit.burst(at, ParticleTypes.SPLASH, 5, 0.3);
+				kit.motes(at, WaterFx.FOAM, 1, 0.4, wave.dir().scale(0.08).add(0, 0.12, 0), 0.06, GlowMote.Drift.FALL, 0.2F, 12);
 			}
 			Vec3 mid = wave.frontCentre(t);
 			level.playLocalSound(mid.x, mid.y, mid.z, SoundEvents.GENERIC_SPLASH, SoundSource.PLAYERS, 0.9F, 0.9F, false);
 		}
 
-		/** Nothing to collide with: the wave may stand here. */
+		/** Nothing to collide with: the wave may stand here (the server's rule, on this client's world). */
 		private boolean free(BlockPos p) {
-			return level.getBlockState(p).getCollisionShape(level, p).isEmpty();
+			return level.isLoaded(p) && level.getBlockState(p).getCollisionShape(level, p).isEmpty();
 		}
 
-		/** Air (or a plant the water would wash over, with no fluid in it): a water cell may show here. */
+		/** Air (or a plant the water would wash over, with no fluid in it): a crest block may show here. */
 		private boolean air(BlockPos p) {
 			BlockState s = level.getBlockState(p);
 			return s.isAir() || (s.canBeReplaced() && s.getFluidState().isEmpty());

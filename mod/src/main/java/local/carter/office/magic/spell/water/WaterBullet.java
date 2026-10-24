@@ -36,6 +36,8 @@ public final class WaterBullet implements Spell {
 	public static final double KNOCK = 1.2;
 	/** A little lift on every hit so ground friction doesn't eat the push at once (plus the travel's own upward part). */
 	public static final double LIFT = 0.1;
+	/** Cap on the upward push, so a jet fired steeply up lifts a foe a little instead of launching it. */
+	public static final double MAX_UP = 0.5;
 
 	@Override
 	public Identifier id() {
@@ -77,7 +79,7 @@ public final class WaterBullet implements Spell {
 		LivingEntity e = hit.entity();
 		if (e == null) return;
 		Hurt.damage(ctx, e, damage);
-		Hurt.knock(e, dir, KNOCK, LIFT + KNOCK * Math.max(0, dir.y));
+		Hurt.knock(e, dir, KNOCK, Math.min(MAX_UP, LIFT + KNOCK * Math.max(0, dir.y)));
 		e.extinguishFire();
 	}
 }

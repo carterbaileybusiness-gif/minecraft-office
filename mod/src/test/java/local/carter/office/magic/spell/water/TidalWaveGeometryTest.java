@@ -69,6 +69,62 @@ class TidalWaveGeometryTest {
 	}
 
 	@Test
+	void segmentsHoldWhereverTheColumnsClimbOrFall() {
+		for (Vec3 look : List.of(new Vec3(0, 0, 1), new Vec3(-1, 0, -1), new Vec3(0.3, -0.5, -0.9), new Vec3(-0.8, 0.2, 0.35))) {
+			TidalWaveGeometry g = new TidalWaveGeometry(START, look);
+			for (int dy : new int[] {TidalWaveGeometry.MAX_CLIMB, -TidalWaveGeometry.MAX_DROP}) {
+				int[] colY = g.columns();
+				java.util.Arrays.fill(colY, 64 + dy);
+				for (int t = 1; t <= TidalWaveGeometry.FRONT_TICKS; t++) {
+					BlockPos origin = g.segmentOrigin(TidalWaveGeometry.segment(TidalWaveGeometry.distance(t)));
+					for (BlockPos c : g.front(t, colY, new boolean[5])) {
+						assertTrue(Math.sqrt(c.distSqr(origin)) <= 6, look + " dy " + dy + " tick " + t + ": " + c + " vs " + origin);
+					}
+				}
+			}
+		}
+	}
+
+	/** Ground at y 63 (the start stands on it), rising one block per block from z −36 on; a wall 4 tall at z −33 for x ≥ 101. */
+	private static boolean free(BlockPos p) {
+		int ground = p.getZ() < -36 ? 63 : 63 + Math.min(2, p.getZ() + 37);
+		if (p.getY() <= ground) return false;
+		return !(p.getX() >= 101 && p.getZ() == -33 && p.getY() <= 67);
+	}
+
+	@Test
+	void columnsClimbStepsAndBreakOnWalls() {
+		TidalWaveGeometry g = new TidalWaveGeometry(START, new Vec3(0, 0, 1)); // start z −40.5, columns x 102 (i 0) .. 98 (i 4)
+		int[] colY = g.columns();
+		boolean[] broken = new boolean[5];
+		int brokeMask = 0;
+		for (int t = 1; t <= TidalWaveGeometry.FRONT_TICKS; t++) {
+			brokeMask |= g.step(t, colY, broken, TidalWaveGeometryTest::free);
+			for (BlockPos c : g.front(t, colY, broken)) assertTrue(free(c), "tick " + t + ": a wave cell inside the ground or the wall: " + c);
+		}
+		// Columns at x 102 and 101 (i 0, 1) hit the wall at z −33; the rest climbed the slope to the top (2 above the start).
+		assertTrue(broken[0] && broken[1], "the wall broke them");
+		assertEquals(0b00011, brokeMask);
+		for (int i = 2; i < 5; i++) {
+			assertFalse(broken[i], "column " + i);
+			assertEquals(66, colY[i], "column " + i + " stands on the slope's top");
+		}
+		// An entity on the slope in a standing column is in the wave; one behind the wall is not.
+		assertTrue(g.inFront(16, new Vec3(99.5, 66, -32.5), colY, broken), "on the slope");
+		assertFalse(g.inFront(16, new Vec3(101.5, 66, -32.5), colY, broken), "behind the wall");
+		assertFalse(g.inFront(16, new Vec3(99.5, 63, -32.5), colY, broken), "far below the column");
+	}
+
+	@Test
+	void columnsPourDownAndStopAtMaxDrop() {
+		TidalWaveGeometry g = new TidalWaveGeometry(START, new Vec3(0, 0, 1));
+		int[] colY = g.columns();
+		boolean[] broken = new boolean[5];
+		for (int t = 1; t <= TidalWaveGeometry.FRONT_TICKS; t++) g.step(t, colY, broken, p -> p.getY() >= 50 || p.getZ() < -39);
+		for (int i = 0; i < 5; i++) assertEquals(64 - TidalWaveGeometry.MAX_DROP, colY[i], "column " + i + " poured down to the limit");
+	}
+
+	@Test
 	void entitiesInTheFrontAreFound() {
 		TidalWaveGeometry g = new TidalWaveGeometry(START, new Vec3(0, 0, 1));
 		assertTrue(g.inFront(8, START.add(0, 0, 4)));

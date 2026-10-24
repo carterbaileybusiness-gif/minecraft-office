@@ -58,7 +58,7 @@ public class WaterGameTests {
 		MagicTestKit.aim(p, new BlockPos(16, 5, 10));
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.WATER_BULLET, 1f), Result.CAST, "result");
 		h.succeedWhen(() -> {
-			h.assertTrue(z.getHealth() < 20, "hit");
+			h.assertTrue(z.getHealth() <= 17, "health " + z.getHealth());
 			h.assertFalse(z.isOnFire(), "still burning");
 		});
 	}
@@ -113,6 +113,7 @@ public class WaterGameTests {
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.TIDAL_PUSH, 1f), Result.CAST, "result");
 		h.assertFalse(friend.isOnFire(), "friend doused");
 		h.assertTrue(friend.getDeltaMovement().horizontalDistance() < 0.01, "friend not pushed: " + friend.getDeltaMovement());
+		h.assertTrue(v.getDeltaMovement().length() < 0.01, "villager not pushed: " + v.getDeltaMovement());
 		h.runAfterDelay(20, () -> {
 			h.assertTrue(v.position().distanceTo(v0) < 0.1, "villager not pushed: moved " + v.position().distanceTo(v0));
 			h.assertTrue(friend.getDeltaMovement().horizontalDistance() < 0.01, "friend not carried by the wave");
@@ -151,14 +152,57 @@ public class WaterGameTests {
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 120)
 	public void tidalWaveLeavesNoWater(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 2);
+		// Positive control: the counter sees a water block.
+		BlockPos control = new BlockPos(4, 4, 28);
+		h.setBlock(control, Blocks.WATER);
+		h.assertValueEqual(MagicTestKit.waterCount(h), 1, "the counter sees water");
+		h.setBlock(control, Blocks.AIR);
 		h.setBlock(new BlockPos(16, 3, 7), Blocks.NETHERRACK);
 		h.setBlock(new BlockPos(16, 4, 7), Blocks.FIRE);
+		// Beside the caster: 49° off the look (outside the cone) but in the wave's outer column.
+		BlockPos aside = new BlockPos(18, 4, 6);
+		h.setBlock(aside.below(), Blocks.NETHERRACK);
+		h.setBlock(aside, Blocks.FIRE);
 		h.assertValueEqual(MagicTestKit.waterCount(h), 0, "no water before");
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.TIDAL_PUSH, 1f), Result.CAST, "result");
 		h.runAfterDelay(8, () -> h.assertValueEqual(MagicTestKit.waterCount(h), 0, "no water while the wave rolls"));
 		h.runAtTickTime(100, () -> {
 			h.assertValueEqual(MagicTestKit.waterCount(h), 0, "no water (flows included) at tick 100");
 			h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 4, 7));
+			h.assertBlockPresent(Blocks.AIR, aside);
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 50)
+	public void tidalWaveClimbsASlopeAndCarries(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 2);
+		// A slope up: one block high from z 6, two from z 7 on (the wave climbs at most 2).
+		MagicTestKit.fill(h, new BlockPos(12, 4, 6), new BlockPos(20, 4, 20), Blocks.STONE);
+		MagicTestKit.fill(h, new BlockPos(12, 5, 7), new BlockPos(20, 5, 20), Blocks.STONE);
+		Zombie z = mobile(MagicTestKit.dummy(h, new BlockPos(16, 6, 10)));
+		// Look steeply up: the cone misses the zombie, only the wave (horizontal) can reach it.
+		MagicTestKit.aim(p, new BlockPos(16, 20, 6));
+		double z0 = z.getZ();
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.TIDAL_PUSH, 0f), Result.CAST, "result");
+		h.assertTrue(z.getDeltaMovement().horizontalDistance() < 0.01, "the cone missed it");
+		h.succeedWhen(() -> h.assertTrue(z.getZ() - z0 >= 0.5, "zombie on the slope carried " + (z.getZ() - z0)));
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 50)
+	public void tidalWaveStopsAtWall(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 2);
+		MagicTestKit.fill(h, new BlockPos(12, 4, 7), new BlockPos(20, 6, 7), Blocks.STONE);
+		Zombie z = mobile(MagicTestKit.dummy(h, new BlockPos(16, 4, 9)));
+		BlockPos fire = new BlockPos(14, 4, 9);
+		h.setBlock(fire.below(), Blocks.NETHERRACK);
+		h.setBlock(fire, Blocks.FIRE);
+		Vec3 z0 = z.position();
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.TIDAL_PUSH, 1f), Result.CAST, "result");
+		h.assertTrue(z.getDeltaMovement().horizontalDistance() < 0.01, "the cone can't push through the wall");
+		h.runAfterDelay(30, () -> {
+			h.assertTrue(z.position().distanceTo(z0) < 0.1, "zombie behind the wall moved " + z.position().distanceTo(z0));
+			h.assertBlockPresent(Blocks.FIRE, fire);
 			h.succeed();
 		});
 	}
