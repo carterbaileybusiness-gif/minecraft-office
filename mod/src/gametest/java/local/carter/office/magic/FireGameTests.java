@@ -18,6 +18,7 @@ import local.carter.office.magic.spell.fire.FireWallGeometry;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
@@ -28,22 +29,18 @@ import net.minecraft.world.phys.Vec3;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 
 /**
- * Server GameTests for the Fire lane, M2 (Task 12): Fire Bolt and Fire Wall. Casts go straight through {@link CastService#cast}
- * with the spell objects, not the registry: concurrent tests lay probes over Fire's slots 0 and 1, which hide registered spells.
+ * Server GameTests for the Fire lane, M2 (Task 12): Fire Bolt and Fire Wall, cast through the registry as players cast them
+ * ({@link MagicTestKit#cast}; test probes are scoped to their own test's players, so they never hide these).
  */
 public class FireGameTests {
-	private static final Spell BOLT = new FireBolt();
-	private static final Spell WALL = new FireWall();
+	private static final Identifier BOLT = SpellIds.FIRE_BOLT;
+	private static final Identifier WALL = SpellIds.FIRE_WALL;
 
-	private static Result cast(ServerPlayer p, Spell s, float charge) {
-		return CastService.cast(p, s, charge);
+	private static Result cast(ServerPlayer p, Identifier spell, float charge) {
+		return MagicTestKit.cast(p, spell, charge);
 	}
 
-	/**
-	 * The registry holds both spells in their slots. In {@link MagicTestKit#TERRAIN_ENV}: no test in that batch lays a probe over
-	 * Fire's slots, so the registered spells are visible.
-	 */
-	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	@GameTest(structure = MagicTestKit.ARENA)
 	public void fireSpellsRegisteredInTheirSlots(GameTestHelper h) {
 		Spell bolt = SpellRegistry.get(SpellIds.FIRE_BOLT).orElseThrow(() -> new AssertionError("Fire Bolt not registered"));
 		h.assertTrue(bolt instanceof FireBolt, "Fire Bolt is " + bolt);
@@ -206,8 +203,7 @@ public class FireGameTests {
 		double[] startZ = new double[1];
 		// Off the 10-tick beat and fast: one tick before the wall, the next past it (never inside it at a tick's end).
 		h.runAfterDelay(4, () -> {
-			z[0] = MagicTestKit.dummy(h, MagicTestKit.STAND.offset(2, 0, 9));
-			z[0].setNoAi(false); // a mob without AI never moves, even when thrown
+			z[0] = MagicTestKit.movableDummy(h, MagicTestKit.STAND.offset(2, 0, 9));
 			z[0].setPos(z[0].getX(), z[0].getY(), wallZ + 4.8);
 			startZ[0] = z[0].getZ();
 			z[0].setDeltaMovement(0, 0.42, -3.5);
