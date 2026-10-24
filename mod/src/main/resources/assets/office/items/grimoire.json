@@ -13,7 +13,7 @@
             {
               "type": "minecraft:custom_model_data",
               "index": 0,
-              "default": -7644629
+              "default": -9539968
             }
           ]
         }
@@ -27,7 +27,7 @@
             {
               "type": "minecraft:custom_model_data",
               "index": 0,
-              "default": -7644629
+              "default": -9539968
             }
           ]
         }
@@ -41,7 +41,7 @@
             {
               "type": "minecraft:custom_model_data",
               "index": 0,
-              "default": -7644629
+              "default": -9539968
             }
           ]
         }
@@ -55,7 +55,7 @@
             {
               "type": "minecraft:custom_model_data",
               "index": 0,
-              "default": -7644629
+              "default": -9539968
             }
           ]
         }
@@ -68,7 +68,7 @@
         {
           "type": "minecraft:custom_model_data",
           "index": 0,
-          "default": -7644629
+          "default": -9539968
         }
       ]
     }

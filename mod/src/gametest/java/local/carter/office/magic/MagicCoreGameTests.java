@@ -79,7 +79,7 @@ public class MagicCoreGameTests {
 		GrimoireLook.stamp(plain, Optional.empty(), 1);
 		CustomModelData p = plain.get(DataComponents.CUSTOM_MODEL_DATA);
 		h.assertValueEqual(p.strings(), List.of("t0"), "unbound L1 strings");
-		h.assertValueEqual(p.colors(), List.of(0xFF8B5A2B), "unbound L1 colours");
+		h.assertValueEqual(p.colors(), List.of(0xFF6E6E80), "unbound L1 colours");
 		h.assertValueEqual(GrimoireLook.element(plain), Optional.<Element>empty(), "unbound reads back empty");
 		h.assertTrue(GrimoireItem.isGrimoire(plain) && !GrimoireItem.isGrimoire(new ItemStack(Items.BOOK)), "isGrimoire");
 		h.succeed();

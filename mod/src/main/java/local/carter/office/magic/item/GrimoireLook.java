@@ -15,8 +15,9 @@ import net.minecraft.world.item.component.CustomModelData;
  * colour 0 = the cover tint (element colour, or leather brown when unbound). Remote clients read the element back from the colour.
  */
 public final class GrimoireLook {
-	/** Cover tint of an unbound grimoire (plain leather). Also the tint default in items/grimoire.json. */
-	public static final int UNBOUND_ARGB = 0xFF8B5A2B;
+	/** Cover tint of an unbound grimoire (cool slate, no element uses it). tools/make_magic_textures.py parses this line
+	 *  and writes it as the tint default in items/grimoire.json. */
+	public static final int UNBOUND_ARGB = 0xFF6E6E80;
 
 	private GrimoireLook() {}
 

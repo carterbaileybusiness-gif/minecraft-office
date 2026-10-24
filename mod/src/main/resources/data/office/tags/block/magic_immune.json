@@ -15,6 +15,14 @@
     "minecraft:repeating_command_block",
     "minecraft:structure_block",
     "minecraft:jigsaw",
+    "minecraft:spawner",
+    "minecraft:trial_spawner",
+    "minecraft:vault",
+    "minecraft:ender_chest",
+    "minecraft:beacon",
+    "minecraft:dragon_egg",
+    "minecraft:test_block",
+    "minecraft:test_instance_block",
     "office:hologram_emitter"
   ]
 }

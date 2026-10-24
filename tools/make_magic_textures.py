@@ -9,6 +9,7 @@ comment starts each element's five spells, `// recall` marks Recall). Writes und
 
   item/grimoire_cover.png       16x16 greyscale cover, tinted in-game by custom_model_data colour 0 (element or leather)
   item/grimoire_t0..t3.png      16x16 untinted tier overlays: pages, iron/gold trim, clasp, gem setting, sparkle
+  (also writes assets/office/items/grimoire.json, whose tint default is GrimoireLook.UNBOUND_ARGB)
   item/rebinding_seal.png       16x16 violet wax seal with a nether-star imprint
   gui/spell/<id>.png            32x32 glyph per spell in its element colour (Recall gold)
   gui/magic/sigil_<key>.png     64x64 element medallion
@@ -21,6 +22,7 @@ comment starts each element's five spells, `// recall` marks Recall). Writes und
 
 --sheet writes a contact sheet of everything (upscaled, items composited in every element colour) for review.
 """
+import json
 import math
 import os
 import re
@@ -31,6 +33,8 @@ import zlib
 ROOT = os.path.join("mod", "src", "main", "resources", "assets", "office", "textures")
 ELEMENT_JAVA = os.path.join("mod", "src", "main", "java", "local", "carter", "office", "magic", "core", "Element.java")
 SPELL_IDS_JAVA = os.path.join("mod", "src", "main", "java", "local", "carter", "office", "magic", "spell", "SpellIds.java")
+GRIMOIRE_LOOK_JAVA = os.path.join("mod", "src", "main", "java", "local", "carter", "office", "magic", "item", "GrimoireLook.java")
+ITEMS_JSON = os.path.join("mod", "src", "main", "resources", "assets", "office", "items", "grimoire.json")
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -62,6 +66,27 @@ def parse_colours(path=ELEMENT_JAVA):
     if set(out) != need:
         sys.exit("make_magic_textures: COLOURS block has %s, want %s" % (sorted(out), sorted(need)))
     return out
+
+
+def parse_unbound(path=GRIMOIRE_LOOK_JAVA):
+    """The unbound cover tint (ARGB int) from GrimoireLook.UNBOUND_ARGB."""
+    m = re.search(r"static\s+final\s+int\s+UNBOUND_ARGB\s*=\s*0x([0-9A-Fa-f]{8})\s*;", open(path, encoding="utf-8").read())
+    if not m:
+        sys.exit("make_magic_textures: no UNBOUND_ARGB in " + path)
+    return int(m.group(1), 16)
+
+
+def write_grimoire_items_json(unbound_argb, path=ITEMS_JSON):
+    """items/grimoire.json: select the tier model on custom_model_data string 0; tint layer0 by colour 0 (default = unbound)."""
+    signed = unbound_argb - (1 << 32) if unbound_argb >= 1 << 31 else unbound_argb
+
+    def tier(t):
+        return {"type": "minecraft:model", "model": "office:item/grimoire_t%d" % t,
+                "tints": [{"type": "minecraft:custom_model_data", "index": 0, "default": signed}]}
+    doc = {"model": {"type": "minecraft:select", "property": "minecraft:custom_model_data", "index": 0,
+                     "cases": [{"when": "t%d" % t, "model": tier(t)} for t in range(4)], "fallback": tier(0)}}
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, indent=2) + "\n")
 
 
 def argb_rgb(hexstr):
@@ -792,7 +817,16 @@ def overlay(tier):
         for x in range(3, 13):
             put(x, 13, "w" if x in (6, 10) else ("p" if x % 2 == 0 else "P"))
         put(14, 0, "Y"); put(13, 1, "Y"); put(15, 1, "Y"); put(14, 2, "Y"); put(14, 1, "W")
-    pal = {}
+    if tier >= 2:
+        # dark under-trim: every gold pixel on the cover casts a 1 px shadow below it onto bare cover (not the emblem),
+        # so the gold still reads on light covers (Lightning yellow, Earth tan)
+        gold_px = [(x, y) for y in range(16) for x in range(16) if grid[y][x] in "WYGg"]
+        for x, y in gold_px:
+            for dx, dy in ((0, 1),):
+                qx, qy = x + dx, y + dy
+                if qx < 16 and qy < 16 and grid[qy][qx] == "." and COVER_ROWS[qy][qx] not in ".OpqEc":
+                    grid[qy][qx] = "x"
+    pal = {"x": (62, 40, 14)}
     pal.update(GLOW_PAGE if tier >= 3 else PAGE)
     pal.update(IRON)
     pal.update(GOLD)
@@ -1141,6 +1175,8 @@ def main(argv):
     if missing:
         sys.exit("make_magic_textures: no glyph drawn for " + ", ".join(missing))
 
+    unbound_argb = parse_unbound()
+    write_grimoire_items_json(unbound_argb)
     cover = grimoire_cover().save("item/grimoire_cover.png")
     tiers = [overlay(t).save("item/grimoire_t%d.png" % t) for t in range(4)]
     seal = rebinding_seal().save("item/rebinding_seal.png")
@@ -1160,7 +1196,7 @@ def main(argv):
 
     if "--sheet" in argv:
         out = argv[argv.index("--sheet") + 1]
-        unbound = argb_rgb("FF8B5A2B")
+        unbound = argb_rgb("%08X" % unbound_argb)
         item_rows = []
         for rgb in [unbound] + [colours[k] for k in keys]:
             item_rows.append([composite(tint(cover, rgb), t) for t in tiers] + ([seal] if rgb == unbound else []))

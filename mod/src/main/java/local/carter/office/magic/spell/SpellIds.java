@@ -70,7 +70,11 @@ public final class SpellIds {
 
 	private SpellIds() {}
 
-	/** The spell in {@code slot} of {@code e}'s wheel; slot 5 ({@link Slots#RECALL}) is Recall for everyone. */
+	/**
+	 * The spell in {@code slot} of {@code e}'s wheel; slot 5 ({@link Slots#RECALL}) is Recall for everyone.
+	 *
+	 * @throws IllegalArgumentException if {@code slot} is outside 0..5
+	 */
 	public static Identifier at(Element e, int slot) {
 		if (slot == Slots.RECALL) return RECALL;
 		if (slot < 0 || slot > Slots.ULTIMATE) throw new IllegalArgumentException("slot " + slot);
