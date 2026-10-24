@@ -1,9 +1,12 @@
 package local.carter.office.client.pointer;
 
+import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.client.dock.DockItem;
 import local.carter.office.client.helper.HelperProtocol.PointerButton;
 
 /**
@@ -41,4 +44,31 @@ public interface PointerPort {
 
 	/** Bring Minecraft to the front again (the helper that would have done it is gone). */
 	default void activateMinecraft() {}
+
+	/**
+	 * Minecraft's own window (spec 5.10, {@link MirrorWindow}): {@code floating} above normal windows, {@code
+	 * clickThrough} = it ignores mouse events, so the helper's events at the main display reach the app under it.
+	 */
+	default void windowLayer(final boolean floating, final boolean clickThrough) {}
+
+	// ---- the mini Dock (spec 5.10)
+
+	/** The installed apps, bundle id → name; null until the helper has sent them (asked for on connect). */
+	default @Nullable Map<String, String> installedApps() {
+		return null;
+	}
+
+	/** An app icon as PNG bytes, or null until it arrives ({@link #requestIcons} asks for it). */
+	default byte @Nullable [] appIcon(final String bundle) {
+		return null;
+	}
+
+	/** Ask for these apps' icons (each one once). */
+	default void requestIcons(final List<String> bundles) {}
+
+	/** Open the Dock item's app or page onto virtual display {@code slot}. */
+	default void openApp(final int slot, final DockItem item) {}
+
+	/** Called with the helper's word when opening failed (a sentence for the action bar). */
+	default void onAppProblem(final Consumer<String> listener) {}
 }

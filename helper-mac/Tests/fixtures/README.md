@@ -40,9 +40,13 @@ Swift change alters them without the fixtures being committed.
 | `scroll.bin` | SCROLL = 14 | `{"dx":0,"dy":-120,"slot":1,"x":100,"y":200}` |
 | `click.bin` | CLICK = 15 | `{"button":"right","slot":1,"x":300,"y":400}` |
 | `exit_typing.bin` | EXIT_TYPING = 16 | `{}` |
-| `windows_to_display.bin` | WINDOWS_TO_DISPLAY = 17 | `{"slot":1}` |
-| `windows_to_display_apps.bin` | WINDOWS_TO_DISPLAY = 17 | `{"apps":["com.apple.TextEdit"],"slot":1}` |
-| `windows_back.bin` | WINDOWS_BACK = 18 | `{}` |
+| `pointer_down_main.bin` | POINTER_DOWN = 11 | `{"button":"left","h":1080,"slot":0,"w":1920,"x":960,"y":540}` (Mirror: the main display) |
+| `click_main.bin` | CLICK = 15 | `{"button":"left","h":1080,"slot":0,"w":1920,"x":100,"y":50}` |
+| `scroll_main.bin` | SCROLL = 14 | `{"dx":0,"dy":-48,"h":1080,"slot":0,"w":1920,"x":100,"y":200}` |
+| `list_apps.bin` | LIST_APPS = 19 | `{}` |
+| `app_icons.bin` | APP_ICONS = 20 | `{"bundles":["com.apple.Notes","com.google.Chrome"],"size":64}` |
+| `open_app.bin` | OPEN_APP = 21 | `{"bundle":"com.apple.Notes","slot":2}` |
+| `open_app_url.bin` | OPEN_APP = 21 | `{"slot":1,"url":"https://www.youtube.com"}` |
 | `welcome.bin` | WELCOME = 64 | `{"accessibility":false,"screenRecording":true,"version":1}` |
 | `windows.bin` | WINDOWS = 65 | `[{"app":"Notes","h":600,"title":"Groceries — List","w":800,"windowKey":"com.apple.Notes\|4321"},{"app":"Safari","h":900,"title":"","w":1200,"windowKey":"com.apple.Safari\|99"}]` (the dash is U+2014, bytes `e2 80 94`) |
 | `display.bin` | DISPLAY = 66 | `{"displayId":5,"h":1080,"slot":1,"w":1920}` |
@@ -54,6 +58,9 @@ Swift change alters them without the fixtures being committed.
 | `typing_exit.bin` | TYPING_EXIT = 72 | `{"reason":"esc"}` |
 | `drag_delta.bin` | DRAG_DELTA = 73 | `{"dx":12,"dy":-3}` |
 | `drag_ended.bin` | DRAG_ENDED = 74 | `{"reason":"released"}` |
+| `apps.bin` | APPS = 75 | `{"apps":[{"bundle":"com.google.Chrome","name":"Google Chrome"},{"bundle":"com.apple.Notes","name":"Notes"}]}` |
+| `icons.bin` | ICONS = 76 | `{"icons":[{"bundle":"com.apple.Notes","png":"iVBORw0KGgo="}]}` (`png`: base64 PNG bytes) |
+| `app_result.bin` | APP_RESULT = 77 | `{"message":"Notes is on screen 2","ok":true,"target":"com.apple.Notes"}` |
 
 (`\|` above is a table escape; the bytes contain a plain `|`.)
 
@@ -81,9 +88,15 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   display, `CGMainDisplayID()`, captured with `SCContentFilter(display:excludingApplications:[the app whose pid is
   HELLO's mcPid], exceptingWindows:[])`, cursor shown; needs neither).
 - Zoom (ZOOM_IN / ZOOM_OUT / EXIT_ZOOM) is retired on a Mac (spec 5.9); the messages stay for compatibility. ZOOM_IN
-  on a `main` (Mirror) surface does nothing: Mirror is view-only.
-- In-world use (spec 5.9; the crosshair is the mouse). `slot` + `x`, `y` = a pixel of that slot's virtual display
-  (0…w-1, 0…h-1); the helper maps it to `CGDisplayBounds` (global points). `button`: `left`, `right` or `middle`,
+  on a `main` (Mirror) surface does nothing (the Mirror is used in-world instead).
+- In-world use (spec 5.9, 5.10; the crosshair is the mouse). `slot` + `x`, `y` = a pixel of that slot's virtual display
+  (0…w-1, 0…h-1); the helper maps it to `CGDisplayBounds` (global points). **Slot 0 is the main display** (a Mirror
+  hologram): `x`, `y` are then a pixel of a `w` × `h` picture of it (both required, else the message is malformed), mapped
+  by proportion onto `CGDisplayBounds(CGMainDisplayID())` (points, so Retina and any capture size work). The mod makes
+  Minecraft's window click-through before sending a slot-0 CLICK / POINTER_DOWN / SCROLL; the window server applies that
+  a moment later, so for slot 0 the helper waits (≤ 300 ms) until a click at the point would no longer hit Minecraft's
+  window (`NSWindow.windowNumber(at:)`), then acts. A CLICK (any slot) first activates the app under the point (≤ 300 ms),
+  so the click lands in it (caret at the click point) instead of only activating it. `button`: `left`, `right` or `middle`,
   required for POINTER_DOWN, POINTER_UP and CLICK. All of it needs Accessibility (else `ERROR no_accessibility`); an
   unknown slot gives `ERROR not_found`. Why it works this way: `helper-mac/Tools/inputprobe.swift`.
   - CLICK: a real click there (the cursor moves there, the app under it comes forward with the keyboard) = typing mode.
@@ -97,11 +110,24 @@ length=37    67  surface=7    generation=3             width=2      height=2    
     0.25 s button-state poll that finds it up, also when it was released before POINTER_DOWN arrived) posts the up at
     the last point, sends `DRAG_ENDED {"reason":"released"}` and re-activates Minecraft. POINTER_UP cancels from the
     mod side (`DRAG_ENDED {"reason":"cancelled"}`). The mod disconnecting cancels too.
-  - SCROLL: a real scroll-wheel event at the point, in pixels (`dy` > 0 = up); scrolling never activates an app.
-  - WINDOWS_TO_DISPLAY: the player's standard app windows on the main display (not Minecraft, not the helper, not
-    minimized or full screen) move onto that slot's display, scaled into its visible area with the layout kept; `apps`
-    (bundle ids) limits it. WINDOWS_BACK, the mod disconnecting and the helper quitting put each one back where it was
-    (still-existing windows only; the originals live in memory).
+  - SCROLL: a real scroll-wheel event at the point, in pixels (`dy` > 0 = up); scrolling never activates an app. On
+    slot 0 the (hidden) cursor is also put at the point, so a wheel event of the player's during Minecraft's
+    click-through moment lands in the same app.
+- Types 17 and 18 (WINDOWS_TO_DISPLAY / WINDOWS_BACK) are retired (spec 5.10: windows never move by themselves); they
+  are unknown types now and close the connection like any other.
+- The mini Dock (spec 5.10):
+  - LIST_APPS → `APPS {"apps":[{bundle,name}]}`: the apps in /Applications, /Applications/Utilities,
+    /System/Applications(/Utilities), ~/Applications, plus Finder; one per bundle id, A–Z, the helper left out. The mod
+    asks on every connect.
+  - APP_ICONS `{bundles, size}` (16…256 px, at most 64 plausible bundle ids, else malformed) → `ICONS` with a base64 PNG
+    of NSWorkspace's icon for each installed one (others are left out).
+  - OPEN_APP `{slot, bundle}` or `{slot, url}` (exactly one; slot 1…4; url `https://` with a host; else malformed): opens
+    the app (or the page in the default browser) without activating it, takes its newest window (a new one, else its
+    frontmost; apps that launch without a window are "reopened" after 3 s and 12 s, as Home Base did), and puts it on
+    that slot's display filling its visible area (Accessibility), raised. If the app activated itself while Minecraft
+    was in front, Minecraft is activated again. Then `APP_RESULT {target, ok, message}` (`target` = the bundle id or
+    url): e.g. "That app isn't installed", "That screen isn't on yet", "… opened but showed no window" (after 40 s),
+    "OfficeHelper needs Accessibility…".
 - ENDED reasons: `"window closed"`, `"display removed"`, `"no display"`, `"no permission"` (Screen Recording missing),
   `"capture failed: <detail>"`.
 - ERROR codes: `bad_slot`, `bad_size`, `display_failed`, `not_found`, `no_accessibility`, `bad_request`, `version`,

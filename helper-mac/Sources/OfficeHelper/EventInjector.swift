@@ -44,6 +44,16 @@ enum EventInjector {
         return nil
     }
 
+    /// The app whose window a click at `point` (global, top-left) would hit right now, as the window server sees it
+    /// (it honours windows that ignore mouse events, unlike the window list); nil over the desktop.
+    static func hitWindowPid(at point: CGPoint) -> pid_t? {
+        let primaryHeight = CGDisplayBounds(CGMainDisplayID()).height
+        let number = NSWindow.windowNumber(at: NSPoint(x: point.x, y: primaryHeight - point.y), belowWindowWithWindowNumber: 0)
+        guard number > 0, let rows = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(number)) as? [[String: Any]],
+              let pid = (rows.first?[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else { return nil }
+        return pid
+    }
+
     static func frame(_ row: [String: Any]) -> CGRect? {
         (row[kCGWindowBounds as String] as? [String: Any]).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
     }

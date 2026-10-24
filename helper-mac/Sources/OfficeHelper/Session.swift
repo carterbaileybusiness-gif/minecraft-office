@@ -10,8 +10,8 @@ import ScreenCaptureKit
     let hotkey = ExitHotkey()
     /// In-world use: the crosshair as the mouse (drags, clicks into typing mode, scrolling).
     let input = InWorldInput()
-    /// The player's windows, moved onto a hologram's display while they're in a world.
-    let windowMover = WindowMover()
+    /// The mini Dock: installed apps, icons, opening an app onto a hologram's display (spec 5.10).
+    let launcher = AppLauncher()
     private var captures: [Int: SurfaceCapture] = [:]
     private var minecraftPid: pid_t?
     private var zoomedSurface: Int?
@@ -28,7 +28,7 @@ import ScreenCaptureKit
     init(server: HelperServer) {
         self.server = server
         displays.log = Log.write; placement.log = Log.write; cursor.log = Log.write
-        input.log = Log.write; windowMover.log = Log.write
+        input.log = Log.write; launcher.log = Log.write
         input.send = { [weak self] message in self?.server.send(message) }
         input.minecraftPid = { [weak self] in self?.minecraftPid }
         input.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
@@ -37,6 +37,11 @@ import ScreenCaptureKit
             let bounds = CGDisplayBounds(live.displayID)
             return bounds.isEmpty ? nil : (bounds, live.spec.width, live.spec.height)
         }
+        input.mainBounds = { CGDisplayBounds(CGMainDisplayID()) }
+        launcher.send = { [weak self] message in self?.server.send(message) }
+        launcher.display = { [weak self] slot in self?.displays.displayID(slot: slot) }
+        launcher.minecraftPid = { [weak self] in self?.minecraftPid }
+        launcher.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
         displays.onTerminated = { [weak self] slot in self?.displayGone(slot: slot) }
         hotkey.onExit = { [weak self] in
             Log.write("exit hotkey")
@@ -67,13 +72,15 @@ import ScreenCaptureKit
         onFinished?()
     }
 
-    /// Restores everything this helper changed and removes its displays.
+    /// Restores everything this helper changed and removes its displays. (Minecraft's own window — its level and
+    /// click-through — belongs to the mod's process; the mod restores it, and it is gone with Minecraft on a crash. The
+    /// helper ends what it drives: a drag's button and tap, typing mode's Esc tap.) No window was moved on join, so none
+    /// is moved back; windows on a removed display go back to the main display by macOS itself.
     func shutdown() {
         pollTimer?.invalidate(); pollTimer = nil
         permissionTimer?.invalidate(); permissionTimer = nil
         endZoom(notifyMod: false, activateMinecraft: false)
         input.shutdown()
-        windowMover.restore() // before the displays go: every window back exactly where it was
         for capture in captures.values { capture.stop() }
         captures.removeAll()
         displays.removeAll()
@@ -102,20 +109,21 @@ import ScreenCaptureKit
         case .pointerDown, .pointerMove, .pointerUp, .click, .scroll, .exitTyping:
             if !AXIsProcessTrusted() { askAccessibilityOnce() }
             input.handle(message)
-        case .windowsToDisplay(let p): moveWindows(p)
-        case .windowsBack: windowMover.restore()
+        case .listApps:
+            Task.detached {
+                let apps = AppLauncher.installedApps()
+                await MainActor.run { self.server.send(.apps(AppsPayload(apps: apps))) }
+            }
+        case .appIcons(let p): server.send(.icons(IconsPayload(icons: AppLauncher.icons(p.bundles, size: p.size))))
+        case .openApp(let p):
+            if !AXIsProcessTrusted() { askAccessibilityOnce() }
+            launcher.open(p)
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
-        case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded:
+        case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
+             .apps, .icons, .appResult:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
-    }
-
-    private func moveWindows(_ p: WindowsToDisplayPayload) {
-        guard let id = displays.displayID(slot: p.slot) else { sendError("not_found", "no display for slot \(p.slot)"); return }
-        var excluded: Set<pid_t> = [getpid()]
-        if let minecraftPid { excluded.insert(minecraftPid) }
-        windowMover.moveWindows(to: id, excluding: excluded, onlyApps: p.apps.map(Set.init))
     }
 
     private func sendError(_ code: String, _ message: String) {
@@ -282,7 +290,7 @@ import ScreenCaptureKit
             let f = p.mcWindowFrame
             placement.place(windowID: key.windowID, at: CGRect(x: f.x, y: f.y, width: f.w, height: f.h), minecraftPid: minecraftPid)
         case .main:
-            break // Mirror is view-only on a Mac (spec 5.9): nothing to work on
+            break // a Mirror is used in-world on a Mac (spec 5.10), never zoomed into
         }
         Log.write("zoom in surface \(p.surface)")
     }

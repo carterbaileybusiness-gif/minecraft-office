@@ -49,7 +49,7 @@ import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
  * Without an emitter in the main hand (empty, or any other item: a Wizards staff, food, a shield), right-clicking your
  * OWN hologram is always taken: on a Mac it is a right-click on the app there ({@link PointerClient}, in-world use;
  * left clicks, drags and the wheel go there too); elsewhere it zooms in to work on it ({@link ZoomClient}). Either way the
- * action bar says why when it can't (not live yet, helper not ready, Mirror is view-only). Someone else's hologram swallows the click (no
+ * action bar says why when it can't (not live yet, helper not ready, a one-window screen is view-only). Someone else's hologram swallows the click (no
  * message): nothing is ever placed or used through a hologram ({@link HologramClickRule}), and an emitter in the off hand alone never makes a click a hologram click. Right-clicking an emitter block
  * (empty main hand or an emitter, not sneaking) opens settings, read-only for non-owners. Called from {@code MinecraftUseItemMixin} at the head of
  * {@code Minecraft.startUseItem} (after vanilla's destroying/hands-busy guards; a consumed click gets vanilla's 4-tick

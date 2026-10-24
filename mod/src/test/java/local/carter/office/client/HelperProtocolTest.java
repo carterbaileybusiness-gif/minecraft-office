@@ -3,6 +3,7 @@ package local.carter.office.client;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -80,8 +81,13 @@ class HelperProtocolTest {
         assertEquals(14, HelperProtocol.SCROLL);
         assertEquals(15, HelperProtocol.CLICK);
         assertEquals(16, HelperProtocol.EXIT_TYPING);
-        assertEquals(17, HelperProtocol.WINDOWS_TO_DISPLAY);
-        assertEquals(18, HelperProtocol.WINDOWS_BACK);
+        assertEquals(19, HelperProtocol.LIST_APPS);
+        assertEquals(20, HelperProtocol.APP_ICONS);
+        assertEquals(21, HelperProtocol.OPEN_APP);
+        assertEquals(75, HelperProtocol.APPS);
+        assertEquals(76, HelperProtocol.ICONS);
+        assertEquals(77, HelperProtocol.APP_RESULT);
+        assertEquals(0, HelperProtocol.MAIN_SLOT);
         assertEquals(72, HelperProtocol.TYPING_EXIT);
         assertEquals(73, HelperProtocol.DRAG_DELTA);
         assertEquals(74, HelperProtocol.DRAG_ENDED);
@@ -153,10 +159,53 @@ class HelperProtocolTest {
     }
 
     @Test
-    void windowsJoinAndLeave() throws IOException {
-        checkModMessage("windows_to_display", new WindowsToDisplay(1, null));
-        checkModMessage("windows_to_display_apps", new WindowsToDisplay(1, List.of("com.apple.TextEdit")));
-        checkModMessage("windows_back", new WindowsBack());
+    void mirrorPointerOnTheMainDisplay() throws IOException {
+        checkModMessage("pointer_down_main", new PointerDown(0, 960, 540, PointerButton.LEFT, 1920, 1080));
+        checkModMessage("click_main", new Click(0, 100, 50, PointerButton.LEFT, 1920, 1080));
+        checkModMessage("scroll_main", new Scroll(0, 100, 200, 0, -48, 1920, 1080));
+    }
+
+    @Test
+    void slotZeroNeedsThePictureSize() {
+        for (String json : new String[] {"{\"button\":\"left\",\"slot\":0,\"x\":2,\"y\":3}",
+                "{\"button\":\"left\",\"h\":0,\"slot\":0,\"w\":0,\"x\":2,\"y\":3}"}) {
+            byte[] raw = envelope(HelperProtocol.CLICK, json);
+            FrameReader r = FrameReader.forModMessages();
+            r.push(raw, 0, raw.length);
+            assertThrows(HelperProtocol.ProtocolException.class, r::next, json);
+        }
+    }
+
+    @Test
+    void dockMessages() throws IOException {
+        checkModMessage("list_apps", new ListApps());
+        checkModMessage("app_icons", new AppIcons(List.of("com.apple.Notes", "com.google.Chrome"), 64));
+        checkModMessage("open_app", new OpenApp(2, "com.apple.Notes", null));
+        checkModMessage("open_app_url", new OpenApp(1, null, "https://www.youtube.com"));
+        check("apps", new Apps(List.of(new AppInfo("com.google.Chrome", "Google Chrome"), new AppInfo("com.apple.Notes", "Notes"))));
+        check("icons", new Icons(List.of(new AppIcon("com.apple.Notes", "iVBORw0KGgo="))));
+        check("app_result", new AppResult("com.apple.Notes", true, "Notes is on screen 2"));
+    }
+
+    @Test
+    void openAppRulesMatchTheHelper() {
+        assertNull(HelperProtocol.openAppProblem(new OpenApp(1, "com.apple.Notes", null)));
+        assertNull(HelperProtocol.openAppProblem(new OpenApp(4, null, "https://www.youtube.com")));
+        assertNotNull(HelperProtocol.openAppProblem(new OpenApp(0, "com.apple.Notes", null)), "slot 0 is the Mirror: no Dock");
+        assertNotNull(HelperProtocol.openAppProblem(new OpenApp(1, null, null)));
+        assertNotNull(HelperProtocol.openAppProblem(new OpenApp(1, "com.apple.Notes", "https://x.y")));
+        for (String bad : new String[] {"http://www.youtube.com", "file:///etc/passwd", "javascript:alert(1)", "youtube.com"}) {
+            assertNotNull(HelperProtocol.openAppProblem(new OpenApp(1, null, bad)), bad);
+        }
+        assertNotNull(HelperProtocol.openAppProblem(new OpenApp(1, "com.apple.Notes; rm", null)));
+        byte[] raw = envelope(HelperProtocol.OPEN_APP, "{\"slot\":1,\"url\":\"http://example.com\"}");
+        FrameReader r = FrameReader.forModMessages();
+        r.push(raw, 0, raw.length);
+        assertThrows(HelperProtocol.ProtocolException.class, r::next);
+        byte[] big = envelope(HelperProtocol.APP_ICONS, "{\"bundles\":[\"com.apple.Notes\"],\"size\":4096}");
+        FrameReader r2 = FrameReader.forModMessages();
+        r2.push(big, 0, big.length);
+        assertThrows(HelperProtocol.ProtocolException.class, r2::next);
     }
 
     @Test
@@ -254,7 +303,9 @@ class HelperProtocolTest {
     @Test
     void everyFixtureDecodesAndReencodes() throws IOException {
         List<byte[]> all = allFixtures();
-        assertEquals(32, all.size()); // one per message type, a second and third CAPTURE (window, main), a second WINDOWS_TO_DISPLAY
+        // one per message type (33), a second and third CAPTURE (window, main), Mirror (slot 0) POINTER_DOWN / CLICK /
+        // SCROLL, and OPEN_APP of a web page
+        assertEquals(39, all.size());
         for (byte[] bytes : all) {
             FrameReader reader = FrameReader.forHelperMessages();
             reader.push(bytes, 0, bytes.length);
@@ -371,7 +422,7 @@ class HelperProtocolTest {
 
     @Test
     void unknownTypeRejected() {
-        for (int type : new int[] {0, 19, 63, 75, 255}) {
+        for (int type : new int[] {0, 17, 18, 22, 63, 78, 255}) { // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK
             FrameReader reader = FrameReader.forHelperMessages();
             byte[] bytes = envelope(type, "{}");
             reader.push(bytes, 0, bytes.length);

@@ -175,44 +175,22 @@ struct TypingMachine {
     }
 }
 
-/// Joining a world moves the player's windows from the main display onto their first hologram's display, keeping the
-/// layout: every frame is scaled by one factor (aspect kept) from the main display's visible area into the target's,
-/// centred, and kept inside it. Pure.
-enum WindowMovePlan {
-    static func plan(_ frames: [CGRect], from source: CGRect, to destination: CGRect) -> [CGRect] {
-        guard source.width > 0, source.height > 0 else { return frames }
-        let s = min(destination.width / source.width, destination.height / source.height)
-        let ox = destination.minX + (destination.width - source.width * s) / 2
-        let oy = destination.minY + (destination.height - source.height * s) / 2
-        return frames.map { f in
-            let w = min(f.width * s, destination.width), h = min(f.height * s, destination.height)
-            let x = min(max(ox + (f.minX - source.minX) * s, destination.minX), destination.maxX - w)
-            let y = min(max(oy + (f.minY - source.minY) * s, destination.minY), destination.maxY - h)
-            return CGRect(x: x, y: y, width: w, height: h)
+/// Where a pointer message lands (spec 5.10): slot 1-4 = that virtual display, (x, y) one of its pixels; slot 0 = the
+/// main display (a Mirror hologram), (x, y) a pixel of a w × h picture of it, mapped by proportion onto its bounds in
+/// points (so a Retina display, whose points are half its pixels, and any capture size both work). Pure.
+enum PointerTarget {
+    static let mainSlot = 0
+
+    enum Failure: Error, Equatable { case noDisplay, noPictureSize }
+
+    static func globalPoint(slot: Int, x: Int, y: Int, w: Int?, h: Int?, main: CGRect,
+                            display: (Int) -> (bounds: CGRect, width: Int, height: Int)?) -> Result<CGPoint, Failure> {
+        if slot == mainSlot {
+            guard let w, let h, w > 0, h > 0 else { return .failure(.noPictureSize) }
+            guard !main.isEmpty else { return .failure(.noDisplay) }
+            return .success(PointerMapping.globalPoint(x: x, y: y, width: w, height: h, bounds: main))
         }
-    }
-}
-
-/// Where each moved window was before, so leaving puts it back. The first original wins (a window moved twice goes back
-/// to where it was before the first move); restoring forgets everything, closed windows included. Pure.
-struct WindowLedger<Key: Hashable> {
-    private var originals: [Key: CGRect] = [:]
-    private var order: [Key] = []
-
-    var count: Int { originals.count }
-    var keys: [Key] { order }
-
-    mutating func record(_ key: Key, original: CGRect) {
-        guard originals[key] == nil else { return }
-        originals[key] = original
-        order.append(key)
-    }
-
-    /// The frames to put back, for the windows that still exist, in the order they were moved; then forgets them all.
-    mutating func restore(existing: Set<Key>) -> [(key: Key, frame: CGRect)] {
-        let out = order.compactMap { key in existing.contains(key) ? originals[key].map { (key: key, frame: $0) } : nil }
-        originals.removeAll()
-        order.removeAll()
-        return out
+        guard let d = display(slot) else { return .failure(.noDisplay) }
+        return .success(PointerMapping.globalPoint(x: x, y: y, width: d.width, height: d.height, bounds: d.bounds))
     }
 }

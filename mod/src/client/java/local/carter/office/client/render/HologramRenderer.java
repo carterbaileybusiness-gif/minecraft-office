@@ -1,5 +1,6 @@
 package local.carter.office.client.render;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Predicate;
@@ -10,10 +11,15 @@ import com.mojang.math.Axis;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.OfficeMod;
+import local.carter.office.client.dock.Dock;
+import local.carter.office.client.dock.DockIcons;
+import local.carter.office.client.dock.DockItem;
+import local.carter.office.client.dock.DockLayout;
 import local.carter.office.client.interact.CornerDrag;
 import local.carter.office.client.interact.HologramInteractions;
 import local.carter.office.client.interact.HologramPreview;
 import local.carter.office.client.pointer.PointerClient;
+import local.carter.office.client.pointer.PointerPort;
 import local.carter.office.client.render.HologramLook.Label;
 import local.carter.office.client.render.HologramLook.State;
 import local.carter.office.core.HologramGeometry.Corner;
@@ -54,10 +60,12 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 	public static final Identifier OFFLINE = OfficeMod.id("textures/misc/offline.png");
 	public static final Identifier SCANLINES = OfficeMod.id("textures/misc/scanlines.png");
 	public static final Identifier ICONS = OfficeMod.id("textures/misc/icons.png");
-	/** The in-world pointer's arrow (16 x 24, hot spot at the top-left pixel, nearest filtering: crisp). */
-	public static final Identifier CURSOR = OfficeMod.id("textures/misc/cursor.png");
-	/** Cursor height as a share of the hologram's height (like a 32 px pointer on a 1080 px screen). */
-	static final float CURSOR_SHARE = 0.032f;
+	/** The Dock bar's tint: dark glass, like macOS's Dock. */
+	static final int DOCK_BAR = 0xC81C2129;
+	/** A missing icon's placeholder tint. */
+	static final int DOCK_PLACEHOLDER = 0x80FFFFFF;
+	/** A hovered icon grows by this much (like the Dock's magnification, gently). */
+	static final float DOCK_HOVER_SCALE = 1.14f;
 
 	/** Edge glow width (blocks) beyond the content. */
 	public static final float GLOW = 0.06f;
@@ -106,7 +114,10 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 		st.hoverCorner = null;
 		st.dragCorner = null;
 		st.handles = false;
-		st.cursor = false;
+		st.dock = null;
+		st.dockIcons.clear();
+		st.dockHover = -1;
+		st.dockLabel = "";
 		if (spec == null) {
 			return;
 		}
@@ -139,11 +150,17 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			st.handles = true;
 			st.hoverCorner = hover.corner();
 		}
-		double[] cursor = isOwner && st.look == State.LIVE ? PointerClient.cursorOn(be.hologramId()) : null;
-		if (cursor != null) {
-			st.cursor = true;
-			st.cursorU = (float) cursor[0];
-			st.cursorV = (float) cursor[1];
+		// The mini Dock: only the owner's client draws it (the icons are theirs), only on a live Extend screen. The
+		// crosshair is the pointer: no cursor is drawn (Carter).
+		PointerPort port = isOwner && st.look == State.LIVE && Dock.on(spec, true) ? PointerClient.currentPort() : null;
+		List<DockItem> items = Dock.items(port);
+		if (port != null && items != null) {
+			st.dock = Dock.layout(spec, items.size());
+			for (DockItem item : items) {
+				st.dockIcons.add(DockIcons.texture(item, port));
+			}
+			st.dockHover = PointerClient.dockHover(be.hologramId());
+			st.dockLabel = st.dockHover >= 0 && st.dockHover < items.size() ? items.get(st.dockHover).name() : "";
 		}
 		CornerDrag drag = HologramInteractions.cornerDrag();
 		if (drag != null && drag.blockEntity() == be) {
@@ -221,15 +238,9 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 				handles(buf, pose, hw, hh, hovered);
 			});
 		}
-		// in-world pointer: a crisp arrow with its tip at the crosshair (only the owner's client draws it)
-		if (st.cursor) {
-			float ch = Math.max(0.035f, 2 * hh * CURSOR_SHARE);
-			float cw = ch * (16f / 24f);
-			float cx = (st.cursorU - 0.5f) * 2 * hw;
-			float cy = (0.5f - st.cursorV) * 2 * hh;
-			collector.order(5).submitCustomGeometry(poseStack, RenderTypes.text(CURSOR), (pose, buf) -> {
-				textured(buf, pose, cx, cy - ch, cx + cw, cy, 0.009f, 0f, 0f, 1f, 1f, 0xFFFFFFFF);
-			});
+		DockLayout dock = st.dock;
+		if (dock != null) {
+			submitDock(poseStack, collector.order(5), st, dock, hw, hh);
 		}
 		poseStack.popPose();
 
@@ -248,6 +259,67 @@ public class HologramRenderer implements BlockEntityRenderer<HologramBlockEntity
 			});
 			poseStack.popPose();
 		}
+	}
+
+	/**
+	 * The mini Dock along the bottom of the picture: a rounded dark bar (left cap, middle, right cap of {@link
+	 * DockIcons#BAR}), the icons in a row, the hovered one a little bigger with its name above the bar.
+	 */
+	private void submitDock(final PoseStack poseStack, final OrderedSubmitNodeCollector out, final HologramRenderState st, final DockLayout dock,
+			final float hw, final float hh) {
+		DockLayout.Box bar = dock.bar();
+		float x0 = lx(bar.u0(), hw);
+		float x1 = lx(bar.u1(), hw);
+		float yTop = ly(bar.v0(), hh);
+		float yBottom = ly(bar.v1(), hh);
+		float cap = Math.min((yTop - yBottom) / 2f, (x1 - x0) / 2f); // corner radius: half the bar's height
+		out.submitCustomGeometry(poseStack, RenderTypes.text(DockIcons.BAR), (pose, buf) -> {
+			textured(buf, pose, x0, yBottom, x0 + cap, yTop, 0.004f, 0f, 0f, 0.5f, 1f, DOCK_BAR);
+			textured(buf, pose, x0 + cap, yBottom, x1 - cap, yTop, 0.004f, 0.5f, 0f, 0.5f, 1f, DOCK_BAR);
+			textured(buf, pose, x1 - cap, yBottom, x1, yTop, 0.004f, 0.5f, 0f, 1f, 1f, DOCK_BAR);
+		});
+		for (int i = 0; i < dock.count(); i++) {
+			DockLayout.Box b = dock.icon(i);
+			float scale = i == st.dockHover ? DOCK_HOVER_SCALE : 1f;
+			float cx = (lx(b.u0(), hw) + lx(b.u1(), hw)) / 2f;
+			float half = (lx(b.u1(), hw) - lx(b.u0(), hw)) / 2f * scale;
+			float iy0 = ly(b.v1(), hh);
+			float iy1 = iy0 + 2 * half; // grows upwards from its base, like the macOS Dock
+			Identifier tex = i < st.dockIcons.size() ? st.dockIcons.get(i) : null;
+			Identifier use = tex != null ? tex : DockIcons.BAR;
+			int tint = tex != null ? 0xFFFFFFFF : DOCK_PLACEHOLDER;
+			out.submitCustomGeometry(poseStack, RenderTypes.text(use), (pose, buf) -> {
+				textured(buf, pose, cx - half, iy0, cx + half, iy1, 0.005f, 0f, 0f, 1f, 1f, tint);
+			});
+		}
+		if (st.dockHover >= 0 && st.dockHover < dock.count() && !st.dockLabel.isEmpty()) {
+			DockLayout.Box b = dock.icon(st.dockHover);
+			float iconH = ly(b.v0(), hh) - ly(b.v1(), hh);
+			float s = iconH * 0.32f / 8f; // label cap height about a third of an icon
+			FormattedCharSequence name = Component.literal(st.dockLabel).getVisualOrderText();
+			float cx = (lx(b.u0(), hw) + lx(b.u1(), hw)) / 2f;
+			float top = yTop + iconH * 0.62f;
+			float tw = font.width(name) * s;
+			float pad = 3f * s;
+			out.submitCustomGeometry(poseStack, RenderTypes.text(DockIcons.BAR), (pose, buf) -> {
+				textured(buf, pose, cx - tw / 2f - pad, top - 9f * s - pad * 0.5f, cx + tw / 2f + pad, top + pad * 0.5f, 0.006f,
+						0.5f, 0f, 0.5f, 1f, DOCK_BAR);
+			});
+			poseStack.pushPose();
+			poseStack.translate(cx, top, 0.007f);
+			poseStack.scale(s, -s, s);
+			out.submitText(poseStack, -font.width(name) / 2f, 0f, name, false, Font.DisplayMode.POLYGON_OFFSET, FULL_BRIGHT, 0xFFF4F7FA, 0, 0);
+			poseStack.popPose();
+		}
+	}
+
+	/** Picture u → local x; v (top 0) → local y (up +). */
+	private static float lx(final double u, final float hw) {
+		return (float) ((u - 0.5) * 2 * hw);
+	}
+
+	private static float ly(final double v, final float hh) {
+		return (float) ((0.5 - v) * 2 * hh);
 	}
 
 	/** Moves the pose from the block corner to the hologram centre, front facing +Z. */

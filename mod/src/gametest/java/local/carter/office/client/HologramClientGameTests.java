@@ -10,6 +10,10 @@ import javax.imageio.ImageIO;
 import com.mojang.blaze3d.platform.InputConstants;
 
 import local.carter.office.client.capture.OwnScreens;
+import local.carter.office.client.dock.AppSearchScreen;
+import local.carter.office.client.dock.Dock;
+import local.carter.office.client.dock.DockItem;
+import local.carter.office.client.dock.DockLayout;
 import local.carter.office.client.capture.TestPatternSource;
 import local.carter.office.client.interact.HologramSettingsScreen;
 import local.carter.office.client.render.HologramLook;
@@ -112,6 +116,20 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		be.setSpec(spec);
 		be.onServerLoad(level); // indexes it and computes ownerOnline from the player list
 		be.setSpec(spec); // re-sync with ownerOnline
+	}
+
+	/** Replaces the emitter at {@code pos} with one owned by {@code owner}, keeping its spec (an owner never changes). */
+	private static void reownHologram(final MinecraftServer server, final BlockPos pos, final UUID owner) {
+		ServerLevel level = player(server).level();
+		HologramSpec old = ((HologramBlockEntity) level.getBlockEntity(pos)).spec();
+		level.removeBlock(pos, false);
+		level.setBlockAndUpdate(pos, OfficeBlocks.HOLOGRAM_EMITTER.defaultBlockState());
+		HologramBlockEntity be = (HologramBlockEntity) level.getBlockEntity(pos);
+		HologramSpec spec = new HologramSpec(owner, old.shape(), old.mode(), old.privacy(), old.displaySlot(), old.windowKey(), old.width(),
+				old.offX(), old.offY(), old.offZ(), old.yaw());
+		be.setSpec(spec);
+		be.onServerLoad(level);
+		be.setSpec(spec);
 	}
 
 	private void placedHologramVisible(final ClientGameTestContext context, final TestSingleplayerContext sp) {
@@ -523,12 +541,28 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		public void onDragEnded(final java.util.function.Consumer<String> listener) {
 			dragEnded = listener;
 		}
+
+		@Override
+		public void windowLayer(final boolean floating, final boolean clickThrough) {
+			calls.add("layer " + (floating ? "floating" : "normal") + (clickThrough ? " click-through" : ""));
+		}
+
+		@Override
+		public java.util.Map<String, String> installedApps() {
+			return java.util.Map.of("com.google.Chrome", "Google Chrome", "com.apple.Notes", "Notes");
+		}
+
+		@Override
+		public void openApp(final int slot, final DockItem item) {
+			calls.add("open " + slot + " " + (item.bundle() != null ? item.bundle() : item.url()));
+		}
 	}
 
 	/**
 	 * Mac in-world use with a fake helper: a left click on your own Extend hologram is a CLICK there (typing mode opens,
 	 * the helper's TYPING_EXIT closes it), holding and turning is POINTER_DOWN + POINTER_MOVE, the wheel scrolls the app
-	 * not the hotbar, and the stone right behind the hologram is never broken.
+	 * not the hotbar, the Dock's icons open apps (OPEN_APP) and its "All apps" the search, a click on a Mirror makes
+	 * Minecraft click-through and goes to slot 0, and the stone right behind the hologram is never broken.
 	 */
 	private void inWorldPointer(final ClientGameTestContext context, final TestSingleplayerContext sp) {
 		FakePointer fake = new FakePointer();
@@ -598,13 +632,67 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				throw new AssertionError("the wheel on a hologram should scroll the app and keep the hotbar slot, sent " + fake.calls);
 			}
 
+			// 5. the mini Dock (spec 5.10): its first icon (Chrome; Safari, Finder… aren't "installed" here) opens Chrome onto
+			// display 1 instead of clicking the screen behind it; "All apps" opens the search
+			fake.calls.clear();
+			java.util.List<DockItem> items = DockItem.shown(fake.installedApps());
+			DockLayout dock = Dock.layout(spec, items.size());
+			look(context, onPicture(f, dock.icon(0)));
+			context.waitTicks(3);
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(3);
+			if (!fake.calls.contains("open 1 com.google.Chrome") || fake.calls.stream().anyMatch(c -> c.startsWith("click") || c.startsWith("down"))) {
+				throw new AssertionError("a click on the Dock's Chrome icon should send OPEN_APP Chrome on display 1 and nothing else, sent " + fake.calls);
+			}
+			if (context.computeOnClient(mc -> mc.gui.screen() != null)) {
+				throw new AssertionError("opening an app from the Dock keeps you in the world");
+			}
+			context.takeScreenshot("pointer-dock");
+			look(context, onPicture(f, dock.icon(items.size() - 1)));
+			context.waitTicks(3);
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(3);
+			if (!context.computeOnClient(mc -> mc.gui.screen() instanceof AppSearchScreen)) {
+				throw new AssertionError("All apps should open the app search");
+			}
+			context.takeScreenshot("pointer-dock-all-apps");
+			context.runOnClient(mc -> mc.gui.setScreen(null));
+			context.waitTicks(3);
+
+			// 6. the Mirror (spec 5.10): a click goes to the main display (slot 0) with Minecraft made click-through first,
+			// and typing's end restores it
+			sp.getServer().runOnServer(server -> {
+				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
+				be.setSpec(be.spec().withMode(local.carter.office.core.Mode.MIRROR));
+			});
+			context.waitFor(mc -> clientHologram(mc) != null && clientHologram(mc).spec().mode() == local.carter.office.core.Mode.MIRROR, 100);
+			fake.calls.clear();
+			look(context, hologramCenter(spec));
+			context.waitTicks(3);
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(5);
+			int through = fake.calls.indexOf("layer floating click-through");
+			int mirrorClick = fake.calls.indexOf("click LEFT 0 960,540");
+			if (through < 0 || mirrorClick < 0 || through > mirrorClick) {
+				throw new AssertionError("a Mirror click should make Minecraft click-through, then CLICK slot 0 at the centre, sent " + fake.calls);
+			}
+			context.runOnClient(mc -> fake.typingExit.accept("esc"));
+			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
+			context.waitTicks(3);
+			String last = fake.calls.stream().filter(c -> c.startsWith("layer")).reduce((a, b) -> b).orElse("");
+			if (last.contains("click-through")) {
+				throw new AssertionError("after typing Minecraft must not stay click-through, sent " + fake.calls);
+			}
+			sp.getServer().runOnServer(server -> {
+				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
+				be.setSpec(be.spec().withMode(local.carter.office.core.Mode.EXTEND));
+			});
+			context.waitFor(mc -> clientHologram(mc) != null && clientHologram(mc).spec().mode() == local.carter.office.core.Mode.EXTEND, 100);
+
 			// 4. a friend's hologram: right-click with a block in hand places nothing through it, left-click breaks nothing
 			UUID friend = UUID.fromString("00000000-0000-0000-0000-0000000f00d5");
 			sp.getServer().runOnServer(server -> {
-				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
-				HologramSpec mine = be.spec();
-				be.setSpec(new HologramSpec(friend, mine.shape(), mine.mode(), mine.privacy(), mine.displaySlot(), mine.windowKey(),
-						mine.width(), mine.offX(), mine.offY(), mine.offZ(), mine.yaw()));
+				reownHologram(server, emitter, friend); // a hologram's owner never changes: a friend's emitter in its place
 				player(server).setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.DIRT, 8));
 			});
 			context.waitFor(mc -> clientHologram(mc) != null && friend.equals(clientHologram(mc).spec().owner()), 100);
@@ -626,12 +714,8 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			if (placed != null) {
 				throw new AssertionError(placed);
 			}
-			sp.getServer().runOnServer(server -> {
-				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
-				HologramSpec theirs = be.spec();
-				be.setSpec(new HologramSpec(player(server).getUUID(), theirs.shape(), theirs.mode(), theirs.privacy(),
-						theirs.displaySlot(), theirs.windowKey(), theirs.width(), theirs.offX(), theirs.offY(), theirs.offZ(), theirs.yaw()));
-			});
+			sp.getServer().runOnServer(server -> reownHologram(server, emitter, player(server).getUUID()));
+			context.waitFor(mc -> clientHologram(mc) != null && mc.player.getUUID().equals(clientHologram(mc).spec().owner()), 100);
 			context.waitTicks(3);
 
 			sp.getConnection().waitForServerboundPackets();
@@ -653,6 +737,13 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			});
 			context.waitTicks(3);
 		}
+	}
+
+	/** The world point at the centre of a box of the hologram's picture ((u, v), v down). */
+	private static Vec3d onPicture(final Frame f, final DockLayout.Box b) {
+		double u = (b.u0() + b.u1()) / 2;
+		double v = (b.v0() + b.v1()) / 2;
+		return f.center().add(f.right().scale((u - 0.5) * f.w())).add(f.up().scale((0.5 - v) * f.h()));
 	}
 
 	private static void sleep(final long ms) {

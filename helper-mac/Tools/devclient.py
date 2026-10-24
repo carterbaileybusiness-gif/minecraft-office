@@ -17,9 +17,12 @@ Steps (run in order; incoming messages are printed as they arrive):
   up SLOT X Y [BUTTON]       POINTER_UP (the mod cancels the drag)
   click SLOT X Y [BUTTON]    CLICK: a real click there; the app gets the keyboard (typing mode, Esc returns)
   scroll SLOT X Y DX DY      SCROLL (pixels; positive DY = up)
+                             SLOT 0 = the main display (Mirror): X Y are a pixel of a 1920 x 1080 picture of it
+                             (w/h are sent). Nothing here makes a window click-through: what is under X Y gets it.
   exittyping                 EXIT_TYPING
-  windowsto SLOT [BUNDLE..]  WINDOWS_TO_DISPLAY (optionally only these apps' windows; ends at the next step word)
-  windowsback                WINDOWS_BACK
+  apps                       LIST_APPS, wait for APPS (prints how many and the first few)
+  icons SIZE BUNDLE [..]     APP_ICONS (ends at the next step word); prints each icon's PNG size
+  open SLOT BUNDLE|URL       OPEN_APP: the app (bundle id) or https page onto that slot's display; waits for APP_RESULT
   sleep SECONDS              wait (still printing incoming messages)
   displays                   print online display ids (CoreGraphics)
   uuid SLOT                  print the display UUID macOS uses to restore arrangement / window positions
@@ -43,9 +46,11 @@ NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY"
          8: "ZOOM_IN", 9: "ZOOM_OUT", 10: "REQUEST_PERMISSIONS", 64: "WELCOME", 65: "WINDOWS", 66: "DISPLAY", 67: "FRAME", 68: "PATCH",
          69: "ENDED", 70: "EXIT_ZOOM", 71: "ERROR",
          11: "POINTER_DOWN", 12: "POINTER_MOVE", 13: "POINTER_UP", 14: "SCROLL", 15: "CLICK", 16: "EXIT_TYPING",
-         17: "WINDOWS_TO_DISPLAY", 18: "WINDOWS_BACK", 72: "TYPING_EXIT", 73: "DRAG_DELTA", 74: "DRAG_ENDED"}
+         19: "LIST_APPS", 20: "APP_ICONS", 21: "OPEN_APP", 72: "TYPING_EXIT", 73: "DRAG_DELTA", 74: "DRAG_ENDED",
+         75: "APPS", 76: "ICONS", 77: "APP_RESULT"}
 STEPS = {"create", "remove", "list", "capture", "ready", "stop", "zoomin", "zoomout", "permissions", "down", "move", "up",
-         "click", "scroll", "exittyping", "windowsto", "windowsback", "sleep", "uuid", "displays", "waitgone", "badtoken"}
+         "click", "scroll", "exittyping", "apps", "icons", "open", "sleep", "uuid", "displays", "waitgone", "badtoken"}
+MAIN_PICTURE = {"w": 1920, "h": 1080}  # slot 0 (Mirror): the picture size x / y belong to
 CODES = {v: k for k, v in NAMES.items()}
 
 cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
@@ -136,7 +141,13 @@ class Client:
                 value = None
             else:
                 value = json.loads(payload) if payload else None
-                print(f"<- {kind} {json.dumps(value)}", flush=True)
+                if kind == "APPS":
+                    apps = value.get("apps", [])
+                    print(f"<- APPS {len(apps)} apps, e.g. {[a['name'] for a in apps[:6]]}", flush=True)
+                elif kind == "ICONS":
+                    print(f"<- ICONS {[(i['bundle'], len(i['png']) * 3 // 4) for i in value.get('icons', [])]} (bundle, PNG bytes)", flush=True)
+                else:
+                    print(f"<- {kind} {json.dumps(value)}", flush=True)
                 if kind == "DISPLAY":
                     self.displays[value["slot"]] = value["displayId"]
             with self.cond:
@@ -206,23 +217,29 @@ def main(argv):
             if i < len(argv) and argv[i] in ("left", "right", "middle"):
                 button = argv[i]; i += 1
             kind = {"down": "POINTER_DOWN", "up": "POINTER_UP", "click": "CLICK"}[step]
-            c.send(kind, {"slot": slot, "x": x, "y": y, "button": button})
+            c.send(kind, {"slot": slot, "x": x, "y": y, "button": button, **(MAIN_PICTURE if slot == 0 else {})})
         elif step == "move":
             slot, x, y = map(int, argv[i + 1:i + 4]); i += 4
-            c.send("POINTER_MOVE", {"slot": slot, "x": x, "y": y})
+            c.send("POINTER_MOVE", {"slot": slot, "x": x, "y": y, **(MAIN_PICTURE if slot == 0 else {})})
         elif step == "scroll":
             slot, x, y, dx, dy = map(int, argv[i + 1:i + 6]); i += 6
-            c.send("SCROLL", {"slot": slot, "x": x, "y": y, "dx": dx, "dy": dy})
+            c.send("SCROLL", {"slot": slot, "x": x, "y": y, "dx": dx, "dy": dy, **(MAIN_PICTURE if slot == 0 else {})})
         elif step == "exittyping":
             c.send("EXIT_TYPING"); i += 1
-        elif step == "windowsto":
-            slot = int(argv[i + 1]); i += 2
-            apps = []
+        elif step == "apps":
+            c.send("LIST_APPS"); i += 1
+            c.wait_for("APPS", 10)
+        elif step == "icons":
+            size = int(argv[i + 1]); i += 2
+            bundles = []
             while i < len(argv) and argv[i] not in STEPS:
-                apps.append(argv[i]); i += 1
-            c.send("WINDOWS_TO_DISPLAY", {"slot": slot, **({"apps": apps} if apps else {})})
-        elif step == "windowsback":
-            c.send("WINDOWS_BACK"); i += 1
+                bundles.append(argv[i]); i += 1
+            c.send("APP_ICONS", {"bundles": bundles, "size": size})
+            c.wait_for("ICONS", 10)
+        elif step == "open":
+            slot, target = int(argv[i + 1]), argv[i + 2]; i += 3
+            c.send("OPEN_APP", {"slot": slot, ("url" if target.startswith("https://") else "bundle"): target})
+            c.wait_for("APP_RESULT", 45)
         elif step == "sleep":
             time.sleep(float(argv[i + 1])); i += 2
         elif step == "uuid":

@@ -56,11 +56,13 @@ enum MessageType: UInt8, CaseIterable {
     case requestPermissions = 10
     /// In-world use (the crosshair is the mouse): a drag the helper drives, a click that enters typing mode, scrolling.
     case pointerDown = 11, pointerMove = 12, pointerUp = 13, scroll = 14, click = 15, exitTyping = 16
-    /// Joining / leaving a world: the player's windows move onto a hologram's display and back.
-    case windowsToDisplay = 17, windowsBack = 18
+    // 17, 18 (the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK: windows never move by themselves any more, spec 5.10)
+    /// The mini Dock (spec 5.10): the installed apps, their icons, and opening one onto a hologram's display.
+    case listApps = 19, appIcons = 20, openApp = 21
     // Helper → mod
     case welcome = 64, windows = 65, display = 66, frame = 67, patch = 68, ended = 69, exitZoom = 70, error = 71
     case typingExit = 72, dragDelta = 73, dragEnded = 74
+    case apps = 75, icons = 76, appResult = 77
 }
 
 enum ProtocolError: Error, Equatable {
@@ -127,11 +129,28 @@ struct WindowRect: Codable, Equatable { var x: Int; var y: Int; var w: Int; var 
 struct ZoomInPayload: Codable, Equatable { var surface: Int; var mcWindowFrame: WindowRect }
 
 /// A point on a virtual display in its pixels (0...w-1, 0...h-1). `button` for POINTER_DOWN / POINTER_UP / CLICK.
-struct PointerPayload: Codable, Equatable { var slot: Int; var x: Int; var y: Int; var button: PointerButton? }
-/// Scroll at a display pixel; dx/dy in pixels of content motion (positive dy = wheel away from you / up).
-struct ScrollPayload: Codable, Equatable { var slot: Int; var x: Int; var y: Int; var dx: Int; var dy: Int }
-/// `apps` (bundle ids) limits which apps' windows move (tests); absent = every app but Minecraft and the helper.
-struct WindowsToDisplayPayload: Codable, Equatable { var slot: Int; var apps: [String]? }
+/// Slot 0 is the main display (a Mirror hologram): (x, y) is then a pixel of a `w` × `h` picture of it (both required).
+struct PointerPayload: Codable, Equatable {
+    var slot: Int; var x: Int; var y: Int; var button: PointerButton?
+    var w: Int? = nil; var h: Int? = nil
+}
+/// Scroll at a display pixel; dx/dy in pixels of content motion (positive dy = wheel away from you / up). Slot 0: as above.
+struct ScrollPayload: Codable, Equatable {
+    var slot: Int; var x: Int; var y: Int; var dx: Int; var dy: Int
+    var w: Int? = nil; var h: Int? = nil
+}
+/// An installed app: bundle id and display name.
+struct AppInfo: Codable, Equatable { var bundle: String; var name: String }
+struct AppsPayload: Codable, Equatable { var apps: [AppInfo] }
+/// Icons for these apps, `size` × `size` pixels (16...256), at most 64 per request.
+struct AppIconsPayload: Codable, Equatable { var bundles: [String]; var size: Int }
+/// One icon: a PNG, base64.
+struct AppIcon: Codable, Equatable { var bundle: String; var png: String }
+struct IconsPayload: Codable, Equatable { var icons: [AppIcon] }
+/// Open an app (`bundle`) or a web page (`url`, https, in the default browser) onto slot's display (1...4); exactly one.
+struct OpenAppPayload: Codable, Equatable { var slot: Int; var bundle: String?; var url: String? }
+/// How an OPEN_APP went. `target` = its bundle id or url.
+struct AppResultPayload: Codable, Equatable { var target: String; var ok: Bool; var message: String }
 struct ReasonPayload: Codable, Equatable { var reason: String }
 /// Physical mouse motion (points) during a helper-driven drag, for the mod to turn the player's head with.
 struct DeltaPayload: Codable, Equatable { var dx: Int; var dy: Int }
@@ -191,8 +210,9 @@ enum Message: Equatable {
     case scroll(ScrollPayload)
     case click(PointerPayload)
     case exitTyping
-    case windowsToDisplay(WindowsToDisplayPayload)
-    case windowsBack
+    case listApps
+    case appIcons(AppIconsPayload)
+    case openApp(OpenAppPayload)
     case welcome(WelcomePayload)
     case windows([WindowInfo])
     case display(DisplayPayload)
@@ -204,6 +224,9 @@ enum Message: Equatable {
     case typingExit(ReasonPayload)
     case dragDelta(DeltaPayload)
     case dragEnded(ReasonPayload)
+    case apps(AppsPayload)
+    case icons(IconsPayload)
+    case appResult(AppResultPayload)
 
     var type: MessageType {
         switch self {
@@ -223,8 +246,9 @@ enum Message: Equatable {
         case .scroll: return .scroll
         case .click: return .click
         case .exitTyping: return .exitTyping
-        case .windowsToDisplay: return .windowsToDisplay
-        case .windowsBack: return .windowsBack
+        case .listApps: return .listApps
+        case .appIcons: return .appIcons
+        case .openApp: return .openApp
         case .welcome: return .welcome
         case .windows: return .windows
         case .display: return .display
@@ -236,6 +260,9 @@ enum Message: Equatable {
         case .typingExit: return .typingExit
         case .dragDelta: return .dragDelta
         case .dragEnded: return .dragEnded
+        case .apps: return .apps
+        case .icons: return .icons
+        case .appResult: return .appResult
         }
     }
 
@@ -253,10 +280,14 @@ enum Message: Equatable {
     func payload() throws -> Data {
         switch self {
         case .hello(let p): return try Self.json(p)
-        case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .windowsBack: return try Self.json(Empty())
+        case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .listApps: return try Self.json(Empty())
         case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p): return try Self.json(p)
         case .scroll(let p): return try Self.json(p)
-        case .windowsToDisplay(let p): return try Self.json(p)
+        case .appIcons(let p): return try Self.json(p)
+        case .openApp(let p): return try Self.json(p)
+        case .apps(let p): return try Self.json(p)
+        case .icons(let p): return try Self.json(p)
+        case .appResult(let p): return try Self.json(p)
         case .typingExit(let p), .dragEnded(let p): return try Self.json(p)
         case .dragDelta(let p): return try Self.json(p)
         case .createDisplay(let p): return try Self.json(p)
@@ -314,6 +345,12 @@ enum Message: Equatable {
         guard total == pixelBytes else { throw ProtocolError.badPayload("patch pixel bytes") }
     }
 
+    /// Slot 0 (the main display, Mirror) needs the picture size its (x, y) belongs to.
+    private static func checkMainPicture(slot: Int, w: Int?, h: Int?) throws {
+        guard slot == 0 else { return }
+        guard let w, let h, w > 0, h > 0 else { throw ProtocolError.badPayload("slot 0 (the main display) needs w and h") }
+    }
+
     private static func decodeJSON<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
         do { return try JSONDecoder().decode(type, from: data) }
         catch { throw ProtocolError.badPayload("\(T.self): \(error)") }
@@ -341,16 +378,35 @@ enum Message: Equatable {
         case .pointerDown, .pointerUp, .click:
             let p = try decodeJSON(PointerPayload.self, payload)
             guard p.button != nil else { throw ProtocolError.badPayload("\(type) needs button") }
+            try checkMainPicture(slot: p.slot, w: p.w, h: p.h)
             switch type {
             case .pointerDown: return .pointerDown(p)
             case .pointerUp: return .pointerUp(p)
             default: return .click(p)
             }
-        case .pointerMove: return .pointerMove(try decodeJSON(PointerPayload.self, payload))
-        case .scroll: return .scroll(try decodeJSON(ScrollPayload.self, payload))
+        case .pointerMove:
+            let p = try decodeJSON(PointerPayload.self, payload)
+            try checkMainPicture(slot: p.slot, w: p.w, h: p.h)
+            return .pointerMove(p)
+        case .scroll:
+            let p = try decodeJSON(ScrollPayload.self, payload)
+            try checkMainPicture(slot: p.slot, w: p.w, h: p.h)
+            return .scroll(p)
         case .exitTyping: return .exitTyping
-        case .windowsToDisplay: return .windowsToDisplay(try decodeJSON(WindowsToDisplayPayload.self, payload))
-        case .windowsBack: return .windowsBack
+        case .listApps: return .listApps
+        case .appIcons:
+            let p = try decodeJSON(AppIconsPayload.self, payload)
+            guard (16...256).contains(p.size), p.bundles.count <= 64, p.bundles.allSatisfy(AppRules.isBundleId) else {
+                throw ProtocolError.badPayload("APP_ICONS needs 16...256 px and at most 64 bundle ids")
+            }
+            return .appIcons(p)
+        case .openApp:
+            let p = try decodeJSON(OpenAppPayload.self, payload)
+            if let problem = AppRules.problem(p) { throw ProtocolError.badPayload(problem) }
+            return .openApp(p)
+        case .apps: return .apps(try decodeJSON(AppsPayload.self, payload))
+        case .icons: return .icons(try decodeJSON(IconsPayload.self, payload))
+        case .appResult: return .appResult(try decodeJSON(AppResultPayload.self, payload))
         case .typingExit: return .typingExit(try decodeJSON(ReasonPayload.self, payload))
         case .dragDelta: return .dragDelta(try decodeJSON(DeltaPayload.self, payload))
         case .dragEnded: return .dragEnded(try decodeJSON(ReasonPayload.self, payload))

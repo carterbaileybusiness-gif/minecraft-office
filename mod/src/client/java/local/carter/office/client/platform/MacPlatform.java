@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 
 import local.carter.office.client.OfficeClient;
 import local.carter.office.client.capture.CaptureSource;
+import local.carter.office.client.dock.DockItem;
 import local.carter.office.client.capture.MacHelperSource;
 import local.carter.office.client.capture.OwnScreens;
 import local.carter.office.client.render.HologramLook;
@@ -47,8 +48,11 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
  * macOS: the player's own screens come from OfficeHelper.app (virtual displays, Mirror = the main display minus
  * Minecraft, ScreenCaptureKit) over {@link HelperConnection}, and the holograms are used right in the world with the
  * crosshair as the mouse ({@link #pointer}, spec 5.9: clicks, helper-driven drags, scrolling, typing mode with Esc to
- * return). Joining moves the player's windows onto their first hologram's display; leaving moves them back. There is
- * no zoom on a Mac ({@link #supportsZoom} false).
+ * return). The first hologram is an interactive Mirror of the laptop screen; Minecraft's window floats above the other
+ * apps there and is click-through while the player uses the Mirror ({@link MacWindow#layer}). Windows never move by
+ * themselves; the Extend holograms' mini Dock opens apps onto them. Minecraft's window defaults to borderless, filling
+ * the main display ({@link MacWindow#fillMainDisplay}; {@code -Doffice.borderless=false} keeps a normal window). There
+ * is no zoom on a Mac ({@link #supportsZoom} false).
  *
  * <p>Setup UX: the first time an own hologram needs the helper and it isn't installed, an in-game confirm screen asks
  * before anything is downloaded ("Set up your screens?", Yes / Not now). Until the helper runs with Screen Recording,
@@ -80,9 +84,10 @@ public final class MacPlatform implements Platform {
 				HelperInstaller.launch(a);
 			}
 		}, listener), r -> Minecraft.getInstance().execute(r));
-		// -Doffice.moveWindows=false keeps the player's windows where they are when joining a world
-		helper.setMoveWindowsOnJoin(!"false".equalsIgnoreCase(System.getProperty("office.moveWindows")));
 	}
+
+	/** The borderless fill-the-screen default was applied (or skipped) once at startup. */
+	private boolean windowModeDone;
 
 	public MacHelper helper() {
 		return helper;
@@ -229,6 +234,40 @@ public final class MacPlatform implements Platform {
 		public void activateMinecraft() {
 			MacApp.activate(true);
 		}
+
+		@Override
+		public void windowLayer(final boolean floating, final boolean clickThrough) {
+			MacWindow.layer(Minecraft.getInstance().getWindow().handle(), floating, clickThrough);
+		}
+
+		@Override
+		public java.util.@Nullable Map<String, String> installedApps() {
+			return helper.apps();
+		}
+
+		@Override
+		public byte @Nullable [] appIcon(final String bundle) {
+			return helper.icon(bundle);
+		}
+
+		@Override
+		public void requestIcons(final List<String> bundles) {
+			helper.requestIcons(bundles);
+		}
+
+		@Override
+		public void openApp(final int slot, final DockItem item) {
+			helper.openApp(slot, item.bundle(), item.url());
+		}
+
+		@Override
+		public void onAppProblem(final java.util.function.Consumer<String> listener) {
+			helper.onAppResult(r -> {
+				if (!r.ok()) {
+					listener.accept(r.message());
+				}
+			});
+		}
 	}
 
 	// ---------------------------------------------------------------- self-test (off the client thread)
@@ -329,6 +368,17 @@ public final class MacPlatform implements Platform {
 	}
 
 	private void tick(final Minecraft mc) {
+		if (!windowModeDone) {
+			windowModeDone = true;
+			long handle = mc.getWindow().handle();
+			if ("false".equalsIgnoreCase(System.getProperty("office.borderless"))) {
+				LOGGER.info("Office: -Doffice.borderless=false: Minecraft keeps its own window");
+			} else if (MacWindow.isFullscreen(handle)) {
+				LOGGER.info("Office: Minecraft started in its own Space; the Mirror hologram works best in a window (fn+F11 / Video Settings)");
+			} else {
+				MacWindow.fillMainDisplay(handle);
+			}
+		}
 		HelperInstaller.Asset asset = pendingAsk;
 		if (asset == null || mc.player == null || mc.gui.screen() != null) {
 			return;

@@ -1,6 +1,6 @@
 import Foundation
 
-/// In-world use: display pixel → global point, the helper-driven drag, typing mode, moving windows on join / leave.
+/// In-world use: display pixel → global point (Extend displays and the Mirror's main display), the helper-driven drag, typing mode.
 enum PointerTests {
     static func runAll() {
         run("pointer messages need their button; moves don't") {
@@ -10,8 +10,9 @@ enum PointerTests {
             }
             expectEqual(try Message.decode(type: .pointerMove, payload: noButton), .pointerMove(PointerPayload(slot: 1, x: 2, y: 3, button: nil)))
             expectThrows("unknown button") { _ = try Message.decode(type: .click, payload: Data(#"{"button":"thumb","slot":1,"x":2,"y":3}"#.utf8)) }
-            expectEqual(try Message.decode(type: .windowsToDisplay, payload: Data(#"{"slot":2}"#.utf8)),
-                        .windowsToDisplay(WindowsToDisplayPayload(slot: 2, apps: nil)), "apps is optional")
+            for gone: UInt8 in [17, 18] { // WINDOWS_TO_DISPLAY / WINDOWS_BACK are retired (spec 5.10)
+                expect(MessageType(rawValue: gone) == nil, "type \(gone) is no longer a message")
+            }
         }
 
         run("display pixel maps to the global point at its centre") {
@@ -121,42 +122,49 @@ enum PointerTests {
             expectEqual(t.enter(), [], "entering twice keeps one tap")
         }
 
-        run("windows: the main display's layout lands scaled on the hologram's display") {
-            let main = CGRect(x: 0, y: 25, width: 1440, height: 875)
-            let office = CGRect(x: 1440, y: 25, width: 1920, height: 1055)
-            let left = CGRect(x: 0, y: 25, width: 720, height: 875), right = CGRect(x: 720, y: 25, width: 720, height: 875)
-            let out = WindowMovePlan.plan([left, right], from: main, to: office)
-            let s = min(1920.0 / 1440.0, 1055.0 / 875.0)
-            let ox = 1440 + (1920 - 1440 * s) / 2
-            expect(close(out[0], CGRect(x: ox, y: 25, width: 720 * s, height: 875 * s)), "left half: \(out[0])")
-            expect(close(out[1], CGRect(x: ox + 720 * s, y: 25, width: 720 * s, height: 875 * s)), "right half: \(out[1])")
-            expect(out.allSatisfy { office.insetBy(dx: -0.5, dy: -0.5).contains($0) }, "inside the display")
-            let small = WindowMovePlan.plan([CGRect(x: 100, y: 125, width: 400, height: 300)], from: main, to: office)[0]
-            expect(abs(small.width / small.height - 400.0 / 300.0) < 0.01, "aspect kept")
-            expect(close(small.origin, CGPoint(x: ox + 100 * s, y: 25 + 100 * s)), "relative position kept: \(small.origin)")
+        run("Mirror (slot 0): a picture pixel lands on the main display by proportion, Retina points") {
+            let main = CGRect(x: 0, y: 0, width: 1440, height: 900) // a MacBook Air: 2880 x 1800 pixels, 1440 x 900 points
+            let none: (Int) -> (bounds: CGRect, width: Int, height: Int)? = { _ in nil }
+            // the hologram's 1920 x 1080 picture of a 16:10 screen (stretched onto the panel): centre → centre
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 960, y: 540, w: 1920, h: 1080, main: main, display: none),
+                        .success(CGPoint(x: 720.375, y: 450.4166666666667)))
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 0, y: 0, w: 1920, h: 1080, main: main, display: none),
+                        .success(CGPoint(x: 0.375, y: 0.4166666666666667)), "top-left pixel")
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 1919, y: 1079, w: 1920, h: 1080, main: main, display: none),
+                        .success(CGPoint(x: 1439.625, y: 899.5833333333334)), "bottom-right pixel")
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 5000, y: -3, w: 1920, h: 1080, main: main, display: none),
+                        .success(CGPoint(x: 1439.625, y: 0.4166666666666667)), "off the picture: clamped onto the screen")
+            // the menu-bar strip of the screen is reachable (y 0...24 points): the picture covers the whole display
+            if case .success(let p) = PointerTarget.globalPoint(slot: 0, x: 960, y: 20, w: 1920, h: 1080, main: main, display: none) {
+                expect(p.y < 25, "a click near the top reaches the menu bar: \(p)")
+            } else { expect(false, "slot 0 maps") }
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 1, y: 1, w: nil, h: 1080, main: main, display: none), .failure(.noPictureSize))
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 1, y: 1, w: 0, h: 0, main: main, display: none), .failure(.noPictureSize))
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 1, y: 1, w: 10, h: 10, main: .zero, display: none), .failure(.noDisplay))
         }
 
-        run("windows: anything that would hang off the display is pulled inside") {
-            let main = CGRect(x: 0, y: 25, width: 1440, height: 875)
-            let tall = CGRect(x: 1440, y: 25, width: 1080, height: 1895)
-            let out = WindowMovePlan.plan([CGRect(x: -300, y: 0, width: 3000, height: 2000), CGRect(x: 1400, y: 880, width: 500, height: 300)],
-                                          from: main, to: tall)
-            for r in out { expect(tall.insetBy(dx: -0.5, dy: -0.5).contains(r), "\(r) inside \(tall)") }
-            expect(out[1].width > 100 && out[1].height > 60, "kept a usable size")
+        run("Extend slots still map onto their virtual display; an unknown slot fails") {
+            let office = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+            let one: (Int) -> (bounds: CGRect, width: Int, height: Int)? = { $0 == 1 ? (office, 1920, 1080) : nil }
+            expectEqual(PointerTarget.globalPoint(slot: 1, x: 960, y: 540, w: nil, h: nil, main: .zero, display: one),
+                        .success(CGPoint(x: 2400.5, y: 540.5)))
+            expectEqual(PointerTarget.globalPoint(slot: 1, x: 960, y: 540, w: 10, h: 10, main: .zero, display: one),
+                        .success(CGPoint(x: 2400.5, y: 540.5)), "w/h only matter for slot 0")
+            expectEqual(PointerTarget.globalPoint(slot: 2, x: 0, y: 0, w: nil, h: nil, main: .zero, display: one), .failure(.noDisplay))
         }
 
-        run("windows: originals are kept once and only existing windows go back") {
-            var ledger = WindowLedger<Int>()
-            ledger.record(1, original: CGRect(x: 0, y: 25, width: 500, height: 400))
-            ledger.record(2, original: CGRect(x: 600, y: 25, width: 500, height: 400))
-            ledger.record(1, original: CGRect(x: 2000, y: 0, width: 10, height: 10)) // moved again: the first original wins
-            expectEqual(ledger.count, 2)
-            let back = ledger.restore(existing: [1])
-            expectEqual(back.count, 1, "window 2 was closed meanwhile")
-            expectEqual(back.first?.key, 1)
-            expectEqual(back.first?.frame, CGRect(x: 0, y: 25, width: 500, height: 400))
-            expectEqual(ledger.count, 0, "nothing left to restore twice")
-            expect(ledger.restore(existing: [1, 2]).isEmpty, "idempotent")
+        run("pointer messages on slot 0 need the picture size") {
+            for type in [MessageType.pointerDown, .click] {
+                expectThrows("\(type) on slot 0 without w/h") {
+                    _ = try Message.decode(type: type, payload: Data(#"{"button":"left","slot":0,"x":2,"y":3}"#.utf8))
+                }
+            }
+            expectThrows("move on slot 0 without w/h") { _ = try Message.decode(type: .pointerMove, payload: Data(#"{"slot":0,"x":2,"y":3}"#.utf8)) }
+            expectThrows("scroll on slot 0 without w/h") {
+                _ = try Message.decode(type: .scroll, payload: Data(#"{"dx":0,"dy":1,"slot":0,"x":2,"y":3}"#.utf8))
+            }
+            expectEqual(try Message.decode(type: .pointerMove, payload: Data(#"{"h":1080,"slot":0,"w":1920,"x":2,"y":3}"#.utf8)),
+                        .pointerMove(PointerPayload(slot: 0, x: 2, y: 3, button: nil, w: 1920, h: 1080)))
         }
     }
 

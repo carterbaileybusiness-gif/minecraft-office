@@ -30,7 +30,9 @@ class FullscreenGuardTest {
 	 * window's AXFullScreen attribute so it never moves a window that is in its own Space.
 	 */
 	private static final Pattern READ_ONLY = Pattern.compile(
-			"\\bis\\w*Fullscreen\\(\\)|AXUIElementCopyAttributeValue\\(\\w+, \"AXFullScreen\" as CFString");
+			"\\bis\\w*Fullscreen\\((final long \\w+)?\\)|\\bis\\w*Fullscreen\\(\\w+\\)"
+					+ "|AXUIElementCopyAttributeValue\\(\\w+, \"AXFullScreen\" as CFString"
+					+ "|SDLVideo\\.SDL_GetWindowFlags\\(\\w+\\) & SDLVideo\\.SDL_WINDOW_FULLSCREEN\\)");
 	/** Window applies fullscreen; KeyboardHandler/MouseHandler route F11 (handleGlobalKeyPress); the video screens toggle it. */
 	private static final Set<String> FORBIDDEN_MIXIN_TARGETS = Set.of("Window", "KeyboardHandler", "MouseHandler",
 			"MonitorManager", "VideoSettingsScreen", "WindowEventHandler");
@@ -89,6 +91,14 @@ class FullscreenGuardTest {
 				.replaceAll("")).find(), "the helper may read a window's flag");
 		assertTrue(FULLSCREEN.matcher(READ_ONLY.matcher("AXUIElementSetAttributeValue(window, \"AXFullScreen\" as CFString, kCFBooleanTrue)")
 				.replaceAll("")).find(), "but never set it");
+		// the borderless-window default (MacWindow) checks SDL's flag so it leaves a full-screen window alone
+		assertFalse(FULLSCREEN.matcher(READ_ONLY.matcher(
+				"return w != 0 && (SDLVideo.SDL_GetWindowFlags(w) & SDLVideo.SDL_WINDOW_FULLSCREEN) != 0;").replaceAll("")).find(), "reading SDL's flag");
+		assertFalse(FULLSCREEN.matcher(READ_ONLY.matcher("public static boolean isFullscreen(final long sdlWindow) {").replaceAll("")).find());
+		assertFalse(FULLSCREEN.matcher(READ_ONLY.matcher("if (MacWindow.isFullscreen(handle)) {").replaceAll("")).find());
+		assertTrue(FULLSCREEN.matcher(READ_ONLY.matcher("SDLVideo.SDL_SetWindowFullscreen(handle, true);").replaceAll("")).find(), "SDL's setter");
+		assertTrue(FULLSCREEN.matcher(READ_ONLY.matcher("SDL_SetWindowFlags(w, SDLVideo.SDL_WINDOW_FULLSCREEN)").replaceAll("")).find());
+		assertTrue(FULLSCREEN.matcher(READ_ONLY.matcher("mc.options.fullscreen().set(false)").replaceAll("")).find(), "the option");
 	}
 
 	@Test
