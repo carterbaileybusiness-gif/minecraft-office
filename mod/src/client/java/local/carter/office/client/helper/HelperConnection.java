@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -277,7 +278,9 @@ public final class HelperConnection implements HelperChannel {
 		Writer w = null;
 		try {
 			// The handshake is written here, on the connection thread (never the client thread).
-			writeAll(ch, HelperProtocol.encode(new Hello(readToken(tokenFile), HelperProtocol.VERSION, mcPid)));
+			// "screens": this mod knows the display map (older helpers ignore the key and never announce it back).
+			writeAll(ch, HelperProtocol.encode(new Hello(readToken(tokenFile), HelperProtocol.VERSION, mcPid,
+					List.of(HelperProtocol.FEATURE_SCREENS))));
 			FrameReader reader = FrameReader.forHelperMessages();
 			ByteBuffer buf = ByteBuffer.allocate(READ_BUFFER);
 			Message first = read(ch, reader, buf);

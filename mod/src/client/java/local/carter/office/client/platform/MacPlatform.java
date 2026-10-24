@@ -29,6 +29,9 @@ import local.carter.office.client.interact.WindowListProvider;
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
 import local.carter.office.client.pointer.PointerPoint;
 import local.carter.office.client.pointer.PointerPort;
+import local.carter.office.client.screens.Origin;
+import local.carter.office.client.screens.ScreenList;
+import local.carter.office.client.screens.SdlScreens;
 import local.carter.office.client.selftest.SelfTestScreen;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
@@ -96,6 +99,7 @@ public final class MacPlatform implements Platform {
 				HelperInstaller.launch(a);
 			}
 		}, listener), r -> Minecraft.getInstance().execute(r));
+		helper.setFallbackScreens(SdlScreens::list);
 	}
 
 	/** The borderless fill-the-screen default was applied (or skipped) once at startup. */
@@ -165,6 +169,32 @@ public final class MacPlatform implements Platform {
 	@Override
 	public void refreshWindows() {
 		helper.listWindows();
+	}
+
+	/** The helper's list when it has the display map, else SDL's (greyed: "Restart Minecraft to update the helper"). */
+	@Override
+	public ScreenList screens() {
+		return helper.screens();
+	}
+
+	@Override
+	public void refreshScreens() {
+		helper.listDisplays();
+	}
+
+	@Override
+	public void onScreensChanged(final Runnable r) {
+		helper.onScreensChanged(r);
+	}
+
+	@Override
+	public boolean applyOrigins(final List<Origin> origins) {
+		return helper.setOrigins(origins);
+	}
+
+	@Override
+	public boolean identifyScreens(final java.util.Map<String, String> labelsById) {
+		return helper.identify(labelsById);
 	}
 
 	/** No zoom on a Mac: the holograms are used in the world (spec 5.9). */
