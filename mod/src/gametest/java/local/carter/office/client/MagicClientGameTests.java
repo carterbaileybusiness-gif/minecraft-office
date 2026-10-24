@@ -476,8 +476,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		BlockPos[] at = new BlockPos[2]; // chest, emitter
 		sp.getServer().runOnServer(server -> {
 			ServerPlayer p = player(server);
-			probes[0] = SpellRegistry.overrideForTesting(probe(PROBE_0, 0));
-			probes[1] = SpellRegistry.overrideForTesting(probe(PROBE_1, 1));
+			probes[0] = SpellRegistry.overrideForTesting(probe(PROBE_0, 0), p.getUUID()::equals);
+			probes[1] = SpellRegistry.overrideForTesting(probe(PROBE_1, 1), p.getUUID()::equals);
 			p.getInventory().clearContent();
 			p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
 			long now = p.level().getGameTime();

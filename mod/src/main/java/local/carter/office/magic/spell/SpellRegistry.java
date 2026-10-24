@@ -6,8 +6,11 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
+import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
@@ -21,14 +24,19 @@ import net.minecraft.resources.Identifier;
  * Every spell, by id and by wheel position. An element spell sits at (element, slot); a spell with a null element (Recall)
  * sits at that slot on every element's wheel. Filled once at init (both sides) by the {@code <Element>Spells.register()} calls.
  *
- * <p>{@link #overrideForTesting} lays a spell over the registry until closed: it takes its (element, slot) and hides any
- * registered spell with the same id. Overrides may nest and close in any order; the newest open one wins. GameTests running
- * at the same time share the registry, so concurrent probes should use distinct ids.
+ * <p><b>Test overrides are per player.</b> {@link #overrideForTesting} lays a spell over the registry, until closed, for the
+ * players its owner predicate accepts (by UUID), and for no one else. For those players it takes its (element, slot) and
+ * hides any registered spell with the same id or key; overrides may nest and close in any order, and the newest open one
+ * wins. Lookups that take a player UUID ({@link #get(UUID, Identifier)}, {@link #at(UUID, Element, int)},
+ * {@link #wheel(UUID, Element)}, {@link #unlocked(UUID, MagicData)}) see that player's overrides; the ones without
+ * ({@link #get(Identifier)}, {@link #at(Element, int)}, {@link #wheel(Element)}, {@link #unlocked(MagicData)}, {@link #all()})
+ * see registered spells only, so concurrent GameTests never see each other's probes or lose a real spell to one.
+ * Gameplay code with a player at hand must use the player overloads.
  */
 public final class SpellRegistry {
 	private record Key(@Nullable Element element, int slot) {}
 
-	private record Override(Spell spell, Key key) {}
+	private record Override(Spell spell, Key key, Predicate<UUID> owners) {}
 
 	private static final Map<Identifier, Spell> BY_ID = new LinkedHashMap<>();
 	private static final Map<Key, Spell> BY_KEY = new HashMap<>();
@@ -52,13 +60,14 @@ public final class SpellRegistry {
 		BY_KEY.put(k, s);
 	}
 
-	/** Open overrides, newest first, keeping only the newest per id. */
-	private static List<Override> effective() {
+	/** {@code player}'s open overrides, newest first, keeping only the newest per id. None for a null player. */
+	private static List<Override> effective(@Nullable UUID player) {
+		if (player == null || OVERRIDES.isEmpty()) return List.of();
 		List<Override> out = new ArrayList<>();
 		Set<Identifier> seen = new HashSet<>();
 		for (int i = OVERRIDES.size() - 1; i >= 0; i--) {
 			Override o = OVERRIDES.get(i);
-			if (seen.add(o.spell().id())) out.add(o);
+			if (o.owners().test(player) && seen.add(o.spell().id())) out.add(o);
 		}
 		return out;
 	}
@@ -80,29 +89,50 @@ public final class SpellRegistry {
 		return s != null ? s : resolve(new Key(null, slot), live);
 	}
 
-	public static synchronized Optional<Spell> get(Identifier id) {
-		List<Override> live = effective();
+	/** The registered spell {@code id}; never a test override. */
+	public static Optional<Spell> get(Identifier id) {
+		return get(null, id);
+	}
+
+	/** The spell {@code id} as {@code player} sees it: their newest override with that id, else the registered one unless hidden. */
+	public static synchronized Optional<Spell> get(@Nullable UUID player, Identifier id) {
+		List<Override> live = effective(player);
 		for (Override o : live) if (o.spell().id().equals(id)) return Optional.of(o.spell());
 		Spell base = BY_ID.get(id);
 		return base != null && !hidden(base, live) ? Optional.of(base) : Optional.empty();
 	}
 
-	/** The spell on {@code e}'s wheel at {@code slot} (an element spell, else an every-element one such as Recall). */
-	public static synchronized Optional<Spell> at(Element e, int slot) {
-		return Optional.ofNullable(resolveAt(e, slot, effective()));
+	/** The registered spell on {@code e}'s wheel at {@code slot}; never a test override. */
+	public static Optional<Spell> at(Element e, int slot) {
+		return at(null, e, slot);
 	}
 
-	/** {@code e}'s wheel: length 6, index = slot, null where nothing is registered. */
-	public static synchronized @Nullable Spell[] wheel(Element e) {
-		List<Override> live = effective();
+	/** The spell on {@code e}'s wheel at {@code slot} for {@code player} (an element spell, else an every-element one such as Recall). */
+	public static synchronized Optional<Spell> at(@Nullable UUID player, Element e, int slot) {
+		return Optional.ofNullable(resolveAt(e, slot, effective(player)));
+	}
+
+	/** {@code e}'s wheel of registered spells; never a test override. */
+	public static @Nullable Spell[] wheel(Element e) {
+		return wheel(null, e);
+	}
+
+	/** {@code e}'s wheel for {@code player}: length 6, index = slot, null where nothing is registered. */
+	public static synchronized @Nullable Spell[] wheel(@Nullable UUID player, Element e) {
+		List<Override> live = effective(player);
 		Spell[] out = new Spell[Slots.WHEEL_SLICES];
 		for (int slot = 0; slot < out.length; slot++) out[slot] = resolveAt(e, slot, live);
 		return out;
 	}
 
-	/** Registered spells the player has unlocked, in slot order (so Recall, slot 5, is last). Unbound: every-element spells only. */
-	public static synchronized List<Spell> unlocked(MagicData d) {
-		List<Override> live = effective();
+	/** As {@link #unlocked(UUID, MagicData)} over registered spells only; never a test override. */
+	public static List<Spell> unlocked(MagicData d) {
+		return unlocked(null, d);
+	}
+
+	/** Spells {@code player} (whose data is {@code d}) has unlocked, in slot order (so Recall, slot 5, is last). Unbound: every-element spells only. */
+	public static synchronized List<Spell> unlocked(@Nullable UUID player, MagicData d) {
+		List<Override> live = effective(player);
 		Element e = d.element().orElse(null);
 		List<Spell> out = new ArrayList<>();
 		for (int slot = 0; slot < Slots.WHEEL_SLICES; slot++) {
@@ -112,22 +142,22 @@ public final class SpellRegistry {
 		return out;
 	}
 
-	/** Every visible spell: registered ones (minus hidden) then open overrides. */
+	/** Every registered spell, in registration order; never a test override. */
 	public static synchronized List<Spell> all() {
-		List<Override> live = effective();
-		List<Spell> out = new ArrayList<>();
-		for (Spell s : BY_ID.values()) if (!hidden(s, live)) out.add(s);
-		for (int i = live.size() - 1; i >= 0; i--) out.add(live.get(i).spell());
-		return out;
+		return List.copyOf(BY_ID.values());
 	}
 
-	/** Lays {@code s} over the registry until the returned handle is closed (closing twice is harmless). Tests only. */
-	public static synchronized AutoCloseable overrideForTesting(Spell s) {
-		Override o = new Override(s, key(s));
+	/**
+	 * Lays {@code s} over the registry for the players {@code owners} accepts (tested on every lookup, so it may accept players
+	 * that join later) until the returned handle is closed (closing twice is harmless). Lookups without a player never see it.
+	 * Tests only: GameTests go through {@code MagicTestKit.override}, which scopes to the test's own kit players.
+	 */
+	public static synchronized AutoCloseable overrideForTesting(Spell s, Predicate<UUID> owners) {
+		Override o = new Override(s, key(s), Objects.requireNonNull(owners, "owners"));
 		OVERRIDES.add(o);
 		return () -> {
 			synchronized (SpellRegistry.class) {
-				OVERRIDES.remove(o);
+				OVERRIDES.removeIf(x -> x == o);
 			}
 		};
 	}

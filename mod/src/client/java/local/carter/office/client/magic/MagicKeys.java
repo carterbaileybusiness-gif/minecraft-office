@@ -124,7 +124,7 @@ public final class MagicKeys {
 		int steps = MagicInputGate.scrollSteps(dx, dy); // vanilla already added up trackpad fractions
 		if (steps == 0) return false;
 		MagicData d = MagicAttachments.get(mc.player);
-		List<Identifier> ids = SpellRegistry.unlocked(d).stream().map(Spell::id).toList();
+		List<Identifier> ids = SpellRegistry.unlocked(mc.player.getUUID(), d).stream().map(Spell::id).toList();
 		Identifier current = selected(d);
 		Identifier next = current;
 		for (int i = 0; i < Math.abs(steps); i++) next = ScrollSelect.next(ids, next, steps);
