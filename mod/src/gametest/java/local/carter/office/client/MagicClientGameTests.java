@@ -468,7 +468,10 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		}
 	}
 
-	/** The How to cast tab at GUI scales 1 to 4: the wrapped text fits both pages without scrolling (any exception fails the test). */
+	/**
+	 * The How to cast tab (numbered steps with pictures) at GUI scales 1 to 4 in the 1080p window and in the default 854 × 480
+	 * one: both pages fit without scrolling ({@code HowToLayoutTest} checks the fit; any exception fails the test).
+	 */
 	private static void grimoireHowToTabFits(ClientGameTestContext context, TestSingleplayerContext sp) {
 		sp.getServer().runOnServer(server -> {
 			ServerPlayer p = player(server);
@@ -486,6 +489,17 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			centreCursor(context);
 			context.takeScreenshot("magic-howto-gui" + scale);
 		}
+		// The default 854 × 480 window at its largest GUI scale (2): the smallest pages the steps get.
+		context.getInput().resizeWindow(854, 480);
+		try {
+			setGuiScale(context, 4);
+			context.waitTicks(10);
+			centreCursor(context);
+			context.takeScreenshot("magic-howto-854x480");
+		} finally {
+			context.getInput().resizeWindow(1920, 1080);
+		}
+		setGuiScale(context, 4);
 		// Closing with the Grimoire in the main hand shows the hold hint in the action bar (not asserted: no accessor, see the shot).
 		context.runOnClient(mc -> mc.gui.screen().onClose());
 		context.waitTicks(4);

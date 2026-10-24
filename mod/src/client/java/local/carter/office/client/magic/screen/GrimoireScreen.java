@@ -38,7 +38,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 /**
  * Reading your grimoire (main-hand use while bound). Index tabs on the book's left edge switch between Spells, Friends, How
  * to cast and Skill tree (click them, or Left / Right step through them); the Friends tab is {@link FriendsPage} (Travel to a
- * friend), How to cast is two pages of handbook text, Skill tree is {@link TreePage} (ranks and forks; there the arrows move
+ * friend), How to cast is {@link HowToPage}, Skill tree is {@link TreePage} (ranks and forks; there the arrows move
  * between nodes, and Left past the first column turns back a tab). Spells tab: left page: your element's sigil, the grimoire level, xp to the next
  * level and your Recall home. Right page: the six spells of your wheel (icon, name, mana, cooldown; locked ones greyed with a
  * padlock and the level that unlocks them); clicking an unlocked one (or Enter / 1–6) selects it, marked by a ribbon in your
@@ -71,6 +71,7 @@ public final class GrimoireScreen extends Screen {
 	private final float[] tabHover = new float[GrimoireLayout.TABS];
 	private final FriendsPage friends = new FriendsPage(this);
 	private final TreePage tree = new TreePage(this);
+	private final HowToPage howTo = new HowToPage();
 	public static final int TAB_SPELLS = 0, TAB_FRIENDS = 1, TAB_HOWTO = 2, TAB_TREE = 3;
 
 	public GrimoireScreen() {
@@ -273,7 +274,7 @@ public final class GrimoireScreen extends Screen {
 					rightPage(g, l, d, e, now, dt, content);
 				}
 				case TAB_FRIENDS -> friends.draw(g, font, l, e, mouseX, mouseY, now, dt, content);
-				case TAB_HOWTO -> howToPages(g, l, content);
+				case TAB_HOWTO -> howTo.draw(g, font, l, e, now, content);
 				case TAB_TREE -> tree.draw(g, font, l, d, e, mouseX, mouseY, now, dt, content);
 				default -> throw new IllegalStateException("no page for tab " + tab);
 			}
@@ -446,24 +447,6 @@ public final class GrimoireScreen extends Screen {
 			if (i == hovered) {
 				g.setTooltipForNextFrame(font, Component.translatable(GrimoireLayout.TAB_TIPS[i]), mouseX, mouseY);
 			}
-		}
-	}
-
-	/** How to cast: the handbook's Casting text on the left page, the hand-signs sentence and its keys on the right. */
-	private void howToPages(GuiGraphicsExtractor g, GrimoireLayout.Layout l, float k) {
-		pageText(g, l.leftPage(), Component.translatable("magic.office.howto_cast"), l.unit(), k);
-		pageText(g, l.rightPage(), Component.translatable("magic.office.howto_signs").append("\n\n")
-				.append(Component.translatable("magic.office.signs_hint")), l.unit(), k);
-	}
-
-	/** Wraps {@code text} into {@code page}, shrinking the (crisp) scale until it fits; nothing scrolls. */
-	private void pageText(GuiGraphicsExtractor g, Rect page, Component text, float unit, float k) {
-		int maxLines = Math.max(1, (int) (page.h() / ((GrimoireLayout.LINE + 1) * unit)));
-		float s = UiKit.wrap(font, text, page.w(), unit, maxLines, lines);
-		float y = page.y();
-		for (FormattedCharSequence line : lines) {
-			UiKit.text(g, font, line, page.x(), y, s, UiKit.alpha(UiKit.INK, k), false);
-			y += 10 * s;
 		}
 	}
 
