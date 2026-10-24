@@ -126,9 +126,10 @@ public class HologramGameTests {
 		HologramSpec friends = place(h, b, new BlockPos(7, 1, 1)).spec();
 		h.assertValueEqual(first.mode(), Mode.MIRROR, "first: Mirror (the laptop's screen)");
 		h.assertValueEqual(second.mode(), Mode.EXTEND, "second: Extend");
-		h.assertValueEqual(second.displaySlot(), 1, "second: display 1");
+		h.assertValueEqual(first.displaySlot(), 1, "first: holds display slot 1 (for a later switch to Extend)");
+		h.assertValueEqual(second.displaySlot(), 2, "second: display 2 (no collision with the Mirror's slot)");
 		h.assertValueEqual(third.mode(), Mode.EXTEND, "third: Extend");
-		h.assertValueEqual(third.displaySlot(), 2, "third: display 2");
+		h.assertValueEqual(third.displaySlot(), 3, "third: display 3");
 		h.assertValueEqual(friends.mode(), Mode.MIRROR, "another player's first hologram mirrors their screen");
 		// Settings can still switch any of them; the index remembers it for the next placement.
 		BlockPos firstAbs = h.absolutePos(new BlockPos(1, 1, 1));
@@ -136,9 +137,10 @@ public class HologramGameTests {
 				first.displaySlot(), null)), "switch the Mirror to Window");
 		HologramSpec fourth = place(h, a, new BlockPos(1, 1, 3)).spec();
 		h.assertValueEqual(fourth.mode(), Mode.MIRROR, "no Mirror left: the next one mirrors again");
+		h.assertValueEqual(fourth.displaySlot(), 1, "on the free slot 1 (a Window hologram holds none)");
 		HologramSpec fifth = place(h, a, new BlockPos(3, 1, 3)).spec();
 		h.assertValueEqual(fifth.mode(), Mode.EXTEND, "fifth: Extend");
-		h.assertValueEqual(fifth.displaySlot(), 3, "fifth: display 3 (1 and 2 are taken)");
+		h.assertValueEqual(fifth.displaySlot(), 4, "fifth: display 4 (1 is the Mirror's, 2 and 3 taken)");
 		h.succeed();
 	}
 

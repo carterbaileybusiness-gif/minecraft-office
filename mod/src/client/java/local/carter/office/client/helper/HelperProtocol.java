@@ -75,6 +75,8 @@ public final class HelperProtocol {
     public static final int APPS = 75;
     public static final int ICONS = 76;
     public static final int APP_RESULT = 77;
+    /** While typing: secure input (a password field) went on / off; Esc can't be seen then, ⌘-Tab still returns. */
+    public static final int SECURE_INPUT = 78;
     /** Pointer slot 0: the main display (a Mirror hologram); x, y are then a pixel of a w x h picture of it. */
     public static final int MAIN_SLOT = 0;
 
@@ -94,7 +96,7 @@ public final class HelperProtocol {
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
             ZoomIn, ZoomOut, RequestPermissions, PointerDown, PointerMove, PointerUp, Scroll, Click, ExitTyping,
             ListApps, AppIcons, OpenApp, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
-            DragDelta, DragEnded, Apps, Icons, AppResult {
+            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -131,6 +133,7 @@ public final class HelperProtocol {
                 case Apps m -> APPS;
                 case Icons m -> ICONS;
                 case AppResult m -> APP_RESULT;
+                case SecureInput m -> SECURE_INPUT;
             };
         }
     }
@@ -266,8 +269,15 @@ public final class HelperProtocol {
     /** PNG icons for these apps, {@code size} pixels square (16..256, at most 64 bundle ids); ICONS answers. */
     public record AppIcons(List<String> bundles, int size) implements Message {}
 
-    /** Open {@code bundle}, or the https {@code url} in the default browser, onto slot's display (1..4); exactly one is set. */
-    public record OpenApp(int slot, String bundle, String url) implements Message {}
+    /**
+     * Open {@code bundle}, or the https {@code url} in the default browser, onto slot's display (1..4); exactly one is set.
+     * {@code bottom}: display pixels at the bottom that the in-world Dock covers (the window stops above them), or null.
+     */
+    public record OpenApp(int slot, String bundle, String url, Integer bottom) implements Message {
+        public OpenApp(int slot, String bundle, String url) {
+            this(slot, bundle, url, null);
+        }
+    }
 
     // Helper -> mod
     /** The handshake reply; sent again whenever a permission changes while connected. */
@@ -308,6 +318,9 @@ public final class HelperProtocol {
 
     /** How an OPEN_APP went; {@code target} is its bundle id or url. */
     public record AppResult(String target, boolean ok, String message) implements Message {}
+
+    /** Secure input on / off while typing. */
+    public record SecureInput(boolean on) implements Message {}
 
     /** ERROR message. Named HelperError so it does not clash with {@link java.lang.Error}. */
     public record HelperError(String code, String message) implements Message {
@@ -427,7 +440,8 @@ public final class HelperProtocol {
             case ExitTyping m -> map();
             case ListApps m -> map();
             case AppIcons m -> map("bundles", List.copyOf(m.bundles()), "size", m.size());
-            case OpenApp m -> map("bundle", m.bundle(), "slot", m.slot(), "url", m.url());
+            case OpenApp m -> map("bottom", m.bottom(), "bundle", m.bundle(), "slot", m.slot(), "url", m.url());
+            case SecureInput m -> map("on", m.on());
             case Apps m -> {
                 List<Object> list = new ArrayList<>();
                 for (AppInfo a : m.apps()) list.add(map("bundle", a.bundle(), "name", a.name()));
@@ -552,7 +566,7 @@ public final class HelperProtocol {
             }
             case OPEN_APP: {
                 JsonObject o = object(root);
-                OpenApp m = new OpenApp(integer(o, "slot"), optStr(o, "bundle"), optStr(o, "url"));
+                OpenApp m = new OpenApp(integer(o, "slot"), optStr(o, "bundle"), optStr(o, "url"), optInteger(o, "bottom"));
                 String problem = openAppProblem(m);
                 if (problem != null) throw bad(problem);
                 return m;
@@ -583,6 +597,8 @@ public final class HelperProtocol {
                 JsonObject o = object(root);
                 return new AppResult(str(o, "target"), bool(o, "ok"), str(o, "message"));
             }
+            case SECURE_INPUT:
+                return new SecureInput(bool(object(root), "on"));
             case TYPING_EXIT:
                 return new TypingExit(str(object(root), "reason"));
             case DRAG_DELTA: {
@@ -656,6 +672,7 @@ public final class HelperProtocol {
     /** Why the helper would refuse this OPEN_APP (null = fine): slot 1..4, exactly one of bundle / url, the url https. */
     public static String openAppProblem(OpenApp m) {
         if (m.slot() < 1 || m.slot() > 4) return "OPEN_APP slot must be 1...4";
+        if (m.bottom() != null && (m.bottom() < 0 || m.bottom() > 4096)) return "OPEN_APP bottom must be 0...4096 pixels";
         if ((m.bundle() == null) == (m.url() == null)) return "OPEN_APP needs exactly one of bundle and url";
         if (m.bundle() != null) return isBundleId(m.bundle()) ? null : "OPEN_APP bundle is not a bundle id";
         try {
@@ -961,6 +978,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= OPEN_APP) || (t >= WELCOME && t <= APP_RESULT);
+        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= OPEN_APP) || (t >= WELCOME && t <= SECURE_INPUT);
     }
 }

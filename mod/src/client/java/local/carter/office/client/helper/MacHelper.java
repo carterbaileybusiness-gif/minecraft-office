@@ -118,6 +118,7 @@ public final class MacHelper implements HelperConnection.Listener {
 	private final Map<String, byte[]> icons = new ConcurrentHashMap<>();
 	private final Set<String> iconsAsked = ConcurrentHashMap.newKeySet();
 	private final List<Consumer<AppResult>> appResultListeners = new CopyOnWriteArrayList<>();
+	private final List<Consumer<Boolean>> secureInputListeners = new CopyOnWriteArrayList<>();
 	/** Icon size asked of the helper (pixels): crisp on a big hologram. */
 	public static final int ICON_PX = 128;
 
@@ -433,9 +434,12 @@ public final class MacHelper implements HelperConnection.Listener {
 		}
 	}
 
-	/** Opens an app ({@code bundle}) or a web page ({@code url}) onto slot's display; false when refused locally. */
-	public boolean openApp(final int slot, final @Nullable String bundle, final @Nullable String url) {
-		OpenApp m = new OpenApp(slot, bundle, url);
+	/**
+	 * Opens an app ({@code bundle}) or a web page ({@code url}) onto slot's display, its window stopping {@code bottom}
+	 * display pixels above the bottom (the in-world Dock's band; null: none); false when refused locally.
+	 */
+	public boolean openApp(final int slot, final @Nullable String bundle, final @Nullable String url, final @Nullable Integer bottom) {
+		OpenApp m = new OpenApp(slot, bundle, url, bottom);
 		String problem = HelperProtocol.openAppProblem(m);
 		if (problem != null) {
 			LOGGER.warn("Office: not opening {}: {}", bundle != null ? bundle : url, problem);
@@ -447,6 +451,11 @@ public final class MacHelper implements HelperConnection.Listener {
 	/** Called on the client thread with every APP_RESULT. */
 	public void onAppResult(final Consumer<AppResult> listener) {
 		appResultListeners.add(listener);
+	}
+
+	/** Called on the client thread when secure input goes on / off while typing (and off when the helper is gone). */
+	public void onSecureInput(final Consumer<Boolean> listener) {
+		secureInputListeners.add(listener);
 	}
 
 	public boolean exitTyping() {
@@ -615,6 +624,11 @@ public final class MacHelper implements HelperConnection.Listener {
 					} catch (IllegalArgumentException e) {
 						LOGGER.debug("Office helper: bad icon for {}", icon.bundle());
 					}
+				}
+			}
+			case HelperProtocol.SecureInput s -> {
+				for (Consumer<Boolean> l : secureInputListeners) {
+					clientThread.execute(() -> l.accept(s.on()));
 				}
 			}
 			case AppResult r -> {

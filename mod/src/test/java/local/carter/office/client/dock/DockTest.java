@@ -107,11 +107,12 @@ class DockTest {
 		DockLayout.Box first = Dock.layout(extend, items.size()).icon(0);
 		double u = (first.u0() + first.u1()) / 2;
 		double v = (first.v0() + first.v1()) / 2;
-		assertEquals(0, Dock.hit(extend, true, items, u, v));
-		assertEquals(-1, Dock.hit(extend, false, items, u, v), "friends: no Dock (it's drawn on the owner's client only)");
-		assertEquals(-1, Dock.hit(spec(Mode.MIRROR, Shape.WIDE_16_9), true, items, u, v), "the Mirror is the laptop screen: it has the real Dock");
-		assertEquals(-1, Dock.hit(spec(Mode.WINDOW, Shape.WIDE_16_9), true, items, u, v));
-		assertEquals(-1, Dock.hit(extend, true, null, u, v), "app list not known yet");
+		assertEquals(0, Dock.hit(extend, true, true, items, u, v));
+		assertEquals(-1, Dock.hit(extend, false, true, items, u, v), "friends: no Dock (it's drawn on the owner's client only)");
+		assertEquals(-1, Dock.hit(spec(Mode.MIRROR, Shape.WIDE_16_9), true, true, items, u, v), "the Mirror is the laptop screen: it has the real Dock");
+		assertEquals(-1, Dock.hit(spec(Mode.WINDOW, Shape.WIDE_16_9), true, true, items, u, v));
+		assertEquals(-1, Dock.hit(extend, true, true, null, u, v), "app list not known yet");
+		assertEquals(-1, Dock.hit(extend, true, false, items, u, v), "not live yet: no Dock drawn, so the click goes to the screen");
 	}
 
 	@Test

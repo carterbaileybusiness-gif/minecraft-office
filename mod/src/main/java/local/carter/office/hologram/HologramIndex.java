@@ -130,7 +130,8 @@ public class HologramIndex extends SavedData {
 	}
 
 	/**
-	 * What the owner's next hologram should show ({@link PlacementPlan}): Extend on the next free display. Loaded holograms are read live; unloaded ones from their recorded mode and slot
+	 * What the owner's next hologram should show ({@link PlacementPlan}): the first is a Mirror, each further one Extend on
+	 * the next free display (Mirrors and Extends hold their slots). Loaded holograms are read live; unloaded ones from their recorded mode and slot
 	 * (entries from before modes were recorded are left out).
 	 */
 	public PlacementPlan.Choice placementFor(final UUID owner) {

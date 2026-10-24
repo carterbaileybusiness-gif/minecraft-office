@@ -496,6 +496,7 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		final java.util.List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
 		java.util.function.Consumer<String> typingExit = r -> {};
 		java.util.function.Consumer<String> dragEnded = r -> {};
+		java.util.function.Consumer<Boolean> secureInput = on -> {};
 
 		@Override
 		public String problem() {
@@ -543,6 +544,11 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		}
 
 		@Override
+		public void onSecureInput(final java.util.function.Consumer<Boolean> listener) {
+			secureInput = listener;
+		}
+
+		@Override
 		public void windowLayer(final boolean floating, final boolean clickThrough) {
 			calls.add("layer " + (floating ? "floating" : "normal") + (clickThrough ? " click-through" : ""));
 		}
@@ -553,8 +559,11 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		}
 
 		@Override
-		public void openApp(final int slot, final DockItem item) {
+		public void openApp(final int slot, final DockItem item, final int bottomPixels) {
 			calls.add("open " + slot + " " + (item.bundle() != null ? item.bundle() : item.url()));
+			if (bottomPixels <= 0) {
+				calls.add("open without the Dock's band");
+			}
 		}
 	}
 
@@ -641,7 +650,8 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			context.waitTicks(3);
 			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
 			context.waitTicks(3);
-			if (!fake.calls.contains("open 1 com.google.Chrome") || fake.calls.stream().anyMatch(c -> c.startsWith("click") || c.startsWith("down"))) {
+			if (!fake.calls.contains("open 1 com.google.Chrome") || fake.calls.contains("open without the Dock's band")
+					|| fake.calls.stream().anyMatch(c -> c.startsWith("click") || c.startsWith("down"))) {
 				throw new AssertionError("a click on the Dock's Chrome icon should send OPEN_APP Chrome on display 1 and nothing else, sent " + fake.calls);
 			}
 			if (context.computeOnClient(mc -> mc.gui.screen() != null)) {
@@ -676,6 +686,15 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			if (through < 0 || mirrorClick < 0 || through > mirrorClick) {
 				throw new AssertionError("a Mirror click should make Minecraft click-through, then CLICK slot 0 at the centre, sent " + fake.calls);
 			}
+			if (!PointerClient.MIRROR_TYPING_HINT.equals(context.computeOnClient(mc -> PointerClient.typingHint()))) {
+				throw new AssertionError("typing on the Mirror says Esc or ⌘-Tab returns");
+			}
+			context.runOnClient(mc -> fake.secureInput.accept(true)); // a password field: Esc can't be seen
+			context.waitTicks(2);
+			if (!PointerClient.PASSWORD_HINT.equals(context.computeOnClient(mc -> PointerClient.typingHint()))) {
+				throw new AssertionError("secure input should say: press ⌘-Tab to return");
+			}
+			context.takeScreenshot("pointer-mirror-password");
 			context.runOnClient(mc -> fake.typingExit.accept("esc"));
 			context.waitFor(mc -> !(mc.gui.screen() instanceof TypingScreen), 40);
 			context.waitTicks(3);

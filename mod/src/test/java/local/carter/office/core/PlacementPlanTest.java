@@ -19,12 +19,12 @@ class PlacementPlanTest {
 
     @Test
     void afterTheMirrorEachNewOneTakesTheNextFreeDisplay() {
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 1), PlacementPlan.next(List.of(e(Mode.MIRROR, 1))));
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 2), PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.EXTEND, 1))));
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 3),
-                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.EXTEND, 1), e(Mode.EXTEND, 2))));
+        assertEquals(new PlacementPlan.Choice(Mode.MIRROR, 1), PlacementPlan.next(List.of()), "the Mirror holds slot 1");
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 2), PlacementPlan.next(List.of(e(Mode.MIRROR, 1))),
+                "the Mirror's slot stays free for it, so switching it to Extend later never collides");
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 3), PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.EXTEND, 2))));
         assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 2),
-                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.EXTEND, 1), e(Mode.EXTEND, 3))), "a gap is filled first");
+                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.EXTEND, 3))), "a gap is filled first");
     }
 
     @Test
@@ -37,12 +37,12 @@ class PlacementPlanTest {
     @Test
     void allDisplaysTakenFallsBackToDisplayOne() {
         assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 1), PlacementPlan.next(List.of(e(Mode.MIRROR, 1),
-                e(Mode.EXTEND, 1), e(Mode.EXTEND, 2), e(Mode.EXTEND, 3), e(Mode.EXTEND, 4))));
+                e(Mode.EXTEND, 2), e(Mode.EXTEND, 3), e(Mode.EXTEND, 4))));
     }
 
     @Test
-    void mirrorAndWindowHologramsDontUseDisplays() {
-        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 1),
-                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.WINDOW, 1), e(Mode.MIRROR, 2))));
+    void windowHologramsDontHoldADisplayMirrorsDo() {
+        assertEquals(new PlacementPlan.Choice(Mode.EXTEND, 3),
+                PlacementPlan.next(List.of(e(Mode.MIRROR, 1), e(Mode.WINDOW, 3), e(Mode.MIRROR, 2))));
     }
 }

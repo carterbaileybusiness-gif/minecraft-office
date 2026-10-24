@@ -39,7 +39,10 @@ import ScreenCaptureKit
         }
         input.mainBounds = { CGDisplayBounds(CGMainDisplayID()) }
         launcher.send = { [weak self] message in self?.server.send(message) }
-        launcher.display = { [weak self] slot in self?.displays.displayID(slot: slot) }
+        launcher.display = { [weak self] slot in
+            guard let live = self?.displays.displays[slot] else { return nil }
+            return (live.displayID, live.spec.height)
+        }
         launcher.minecraftPid = { [weak self] in self?.minecraftPid }
         launcher.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
         displays.onTerminated = { [weak self] slot in self?.displayGone(slot: slot) }
@@ -121,7 +124,7 @@ import ScreenCaptureKit
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
-             .apps, .icons, .appResult:
+             .apps, .icons, .appResult, .secureInput:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
     }

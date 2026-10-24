@@ -41,7 +41,7 @@ public final class TypingScreen extends Screen {
 
 	@Override
 	public void extractRenderState(final GuiGraphicsExtractor graphics, final int mouseX, final int mouseY, final float a) {
-		Component text = Component.literal(HINT);
+		Component text = Component.literal(PointerClient.typingHint());
 		int tw = font.width(text);
 		int x = (width - tw) / 2;
 		int y = 10;

@@ -30,6 +30,8 @@ public final class AppSearchScreen extends Screen {
 
 	private final PointerPort port;
 	private final int slot;
+	/** Display pixels at the bottom the in-world Dock covers: the opened window stops above them. */
+	private final int bottom;
 	private EditBox box;
 	private String query = "";
 	private int page;
@@ -40,10 +42,11 @@ public final class AppSearchScreen extends Screen {
 	private int left;
 	private int top;
 
-	public AppSearchScreen(final PointerPort port, final int slot) {
+	public AppSearchScreen(final PointerPort port, final int slot, final int bottom) {
 		super(Component.literal("All apps"));
 		this.port = port;
 		this.slot = slot;
+		this.bottom = bottom;
 	}
 
 	@Override
@@ -112,7 +115,7 @@ public final class AppSearchScreen extends Screen {
 		}
 		AppSearch.App app = on.get(index);
 		onClose();
-		port.openApp(slot, DockItem.app(app.name(), app.bundle()));
+		port.openApp(slot, DockItem.app(app.name(), app.bundle()), bottom);
 		if (minecraft != null && minecraft.player != null) {
 			minecraft.player.sendOverlayMessage(Component.literal("Opening " + app.name() + " on this screen…"));
 		}

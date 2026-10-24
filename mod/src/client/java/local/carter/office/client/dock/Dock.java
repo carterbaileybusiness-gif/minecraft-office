@@ -30,9 +30,13 @@ public final class Dock {
 		return new DockLayout(count, spec.shape().pxW(), spec.shape().pxH());
 	}
 
-	/** The Dock item under (u, v) of the hologram's picture, or -1 (off the Dock, or no Dock here). */
-	public static int hit(final HologramSpec spec, final boolean owner, final @Nullable List<DockItem> items, final double u, final double v) {
-		if (items == null || !on(spec, owner)) {
+	/**
+	 * The Dock item under (u, v) of the hologram's picture, or -1 (off the Dock, or no Dock here: it is drawn only on the
+	 * owner's live Extend screen, and only a drawn Dock takes clicks).
+	 */
+	public static int hit(final HologramSpec spec, final boolean owner, final boolean live, final @Nullable List<DockItem> items,
+			final double u, final double v) {
+		if (items == null || !live || !on(spec, owner)) {
 			return -1;
 		}
 		return layout(spec, items.size()).hit(u, v);

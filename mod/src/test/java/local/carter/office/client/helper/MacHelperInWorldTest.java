@@ -173,14 +173,25 @@ class MacHelperInWorldTest {
 	}
 
 	@Test
+	void typingEndedElsewhereAndSecureInputReachTheClientThread() {
+		List<String> events = new ArrayList<>();
+		helper.onTypingExit(reason -> events.add("typing " + reason));
+		helper.onSecureInput(on -> events.add("secure " + on));
+		listener().message(new HelperProtocol.SecureInput(true));
+		listener().message(new TypingExit("elsewhere")); // the player Cmd-Tabbed to a third app
+		assertEquals(List.of("secure true", "typing elsewhere"), events);
+	}
+
+	@Test
 	void openingAnAppOrAPageAndHearingBack() {
 		List<AppResult> results = new ArrayList<>();
 		helper.onAppResult(results::add);
-		assertTrue(helper.openApp(2, "com.apple.Notes", null));
-		assertTrue(helper.openApp(1, null, "https://www.youtube.com"));
-		assertFalse(helper.openApp(0, "com.apple.Notes", null), "never onto the Mirror");
-		assertFalse(helper.openApp(1, null, "http://example.com"), "https only");
-		assertEquals(List.of(new OpenApp(2, "com.apple.Notes", null), new OpenApp(1, null, "https://www.youtube.com")), sentOf(OpenApp.class));
+		assertTrue(helper.openApp(2, "com.apple.Notes", null, 96));
+		assertTrue(helper.openApp(1, null, "https://www.youtube.com", null));
+		assertFalse(helper.openApp(0, "com.apple.Notes", null, null), "never onto the Mirror");
+		assertFalse(helper.openApp(1, null, "http://example.com", null), "https only");
+		assertEquals(List.of(new OpenApp(2, "com.apple.Notes", null, 96), new OpenApp(1, null, "https://www.youtube.com", null)),
+				sentOf(OpenApp.class), "the Dock's band goes with it");
 		listener().message(new AppResult("com.apple.Notes", false, "Notes opened but showed no window"));
 		assertEquals(List.of(new AppResult("com.apple.Notes", false, "Notes opened but showed no window")), results);
 	}

@@ -32,7 +32,9 @@ class FullscreenGuardTest {
 	private static final Pattern READ_ONLY = Pattern.compile(
 			"\\bis\\w*Fullscreen\\((final long \\w+)?\\)|\\bis\\w*Fullscreen\\(\\w+\\)"
 					+ "|AXUIElementCopyAttributeValue\\(\\w+, \"AXFullScreen\" as CFString"
-					+ "|SDLVideo\\.SDL_GetWindowFlags\\(\\w+\\) & SDLVideo\\.SDL_WINDOW_FULLSCREEN\\)");
+					+ "|SDLVideo\\.SDL_GetWindowFlags\\(\\w+\\) & SDLVideo\\.SDL_WINDOW_FULLSCREEN\\)"
+					// the player-facing hint naming the Video setting to turn off (MirrorHint): words, not an API call
+					+ "|\"Mirror needs Minecraft in a window: Options → Video → Fullscreen OFF ");
 	/** Window applies fullscreen; KeyboardHandler/MouseHandler route F11 (handleGlobalKeyPress); the video screens toggle it. */
 	private static final Set<String> FORBIDDEN_MIXIN_TARGETS = Set.of("Window", "KeyboardHandler", "MouseHandler",
 			"MonitorManager", "VideoSettingsScreen", "WindowEventHandler");

@@ -63,6 +63,8 @@ enum MessageType: UInt8, CaseIterable {
     case welcome = 64, windows = 65, display = 66, frame = 67, patch = 68, ended = 69, exitZoom = 70, error = 71
     case typingExit = 72, dragDelta = 73, dragEnded = 74
     case apps = 75, icons = 76, appResult = 77
+    /// While typing: secure input (a password field) went on / off — Esc can't be seen then; ⌘-Tab still returns.
+    case secureInput = 78
 }
 
 enum ProtocolError: Error, Equatable {
@@ -148,7 +150,12 @@ struct AppIconsPayload: Codable, Equatable { var bundles: [String]; var size: In
 struct AppIcon: Codable, Equatable { var bundle: String; var png: String }
 struct IconsPayload: Codable, Equatable { var icons: [AppIcon] }
 /// Open an app (`bundle`) or a web page (`url`, https, in the default browser) onto slot's display (1...4); exactly one.
-struct OpenAppPayload: Codable, Equatable { var slot: Int; var bundle: String?; var url: String? }
+/// `bottom`: display pixels at the bottom the in-world Dock covers (the window stops above them).
+struct OpenAppPayload: Codable, Equatable {
+    var slot: Int; var bundle: String?; var url: String?
+    var bottom: Int? = nil
+}
+struct SecureInputPayload: Codable, Equatable { var on: Bool }
 /// How an OPEN_APP went. `target` = its bundle id or url.
 struct AppResultPayload: Codable, Equatable { var target: String; var ok: Bool; var message: String }
 struct ReasonPayload: Codable, Equatable { var reason: String }
@@ -227,6 +234,7 @@ enum Message: Equatable {
     case apps(AppsPayload)
     case icons(IconsPayload)
     case appResult(AppResultPayload)
+    case secureInput(SecureInputPayload)
 
     var type: MessageType {
         switch self {
@@ -263,6 +271,7 @@ enum Message: Equatable {
         case .apps: return .apps
         case .icons: return .icons
         case .appResult: return .appResult
+        case .secureInput: return .secureInput
         }
     }
 
@@ -288,6 +297,7 @@ enum Message: Equatable {
         case .apps(let p): return try Self.json(p)
         case .icons(let p): return try Self.json(p)
         case .appResult(let p): return try Self.json(p)
+        case .secureInput(let p): return try Self.json(p)
         case .typingExit(let p), .dragEnded(let p): return try Self.json(p)
         case .dragDelta(let p): return try Self.json(p)
         case .createDisplay(let p): return try Self.json(p)
@@ -407,6 +417,7 @@ enum Message: Equatable {
         case .apps: return .apps(try decodeJSON(AppsPayload.self, payload))
         case .icons: return .icons(try decodeJSON(IconsPayload.self, payload))
         case .appResult: return .appResult(try decodeJSON(AppResultPayload.self, payload))
+        case .secureInput: return .secureInput(try decodeJSON(SecureInputPayload.self, payload))
         case .typingExit: return .typingExit(try decodeJSON(ReasonPayload.self, payload))
         case .dragDelta: return .dragDelta(try decodeJSON(DeltaPayload.self, payload))
         case .dragEnded: return .dragEnded(try decodeJSON(ReasonPayload.self, payload))

@@ -45,7 +45,7 @@ Swift change alters them without the fixtures being committed.
 | `scroll_main.bin` | SCROLL = 14 | `{"dx":0,"dy":-48,"h":1080,"slot":0,"w":1920,"x":100,"y":200}` |
 | `list_apps.bin` | LIST_APPS = 19 | `{}` |
 | `app_icons.bin` | APP_ICONS = 20 | `{"bundles":["com.apple.Notes","com.google.Chrome"],"size":64}` |
-| `open_app.bin` | OPEN_APP = 21 | `{"bundle":"com.apple.Notes","slot":2}` |
+| `open_app.bin` | OPEN_APP = 21 | `{"bottom":96,"bundle":"com.apple.Notes","slot":2}` (`bottom`: the Dock's band, display pixels) |
 | `open_app_url.bin` | OPEN_APP = 21 | `{"slot":1,"url":"https://www.youtube.com"}` |
 | `welcome.bin` | WELCOME = 64 | `{"accessibility":false,"screenRecording":true,"version":1}` |
 | `windows.bin` | WINDOWS = 65 | `[{"app":"Notes","h":600,"title":"Groceries — List","w":800,"windowKey":"com.apple.Notes\|4321"},{"app":"Safari","h":900,"title":"","w":1200,"windowKey":"com.apple.Safari\|99"}]` (the dash is U+2014, bytes `e2 80 94`) |
@@ -61,6 +61,7 @@ Swift change alters them without the fixtures being committed.
 | `apps.bin` | APPS = 75 | `{"apps":[{"bundle":"com.google.Chrome","name":"Google Chrome"},{"bundle":"com.apple.Notes","name":"Notes"}]}` |
 | `icons.bin` | ICONS = 76 | `{"icons":[{"bundle":"com.apple.Notes","png":"iVBORw0KGgo="}]}` (`png`: base64 PNG bytes) |
 | `app_result.bin` | APP_RESULT = 77 | `{"message":"Notes is on screen 2","ok":true,"target":"com.apple.Notes"}` |
+| `secure_input.bin` | SECURE_INPUT = 78 | `{"on":true}` |
 
 (`\|` above is a table escape; the bytes contain a plain `|`.)
 
@@ -102,7 +103,11 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   - CLICK: a real click there (the cursor moves there, the app under it comes forward with the keyboard) = typing mode.
     A session event tap swallows a plain Esc (its repeats and release too) → the helper re-activates Minecraft and sends
     `TYPING_EXIT {"reason":"esc"}`. Minecraft becoming active (a click on its window, Cmd-Tab) → `TYPING_EXIT
-    {"reason":"minecraft"}`. EXIT_TYPING (mod → helper) ends typing without a reply.
+    {"reason":"minecraft"}`. Any **other** app becoming active (not Minecraft, not the app typed into — the one the click
+    brought forward, or the first one activated after a desktop click) → `TYPING_EXIT {"reason":"elsewhere"}`, Minecraft
+    not activated. While typing the helper samples `IsSecureEventInputEnabled()` twice a second and sends
+    `SECURE_INPUT {"on":true|false}` on each change (secure input hides Esc from the tap; ⌘-Tab still works). EXIT_TYPING
+    (mod → helper) ends typing without a reply.
   - POINTER_DOWN starts a drag the helper drives: it brings the app under the point forward, posts a real button down
     there, and takes the physical mouse with an event tap until the physical button is released. The physical motion
     goes to the mod as `DRAG_DELTA {dx, dy}` (points, summed, about every 4 ms) so it can turn the player's head;
@@ -121,7 +126,8 @@ length=37    67  surface=7    generation=3             width=2      height=2    
     asks on every connect.
   - APP_ICONS `{bundles, size}` (16…256 px, at most 64 plausible bundle ids, else malformed) → `ICONS` with a base64 PNG
     of NSWorkspace's icon for each installed one (others are left out).
-  - OPEN_APP `{slot, bundle}` or `{slot, url}` (exactly one; slot 1…4; url `https://` with a host; else malformed): opens
+  - OPEN_APP `{slot, bundle}` or `{slot, url}` (exactly one; slot 1…4; url `https://` with a host; optional `bottom`
+    0…4096 = display pixels the in-world Dock covers, the window stops above them; else malformed): opens
     the app (or the page in the default browser) without activating it, takes its newest window (a new one, else its
     frontmost; apps that launch without a window are "reopened" after 3 s and 12 s, as Home Base did), and puts it on
     that slot's display filling its visible area (Accessibility), raised. If the app activated itself while Minecraft
@@ -132,6 +138,6 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   `"capture failed: <detail>"`.
 - ERROR codes: `bad_slot`, `bad_size`, `display_failed`, `not_found`, `no_accessibility`, `bad_request`, `version`,
   `busy`.
-- TYPING_EXIT / DRAG_ENDED reasons: `esc`, `minecraft` / `released`, `cancelled`.
+- TYPING_EXIT / DRAG_ENDED reasons: `esc`, `minecraft`, `elsewhere` / `released`, `cancelled`.
 - `windowKey` = `"<bundleId>|<CGWindowID>"` (id after the last `|`; bundle id may be empty).
 - `mcWindowFrame` and WINDOWS `w`/`h` are global points, top-left origin (Quartz window coordinates).

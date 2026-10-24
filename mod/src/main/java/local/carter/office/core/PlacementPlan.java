@@ -8,8 +8,8 @@ import java.util.Set;
  * What a newly placed hologram shows (spec 5.10, Carter: "like hooking up a laptop to monitors"). The player's first
  * hologram, or any new one while none of theirs mirrors, is MIRROR: the laptop's own screen (minus Minecraft), usable
  * in-world. Every additional one is EXTEND on the next free virtual display (1-4; 1 again when all are taken), like
- * plugging in monitor #2, #3. Only Extend holograms use a display; a Mirror still gets the next free slot, so switching
- * it to Extend later lands on an unused display. Windows clients, which can't make virtual displays yet, switch a
+ * plugging in monitor #2, #3. Extend and Mirror holograms hold their display slot (a Mirror keeps one free, so switching
+ * it to Extend later never collides with another monitor); Window holograms don't. Windows clients, which can't make virtual displays yet, switch a
  * hologram they just placed to Mirror ({@code PlacementDefault}). Pure.
  */
 public final class PlacementPlan {
@@ -28,6 +28,7 @@ public final class PlacementPlan {
         for (Existing e : existing) {
             if (e.mode() == Mode.MIRROR) {
                 mirrored = true;
+                used.add(e.displaySlot()); // reserved for a later switch to Extend
             } else if (e.mode() == Mode.EXTEND) {
                 used.add(e.displaySlot());
             }

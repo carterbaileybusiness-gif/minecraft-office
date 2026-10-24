@@ -1,4 +1,5 @@
 import AppKit
+import Carbon // IsSecureEventInputEnabled
 import CoreGraphics
 
 /// In-world use for the mod: the player's crosshair is the mouse on their holograms (spec 5.9).
@@ -33,6 +34,8 @@ import CoreGraphics
     private var pending = DeltaAccumulator()
     private var flushScheduled = false
     private var activationObserver: NSObjectProtocol?
+    private var secure = SecureInputWatch()
+    private var secureTimer: Timer?
 
     /// The one instance the C tap callbacks reach (they can't capture context).
     nonisolated(unsafe) static weak var current: InWorldInput?
@@ -49,7 +52,7 @@ import CoreGraphics
         case .pointerDown(let p):
             guard let point = point(p), let button = p.button else { return }
             if typing.active { perform(typing.exit()) }
-            perform(drag.down(at: point, button: button))
+            whenReachable(point, slot: p.slot) { self.perform(self.drag.down(at: point, button: button)) }
         case .pointerMove(let p):
             if drag.isActive, let point = point(p, quiet: true) { perform(drag.move(to: point)) }
         case .pointerUp:
@@ -130,13 +133,32 @@ import CoreGraphics
     private func click(at point: CGPoint, button: PointerButton) {
         clickWait += 1
         let wait = clickWait
-        bringForward(under: point, isCurrent: { [weak self] in self?.clickWait == wait }) { [weak self] in
+        bringForward(under: point, isCurrent: { [weak self] in self?.clickWait == wait }) { [weak self] target in
             guard let self else { return }
             EventInjector.hidClick(at: point, button: button)
-            let effects = self.typing.enter()
+            let effects = self.typing.enter(target: target)
             self.perform(effects)
-            self.observeMinecraft()
+            self.observeActivations()
+            self.watchSecureInput()
             self.log("click \(button) at \(Int(point.x)),\(Int(point.y)): typing")
+        }
+    }
+
+    /// While typing: report secure input going on / off (it hides Esc from the tap), twice a second.
+    private func watchSecureInput() {
+        secureTimer?.invalidate()
+        secure.reset()
+        reportSecureInput()
+        secureTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reportSecureInput() }
+        }
+    }
+
+    private func reportSecureInput() {
+        guard typing.active else { secureTimer?.invalidate(); secureTimer = nil; return }
+        if let on = secure.sample(IsSecureEventInputEnabled()) {
+            log("typing: secure input \(on ? "on" : "off")")
+            send(.secureInput(SecureInputPayload(on: on)))
         }
     }
 
@@ -151,17 +173,21 @@ import CoreGraphics
                 send(.typingExit(ReasonPayload(reason: reason)))
             }
         }
-        if !typing.active { stopObservingMinecraft() }
+        if !typing.active {
+            stopObservingMinecraft()
+            secureTimer?.invalidate(); secureTimer = nil
+        }
     }
 
-    private func observeMinecraft() {
+    /// Typing ends when Minecraft becomes active again, or when some third app does (TypingMachine.appActivated).
+    private func observeActivations() {
         guard activationObserver == nil else { return }
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             MainActor.assumeIsolated {
-                guard let self, let pid = self.minecraftPid(), app?.processIdentifier == pid else { return }
-                self.perform(self.typing.minecraftActivated())
+                guard let self, let pid = app?.processIdentifier, pid != getpid() else { return }
+                self.perform(self.typing.appActivated(pid: pid, isMinecraft: pid == self.minecraftPid()))
             }
         }
     }
@@ -284,7 +310,7 @@ import CoreGraphics
     private func activateApp(under point: CGPoint) {
         activationWait += 1
         let wait = activationWait
-        bringForward(under: point, isCurrent: { [weak self] in self?.activationWait == wait && self?.drag.phase == .activating }) { [weak self] in
+        bringForward(under: point, isCurrent: { [weak self] in self?.activationWait == wait && self?.drag.phase == .activating }) { [weak self] _ in
             guard let self else { return }
             self.perform(self.drag.activated())
         }
@@ -292,12 +318,12 @@ import CoreGraphics
 
     /// Activates the app whose window is under `point` (not Minecraft, not the helper), then runs `then` once it is
     /// frontmost (at most 300 ms; at once over the desktop). `isCurrent` false = a newer gesture took over: do nothing.
-    private func bringForward(under point: CGPoint, isCurrent: @escaping () -> Bool, then: @escaping () -> Void) {
+    private func bringForward(under point: CGPoint, isCurrent: @escaping () -> Bool, then: @escaping (pid_t?) -> Void) {
         var excluded: Set<pid_t> = [getpid()]
         if let pid = minecraftPid() { excluded.insert(pid) }
         guard let target = EventInjector.window(at: point, excluding: excluded),
               let app = NSRunningApplication(processIdentifier: target.pid) else {
-            then() // the desktop: nothing to bring forward
+            then(nil) // the desktop: nothing to bring forward (Finder will take the click: the first app activated)
             return
         }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != target.pid {
@@ -308,7 +334,7 @@ import CoreGraphics
         func poll() {
             guard isCurrent() else { return }
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid || Date().timeIntervalSince(start) > 0.3 {
-                then()
+                then(target.pid)
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { MainActor.assumeIsolated { poll() } }

@@ -185,7 +185,12 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
      hologram, like between real monitors.
    - **Scroll** scrolls the app you aim at (your hotbar stays).
    - **Clicking into an app lets you type:** Minecraft stands still and shows "Typing — Esc to return". Press **Esc**
-     (the app never gets it) or click back into Minecraft to look around again.
+     (the app never gets it) or click back into Minecraft to look around again. On your **Mirror**, use **Esc** or
+     **⌘-Tab** back to Minecraft (clicks go through Minecraft to your apps while you type there). In a **password
+     field** macOS hides Esc from everyone: Minecraft says so; press **⌘-Tab**. Switching to any other app also ends
+     typing.
+   - The Mirror needs Minecraft in a window: if you turned on Fullscreen in Options → Video, turn it off (Minecraft
+     then fills the screen as a borderless window); chat reminds you.
    - Your windows stay where they are when you join or leave. To put one on another screen, **drag its title bar**
      from your Mirror onto an Extend hologram, just like onto a real monitor.
    - **The mini Dock** along the bottom of each Extend hologram (only you see it): click Chrome, Safari, Finder,

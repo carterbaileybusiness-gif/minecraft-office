@@ -137,11 +137,28 @@ struct TypingMachine {
     private(set) var active = false
     /// The Esc that ended typing is still held: swallow its repeats and its release.
     private(set) var swallowingEscape = false
+    /// The app being typed into (the one the click brought forward; nil = the first app activated after the click).
+    private(set) var target: pid_t?
 
-    mutating func enter() -> [Effect] {
+    mutating func enter(target: pid_t? = nil) -> [Effect] {
         guard !active else { return [] }
         active = true
+        self.target = target
         return swallowingEscape ? [] : [.armTap]
+    }
+
+    /// Some app became the active one while typing. Minecraft: back to the game. The app typed into (or, when it wasn't
+    /// known, the first one): nothing. Any other app (the player Cmd-Tabbed or clicked elsewhere, or a password field's
+    /// secure input hid Esc and they switched away): typing is over, without activating Minecraft — the player chose
+    /// that app — so the mod drops Minecraft's floating / click-through ("elsewhere").
+    mutating func appActivated(pid: pid_t, isMinecraft: Bool) -> [Effect] {
+        guard active else { return [] }
+        if isMinecraft { return minecraftActivated() }
+        guard let target else { self.target = pid; return [] }
+        if pid == target { return [] }
+        active = false
+        self.target = nil
+        return swallowingEscape ? [.sendExit("elsewhere")] : [.disarmTap, .sendExit("elsewhere")]
     }
 
     /// Every key event the tap sees. `swallow` = drop it.
@@ -164,6 +181,7 @@ struct TypingMachine {
     mutating func minecraftActivated() -> [Effect] {
         guard active else { return [] }
         active = false
+        target = nil
         return swallowingEscape ? [.sendExit("minecraft")] : [.disarmTap, .sendExit("minecraft")]
     }
 
@@ -171,6 +189,7 @@ struct TypingMachine {
     mutating func exit() -> [Effect] {
         guard active else { return [] }
         active = false
+        target = nil
         return swallowingEscape ? [] : [.disarmTap]
     }
 }
@@ -193,4 +212,20 @@ enum PointerTarget {
         guard let d = display(slot) else { return .failure(.noDisplay) }
         return .success(PointerMapping.globalPoint(x: x, y: y, width: d.width, height: d.height, bounds: d.bounds))
     }
+}
+
+/// Secure input (a password field) hides keys from event taps, so the Esc that ends typing never arrives. While typing,
+/// the helper samples `IsSecureEventInputEnabled()` and tells the mod each change (SECURE_INPUT), so it can say
+/// "press ⌘-Tab to return". Pure: `sample` returns the value to report, or nil when nothing changed.
+struct SecureInputWatch: Equatable {
+    private(set) var reported = false
+
+    mutating func sample(_ on: Bool) -> Bool? {
+        guard on != reported else { return nil }
+        reported = on
+        return on
+    }
+
+    /// Typing ended: the next session starts from "off" (the mod forgets it when typing ends).
+    mutating func reset() { reported = false }
 }

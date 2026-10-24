@@ -166,6 +166,44 @@ enum PointerTests {
             expectEqual(try Message.decode(type: .pointerMove, payload: Data(#"{"h":1080,"slot":0,"w":1920,"x":2,"y":3}"#.utf8)),
                         .pointerMove(PointerPayload(slot: 0, x: 2, y: 3, button: nil, w: 1920, h: 1080)))
         }
+
+        run("typing ends when a third app takes over; the app typed into and Minecraft behave as before") {
+            var t = TypingMachine()
+            expectEqual(t.enter(target: 42), [.armTap])
+            expectEqual(t.target, 42)
+            expectEqual(t.appActivated(pid: 42, isMinecraft: false), [], "the app typed into coming forward again: nothing")
+            expectEqual(t.appActivated(pid: 77, isMinecraft: false), [.disarmTap, .sendExit("elsewhere")],
+                        "Cmd-Tab to another app (e.g. stuck behind a password field): typing is over, Minecraft not activated")
+            expect(!t.active, "over")
+            expectEqual(t.appActivated(pid: 77, isMinecraft: false), [], "once")
+            // a click on the desktop: no target known; the first app that comes forward (Finder) is the one typed into
+            var d = TypingMachine()
+            _ = d.enter(target: nil)
+            expectEqual(d.appActivated(pid: 5, isMinecraft: false), [])
+            expectEqual(d.target, 5)
+            expectEqual(d.appActivated(pid: 6, isMinecraft: false), [.disarmTap, .sendExit("elsewhere")])
+            // Minecraft coming back still means "minecraft" (and Esc's pending release keeps its tap)
+            var m = TypingMachine()
+            _ = m.enter(target: 42)
+            expectEqual(m.appActivated(pid: 9, isMinecraft: true), [.disarmTap, .sendExit("minecraft")])
+            var e = TypingMachine()
+            _ = e.enter(target: 42)
+            _ = e.key(code: TypingMachine.escape, down: true, modifiers: [])
+            _ = e.enter(target: 42)
+            expectEqual(e.appActivated(pid: 3, isMinecraft: false), [.sendExit("elsewhere")], "Esc still held: its tap stays for the release")
+        }
+
+        run("secure input: each change is reported once, a new typing session starts from off") {
+            var w = SecureInputWatch()
+            expectEqual(w.sample(false), nil as Bool?, "off at the start: nothing to say")
+            expectEqual(w.sample(true), true, "a password field took the keyboard")
+            expectEqual(w.sample(true), nil as Bool?)
+            expectEqual(w.sample(false), false)
+            _ = w.sample(true)
+            w.reset()
+            expectEqual(w.sample(true), true, "already on when typing starts: said at once")
+            expectEqual(try Message.decode(type: .secureInput, payload: Data(#"{"on":true}"#.utf8)), .secureInput(SecureInputPayload(on: true)))
+        }
     }
 
     static func close(_ a: CGRect, _ b: CGRect) -> Bool {

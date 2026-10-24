@@ -66,8 +66,28 @@ public interface PointerPort {
 	/** Ask for these apps' icons (each one once). */
 	default void requestIcons(final List<String> bundles) {}
 
-	/** Open the Dock item's app or page onto virtual display {@code slot}. */
-	default void openApp(final int slot, final DockItem item) {}
+	/**
+	 * Open the Dock item's app or page onto virtual display {@code slot}; its window stops {@code bottomPixels} display
+	 * pixels above the bottom, where the in-world Dock is.
+	 */
+	default void openApp(final int slot, final DockItem item, final int bottomPixels) {}
+
+	/** Called with true / false when a password field's secure input goes on / off while typing (Esc can't be seen). */
+	default void onSecureInput(final Consumer<Boolean> listener) {}
+
+	/**
+	 * Why the Mirror can't be used right now (a sentence), or null: on a Mac, Minecraft in macOS's separate full-screen
+	 * Space, where the other apps aren't.
+	 */
+	default @Nullable String mirrorProblem() {
+		return null;
+	}
+
+	/** Re-apply Minecraft's window layer even if it didn't change (focus changed: SDL / AppKit may have reset it). */
+	default boolean windowLayerApplied(final boolean floating, final boolean clickThrough) {
+		windowLayer(floating, clickThrough);
+		return true;
+	}
 
 	/** Called with the helper's word when opening failed (a sentence for the action bar). */
 	default void onAppProblem(final Consumer<String> listener) {}

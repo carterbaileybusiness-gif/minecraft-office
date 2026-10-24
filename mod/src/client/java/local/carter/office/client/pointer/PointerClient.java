@@ -11,6 +11,10 @@ import org.slf4j.LoggerFactory;
 import local.carter.office.client.dock.AppSearchScreen;
 import local.carter.office.client.dock.Dock;
 import local.carter.office.client.dock.DockItem;
+import local.carter.office.client.dock.DockLayout;
+import local.carter.office.client.render.HologramLook;
+import local.carter.office.client.render.ScreenTexture;
+import local.carter.office.client.render.ScreenTextureRegistry;
 import local.carter.office.client.helper.HelperProtocol.PointerButton;
 import local.carter.office.client.interact.HologramPicker;
 import local.carter.office.client.interact.HologramPicker.Picked;
@@ -140,8 +144,12 @@ public final class PointerClient {
 	private @Nullable TypingScreen screen;
 	private final PauseGuard pause = new PauseGuard();
 	private final MirrorWindow mirror = new MirrorWindow();
-	/** The layer last applied to Minecraft's window (null: none yet). */
+	/** The layer last applied to Minecraft's window (null: none yet, or the last try failed), and the focus it was for. */
 	private MirrorWindow.@Nullable Layer applied;
+	private boolean appliedFocus;
+	/** This typing session is in an app on the Mirror (the hint says ⌘-Tab works too); secure input is on in it. */
+	private boolean typingOnMirror;
+	private boolean secureInput;
 	private boolean regrabWhenFocused;
 	private double scrollX;
 	private double scrollY;
@@ -194,6 +202,15 @@ public final class PointerClient {
 				bringBack(); // a drag cancelled (helper gone, or the mod's POINTER_UP): make sure Minecraft has the mouse
 			}
 		});
+		port.onSecureInput(on -> {
+			secureInput = on && typing.active();
+			if (secureInput) {
+				LocalPlayer player = Minecraft.getInstance().player;
+				if (player != null) {
+					player.sendOverlayMessage(Component.literal(PASSWORD_HINT));
+				}
+			}
+		});
 		port.onAppProblem(message -> {
 			LocalPlayer player = Minecraft.getInstance().player;
 			if (player != null) {
@@ -208,19 +225,35 @@ public final class PointerClient {
 		applyWindow(Util.getMillis());
 	}
 
-	/** Minecraft's window layer for now (floating / click-through), applied when it changed. */
+	/**
+	 * Minecraft's window layer for now (floating / click-through), applied when it changed or Minecraft's focus changed
+	 * (macOS / SDL may reorder or reset the window then), and tried again next frame when applying failed.
+	 */
 	private void applyWindow(final long now) {
 		PointerPort port = port();
 		if (port == null) {
 			return;
 		}
 		Minecraft mc = Minecraft.getInstance();
-		MirrorWindow.Layer layer = mirror.layer(now, mc.isWindowActive(), gesture.busy() || typing.active());
-		if (!layer.equals(applied)) {
-			port.windowLayer(layer.floating(), layer.clickThrough());
-			applied = layer;
+		boolean focused = mc.isWindowActive();
+		MirrorWindow.Layer layer = mirror.layer(now, focused, gesture.busy() || typing.active());
+		if (!layer.equals(applied) || focused != appliedFocus) {
+			applied = port.windowLayerApplied(layer.floating(), layer.clickThrough()) ? layer : null;
+			appliedFocus = focused;
 		}
 	}
+
+	/** The typing hint: Mirror typing says ⌘-Tab works too; a password field (secure input) hides Esc. */
+	public static String typingHint() {
+		PointerClient c = INSTANCE;
+		if (c.secureInput) {
+			return PASSWORD_HINT;
+		}
+		return c.typingOnMirror ? MIRROR_TYPING_HINT : TypingScreen.HINT;
+	}
+
+	public static final String MIRROR_TYPING_HINT = "Typing — Esc or ⌘-Tab to return";
+	public static final String PASSWORD_HINT = "Password field: press ⌘-Tab to return";
 
 	/** TYPING_EXIT reason the mod reports for itself when the helper disconnects mid-typing. */
 	public static final String HELPER_GONE = "helper";
@@ -290,9 +323,18 @@ public final class PointerClient {
 		applyWindow(now);
 	}
 
-	/** The Dock icon of aim {@code a}'s hologram under the crosshair, or -1. */
+	/** The Dock icon of aim {@code a}'s hologram under the crosshair, or -1 (only on a live screen: the Dock is drawn there). */
 	private static int dockIndex(final Aim a, final PointerPort port) {
-		return Dock.hit(a.spec(), true, Dock.items(port), a.picked().hit().u(), a.picked().hit().v());
+		return Dock.hit(a.spec(), true, live(a), Dock.items(port), a.picked().hit().u(), a.picked().hit().v());
+	}
+
+	/** The hologram shows the owner's live screen (what the renderer draws the Dock on). */
+	private static boolean live(final Aim a) {
+		HologramBlockEntity be = a.be();
+		boolean frames = ScreenTextureRegistry.get(be.hologramId()).map(ScreenTexture::hasFrame).orElse(false);
+		LocalPlayer player = Minecraft.getInstance().player;
+		return player != null && HologramLook.forViewer(a.spec(), player.getUUID(), be.ownerOnline(), frames,
+				HologramLook.ownSource(be.hologramId())) == HologramLook.State.LIVE;
 	}
 
 	/** The Dock icon under the crosshair on hologram {@code id} this frame, or -1 (the renderer highlights it). */
@@ -310,8 +352,10 @@ public final class PointerClient {
 		}
 		DockItem item = items.get(index);
 		int slot = a.spec().displaySlot();
+		DockLayout layout = Dock.layout(a.spec(), items.size());
+		int bottom = (int) Math.ceil((1 - layout.bar().v0()) * a.spec().shape().pxH()); // the Dock's band, display pixels
 		if (item.allApps()) {
-			mc.gui.setScreen(new AppSearchScreen(port, slot));
+			mc.gui.setScreen(new AppSearchScreen(port, slot, bottom));
 			return;
 		}
 		String problem = port.problem();
@@ -319,7 +363,7 @@ public final class PointerClient {
 			player.sendOverlayMessage(Component.literal(problem));
 			return;
 		}
-		port.openApp(slot, item);
+		port.openApp(slot, item, bottom);
 		player.sendOverlayMessage(Component.literal("Opening " + item.name() + " on this screen…"));
 		LOGGER.info("Dock: {} onto display {}", item.bundle() != null ? item.bundle() : item.url(), slot);
 	}
@@ -445,6 +489,9 @@ public final class PointerClient {
 			return null;
 		}
 		String problem = port.problem();
+		if (problem == null && mode == Mode.MIRROR) {
+			problem = port.mirrorProblem(); // in macOS's own full-screen Space the other apps aren't there
+		}
 		if (problem != null) {
 			player.sendOverlayMessage(Component.literal(problem));
 			return null;
@@ -463,7 +510,7 @@ public final class PointerClient {
 		if (port == null || c.typing.active() || a == null || a.point() == null || a.spec().mode() == Mode.WINDOW) {
 			return false;
 		}
-		if (port.problem() != null) {
+		if (port.problem() != null || (a.point().onMain() && port.mirrorProblem() != null)) {
 			return false;
 		}
 		if (dockIndex(a, port) >= 0) {
@@ -493,6 +540,8 @@ public final class PointerClient {
 		// The hint screen first: it releases the mouse (Minecraft centres the cursor), then the helper's real click puts
 		// the cursor on the display and brings the app forward with the keyboard.
 		typing.enter(Util.getMillis());
+		typingOnMirror = p.onMain();
+		secureInput = false;
 		if (p.onMain()) {
 			throughMirror(); // typing in an app under Minecraft: click-through until Esc / back in Minecraft
 		}
@@ -533,6 +582,8 @@ public final class PointerClient {
 		gesture.tick(now);
 		if (!gesture.busy() && !typing.active()) {
 			mirror.interactionEnded(); // every other way a drag or typing ended (timeouts, the hint replaced, focus back)
+			typingOnMirror = false;
+			secureInput = false;
 		}
 		applyWindow(now);
 		pause.hold(mc, typing.active() || gesture.state() == PointerGesture.State.DRAGGING);

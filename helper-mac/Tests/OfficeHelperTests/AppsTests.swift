@@ -66,6 +66,19 @@ enum AppsTests {
         run("the window fills the display's visible area") {
             let visible = CGRect(x: 1440, y: 25, width: 1920, height: 1055)
             expectEqual(AppWindowFit.frame(visible: visible), visible)
+            // the in-world Dock covers the bottom 96 px of a 1920 x 1080 display shown as 1920 x 1080 points: stop above it
+            let bounds = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+            expectEqual(AppWindowFit.frame(visible: visible, bounds: bounds, bottomPixels: 96, pixelHeight: 1080),
+                        CGRect(x: 1440, y: 25, width: 1920, height: 1080 - 96 - 25))
+            // a HiDPI display (points = half its pixels): 96 px = 48 pt
+            let hi = CGRect(x: 0, y: -540, width: 960, height: 540)
+            expectEqual(AppWindowFit.frame(visible: CGRect(x: 0, y: -515, width: 960, height: 515), bounds: hi, bottomPixels: 96, pixelHeight: 1080),
+                        CGRect(x: 0, y: -515, width: 960, height: 515 - 48))
+            expectEqual(AppWindowFit.frame(visible: visible, bounds: bounds, bottomPixels: 0, pixelHeight: 1080), visible, "no Dock band")
+            expectEqual(AppWindowFit.frame(visible: visible, bounds: bounds, bottomPixels: 1000, pixelHeight: 1080), visible,
+                        "never a window too small to use")
+            expect(AppRules.problem(OpenAppPayload(slot: 1, bundle: "com.apple.Notes", url: nil, bottom: 96)) == nil, "a Dock band")
+            expect(AppRules.problem(OpenAppPayload(slot: 1, bundle: "com.apple.Notes", url: nil, bottom: -1)) != nil, "a negative band")
             expectEqual(AppWindowFit.frame(visible: CGRect(x: 0.5, y: 24.6, width: 100, height: 50)), CGRect(x: 0, y: 24, width: 101, height: 51))
         }
     }

@@ -180,11 +180,14 @@ class HelperProtocolTest {
     void dockMessages() throws IOException {
         checkModMessage("list_apps", new ListApps());
         checkModMessage("app_icons", new AppIcons(List.of("com.apple.Notes", "com.google.Chrome"), 64));
-        checkModMessage("open_app", new OpenApp(2, "com.apple.Notes", null));
+        checkModMessage("open_app", new OpenApp(2, "com.apple.Notes", null, 96));
         checkModMessage("open_app_url", new OpenApp(1, null, "https://www.youtube.com"));
         check("apps", new Apps(List.of(new AppInfo("com.google.Chrome", "Google Chrome"), new AppInfo("com.apple.Notes", "Notes"))));
         check("icons", new Icons(List.of(new AppIcon("com.apple.Notes", "iVBORw0KGgo="))));
         check("app_result", new AppResult("com.apple.Notes", true, "Notes is on screen 2"));
+        check("secure_input", new SecureInput(true));
+        assertEquals(78, HelperProtocol.SECURE_INPUT);
+        assertNotNull(HelperProtocol.openAppProblem(new OpenApp(1, "com.apple.Notes", null, -1)), "a negative Dock band");
     }
 
     @Test
@@ -303,9 +306,9 @@ class HelperProtocolTest {
     @Test
     void everyFixtureDecodesAndReencodes() throws IOException {
         List<byte[]> all = allFixtures();
-        // one per message type (33), a second and third CAPTURE (window, main), Mirror (slot 0) POINTER_DOWN / CLICK /
+        // one per message type (34), a second and third CAPTURE (window, main), Mirror (slot 0) POINTER_DOWN / CLICK /
         // SCROLL, and OPEN_APP of a web page
-        assertEquals(39, all.size());
+        assertEquals(40, all.size());
         for (byte[] bytes : all) {
             FrameReader reader = FrameReader.forHelperMessages();
             reader.push(bytes, 0, bytes.length);
@@ -422,7 +425,7 @@ class HelperProtocolTest {
 
     @Test
     void unknownTypeRejected() {
-        for (int type : new int[] {0, 17, 18, 22, 63, 78, 255}) { // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK
+        for (int type : new int[] {0, 17, 18, 22, 63, 79, 255}) { // 17, 18: the retired WINDOWS_TO_DISPLAY / WINDOWS_BACK
             FrameReader reader = FrameReader.forHelperMessages();
             byte[] bytes = envelope(type, "{}");
             reader.push(bytes, 0, bytes.length);

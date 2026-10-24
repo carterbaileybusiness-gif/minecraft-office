@@ -11,8 +11,8 @@ import ApplicationServices
 @MainActor final class AppLauncher {
     var log: (String) -> Void = { _ in }
     var send: (Message) -> Void = { _ in }
-    /// A slot's virtual display.
-    var display: (Int) -> CGDirectDisplayID? = { _ in nil }
+    /// A slot's virtual display and its height in pixels.
+    var display: (Int) -> (id: CGDirectDisplayID, pixelHeight: Int)? = { _ in nil }
     var minecraftPid: () -> pid_t? = { nil }
     var activateMinecraft: () -> Void = {}
 
@@ -73,7 +73,7 @@ import ApplicationServices
     func open(_ p: OpenAppPayload) {
         let target = p.bundle ?? p.url ?? "?"
         guard AXIsProcessTrusted() else { finish(target, false, "OfficeHelper needs Accessibility to put windows on your screens"); return }
-        guard let displayID = display(p.slot) else { finish(target, false, "That screen isn't on yet"); return }
+        guard let (displayID, pixelHeight) = display(p.slot) else { finish(target, false, "That screen isn't on yet"); return }
         let appURL: URL?
         var webPage: URL?
         if let bundle = p.bundle {
@@ -114,7 +114,7 @@ import ApplicationServices
                     }
                     let now = AXWindows.standardWindows(of: app.processIdentifier)
                     if let window = AppWindowPick.choose(before: before, now: now, askedForNew: askForNew, elapsed: elapsed) {
-                        self.place(window, on: displayID)
+                        self.place(window, on: displayID, bottomPixels: p.bottom, pixelHeight: pixelHeight)
                         self.requests[target] = nil
                         self.finish(target, true, "\(name) is on Office Display \(p.slot)")
                         return
@@ -144,8 +144,10 @@ import ApplicationServices
     }
 
     /// Onto the display, filling its visible area, unminimized and in front there (without activating its app).
-    private func place(_ window: AXWindows.Window, on displayID: CGDirectDisplayID) {
-        let frame = AppWindowFit.frame(visible: AXWindows.visibleFrame(displayID) ?? CGDisplayBounds(displayID))
+    private func place(_ window: AXWindows.Window, on displayID: CGDirectDisplayID, bottomPixels: Int?, pixelHeight: Int) {
+        let bounds = CGDisplayBounds(displayID)
+        let frame = AppWindowFit.frame(visible: AXWindows.visibleFrame(displayID) ?? bounds, bounds: bounds, bottomPixels: bottomPixels,
+                                       pixelHeight: pixelHeight)
         var minimized: CFTypeRef?
         AXUIElementCopyAttributeValue(window.ref, kAXMinimizedAttribute as CFString, &minimized)
         if (minimized as? Bool) == true { AXUIElementSetAttributeValue(window.ref, kAXMinimizedAttribute as CFString, kCFBooleanFalse) }

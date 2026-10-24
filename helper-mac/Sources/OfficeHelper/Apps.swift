@@ -12,6 +12,7 @@ enum AppRules {
     /// Why an OPEN_APP is refused (nil = fine): slot 1...4, exactly one of bundle / url, the url https with a host.
     static func problem(_ p: OpenAppPayload) -> String? {
         guard (1...DisplaySpec.maxSlots).contains(p.slot) else { return "OPEN_APP slot must be 1...\(DisplaySpec.maxSlots)" }
+        if let bottom = p.bottom, !(0...4096).contains(bottom) { return "OPEN_APP bottom must be 0...4096 pixels" }
         switch (p.bundle, p.url) {
         case (let b?, nil):
             return isBundleId(b) ? nil : "OPEN_APP bundle is not a bundle id"
@@ -58,7 +59,17 @@ enum AppWindowPick {
     }
 }
 
-/// Where the window lands: it fills the display's visible area (below the menu bar), like a zoomed window. Pure.
+/// Where the window lands: it fills the display's visible area (below the menu bar), like a zoomed window, but stops
+/// above the band at the bottom that the in-world Dock covers (`bottomPixels` of the display's `pixelHeight` pixels;
+/// `bounds` = the display in points). Pure.
 enum AppWindowFit {
-    static func frame(visible: CGRect) -> CGRect { visible.integral }
+    static func frame(visible: CGRect, bounds: CGRect? = nil, bottomPixels: Int? = nil, pixelHeight: Int? = nil) -> CGRect {
+        var f = visible
+        if let bounds, let bottomPixels, let pixelHeight, bottomPixels > 0, pixelHeight > 0 {
+            let inset = Double(bottomPixels) * bounds.height / Double(pixelHeight)
+            let maxY = min(f.maxY, bounds.maxY - inset)
+            if maxY - f.minY >= 100 { f.size.height = maxY - f.minY }
+        }
+        return f.integral
+    }
 }
