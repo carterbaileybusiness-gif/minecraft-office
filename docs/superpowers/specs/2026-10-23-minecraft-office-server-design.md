@@ -136,6 +136,20 @@ interact with the monitor from the Minecraft world and drag things over from one
 - **Mirror** remains an optional, view-only mode in settings. **Windows (my call):** keeps Mirror/Window + click-to-zoom (beta)
   until Windows gets virtual displays.
 
+### 5.10 Laptop + monitors — supersedes the window auto-move and Mac "Mirror view-only" in 5.9 **(Carter, 2026-10-23 ~20:25)**
+"I should also have one monitor (mirror) where I can see what I already had up, and be able to move and drag it to my
+extended screens, just like hooking up a laptop to monitors."
+- **Hologram 1 = interactive Mirror** of the real main display (Minecraft excluded from the picture). Crosshair clicks,
+  typing and head-turn drags work on it exactly like on Extend screens: Minecraft's window is kept above other apps and
+  made click-through while the player interacts with the Mirror, so events reach the apps underneath. Dragging a window's
+  title bar from the Mirror onto an Extend hologram moves it to that monitor.
+- **Holograms 2–4 = Extend** monitors, each with a **mini Dock** drawn along the bottom of the hologram (my call:
+  Chrome, Safari, Finder, Notes, Terminal, Claude, ChatGPT, Music, YouTube + "All apps" search). Clicking an app in-world
+  opens/brings it onto that screen.
+- **No automatic window moving** on join/leave.
+- Minecraft defaults to a borderless window filling the screen (not macOS's separate full-screen Space, where the other
+  windows aren't on the mirrored display).
+
 ## 6. How the screens work (architecture)
 
 Three parts **(my call; based on research)**:
