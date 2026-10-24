@@ -588,8 +588,15 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			behind.forEach(b -> p.level().setBlockAndUpdate(b, Blocks.STONE.defaultBlockState()));
 			p.teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() - 1.5); // the stone is within reach
 		});
-		context.runOnClient(mc -> PointerClient.setPortForTesting(fake));
+		context.runOnClient(mc -> {
+			PointerClient.setPortForTesting(fake);
+			// the Dock is drawn and clicked only on a LIVE screen: feed the test pattern again (the zoom test turned it off)
+			OwnScreens.setSourceFactory(TestPatternSource::new);
+			OwnScreens.setEnabled(true);
+		});
 		try {
+			context.waitFor(mc -> clientHologram(mc) != null
+					&& ScreenTextureRegistry.get(clientHologram(mc).hologramId()).map(ScreenTexture::hasFrame).orElse(false), 1200);
 			context.waitTicks(5);
 			HologramSpec spec = context.computeOnClient(mc -> clientHologram(mc).spec());
 			look(context, hologramCenter(spec));
@@ -747,7 +754,10 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				throw new AssertionError("a block behind the hologram was broken");
 			}
 		} finally {
-			context.runOnClient(mc -> PointerClient.setPortForTesting(null));
+			context.runOnClient(mc -> {
+				PointerClient.setPortForTesting(null);
+				OwnScreens.setEnabled(false);
+			});
 			sp.getServer().runOnServer(server -> {
 				ServerPlayer p = player(server);
 				behind.forEach(b -> p.level().setBlockAndUpdate(b, Blocks.AIR.defaultBlockState()));
