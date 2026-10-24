@@ -263,6 +263,9 @@ Quick fixes:
 - Hologram says it needs the helper (Mac): redo the [Mac permissions](#mac) and restart Minecraft.
 - Game feels slow: close other apps, and keep Iris and Distant Horizons off.
 - Cannot join: check you sent Carter your username and that the server address has no typos.
+- Your second monitor (Mac) jumps back right after your Office screens close: drag it again in System Settings →
+  Displays. For a few seconds after an Office screen closes, Minecraft keeps your monitors where they were, which
+  can undo a drag made in that moment.
 - Fullscreen: use **Options → Video Settings → Fullscreen Mode: Borderless**, never "Exclusive" (on a Mac it can't be
   left with F11). If you ever get stuck: **⌘Q** quits (Alt+F4 on Windows). If it starts stuck again, open the instance
   folder (Prism: **Folder**) and set `exclusiveFullscreen:false` and `fullscreen:false` in `minecraft/options.txt`.

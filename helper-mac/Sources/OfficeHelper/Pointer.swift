@@ -253,47 +253,78 @@ enum CursorLocator {
     }
 }
 
-/// Where the other monitors were just before an Office display was created (pure). macOS shoves a monitor aside to fit a
-/// new display in; the arrange that follows that create arranges around, and puts back, the monitor as it was — and only
-/// that arrange: the record is used once. So a monitor the user moves while Office displays are up stays where they put
-/// it (a later remove or arrange never "restores" it to an old place).
+/// Where the other monitors were just before Office displays were created (pure). macOS shoves a monitor aside to fit a
+/// new display in; the arranges that follow put it back where it was. The mod sends every CREATE_DISPLAY at once on each
+/// (re)connect, so the record stays until the arrange of the last create still pending has run — each new display may
+/// shove the monitor again — and is used by no later arrange. So a monitor the user moves while Office displays are up
+/// stays where they put it. The record carries its time: older than `pendingLimit` it is ignored (a create whose arrange
+/// never came). Any create that ends without its arrange (failed, timed out, nothing to create) clears it unless another
+/// create is still pending.
 struct MonitorHomes {
     private(set) var homes: [UInt32: CGPoint] = [:]
-    /// Since when a create's arrange is still to come (its display not yet online): a second create in that window sees
-    /// monitors the first may already have shoved, so the first record stands. Stale after `pendingLimit` seconds.
-    private var pendingSince: Double?
+    private(set) var recordedAt: Double?
+    /// Slots created whose arrange is still to come.
+    private(set) var pending: Set<Int> = []
     static let pendingLimit = 5.0
 
-    /// Just before creating a display, at time `t` (seconds): the monitors' positions now, overwriting any record.
-    mutating func beforeCreate(_ now: [UInt32: CGPoint], at t: Double) {
-        if let since = pendingSince, t - since < Self.pendingLimit { return }
-        homes = now
-        pendingSince = t
+    private func fresh(at t: Double) -> Bool { recordedAt.map { t - $0 < Self.pendingLimit } ?? false }
+
+    private mutating func clear() {
+        homes = [:]
+        recordedAt = nil
+        pending = []
     }
 
-    /// For arrange: each monitor's rect to arrange around (where it was before the create, else where it is) and the
-    /// monitors to put back. Uses the record up.
-    mutating func forArrange(_ now: [UInt32: CGRect]) -> (rects: [CGRect], restores: [(id: UInt32, to: CGPoint)]) {
+    /// Just before creating display `slot` at time `t` (seconds): the monitors' positions now. Overwrites the record,
+    /// unless an earlier create is still pending (and its record fresh): then the monitor may be shoved already, and the
+    /// earlier record stands.
+    mutating func beforeCreate(slot: Int, _ now: [UInt32: CGPoint], at t: Double) {
+        if pending.isEmpty || !fresh(at: t) {
+            homes = now
+            recordedAt = t
+            pending = []
+        }
+        pending.insert(slot)
+    }
+
+    /// A create of `slot` ended without its arrange: it failed, its display never came online, it was removed meanwhile,
+    /// or there was nothing to create (identical spec). Cleared unless another create is still pending.
+    mutating func createEnded(slot: Int) {
+        pending.remove(slot)
+        if pending.isEmpty { clear() }
+    }
+
+    /// For arrange at time `t` (after the create of `slot`, or nil after a remove): each monitor's rect to arrange around
+    /// (where it was before the creates, else where it is) and the monitors to put back. A stale record is ignored. The
+    /// record goes once no create is pending.
+    mutating func forArrange(_ now: [UInt32: CGRect], at t: Double, after slot: Int?) -> (rects: [CGRect], restores: [(id: UInt32, to: CGPoint)]) {
+        let use = fresh(at: t) ? homes : [:]
         var rects: [CGRect] = []
         var restores: [(id: UInt32, to: CGPoint)] = []
         for id in now.keys.sorted() {
             let r = now[id]!
-            if let home = homes[id], home != r.origin {
+            if let home = use[id], home != r.origin {
                 rects.append(CGRect(origin: home, size: r.size))
                 restores.append((id, home))
             } else {
                 rects.append(r)
             }
         }
-        homes = [:]
-        pendingSince = nil
+        if let slot { pending.remove(slot) }
+        if pending.isEmpty || !fresh(at: t) { clear() }
         return (rects, restores)
     }
 
-    /// No Office display left (removed, failed to create, ended by the window server): nothing is to be put back.
+    /// A CREATE_DISPLAY for a display that already exists as asked (nothing created, no shove): the record goes unless
+    /// another create is pending (a pending create of this same slot keeps its own record too).
+    mutating func nothingCreated() {
+        if pending.isEmpty { clear() }
+    }
+
+    /// No Office display left (removed, ended by the window server): nothing is to be put back — unless a create is
+    /// still pending (its arrange still needs the record).
     mutating func noneLeft() {
-        homes = [:]
-        pendingSince = nil
+        if pending.isEmpty { clear() }
     }
 
     /// After a remove: macOS re-applies the layout it remembers for the remaining set of displays, which can carry a

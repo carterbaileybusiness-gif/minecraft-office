@@ -240,30 +240,57 @@ enum PointerTests {
                         "a monitor above doesn't block the right side")
         }
 
-        run("monitor homes: a monitor macOS shoved aside goes back; one the user moved stays; the record is used once") {
+        run("monitor homes: a shoved monitor goes back after each pending create; one the user moved stays; stale or ended records go") {
             let size = CGSize(width: 1920, height: 1080)
+            func at(_ x: Double, _ y: Double) -> CGRect { CGRect(origin: CGPoint(x: x, y: y), size: size) }
             var h = MonitorHomes()
-            h.beforeCreate([7: CGPoint(x: 1440, y: 0)], at: 0)
-            let shoved = h.forArrange([7: CGRect(origin: CGPoint(x: 3360, y: 0), size: size)])
-            expectEqual(shoved.rects, [CGRect(origin: CGPoint(x: 1440, y: 0), size: size)], "arranged around where it was")
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 0)
+            let shoved = h.forArrange([7: at(3360, 0)], at: 0.5, after: 1)
+            expectEqual(shoved.rects, [at(1440, 0)], "arranged around where it was")
             expectEqual(shoved.restores.map(\.id), [7], "and put back")
             expectEqual(shoved.restores.first?.to, CGPoint(x: 1440, y: 0))
             // the user moves it while the displays are up; a remove's arrange keeps it there
-            let afterRemove = h.forArrange([7: CGRect(origin: CGPoint(x: 0, y: 900), size: size)])
+            let afterRemove = h.forArrange([7: at(0, 900)], at: 50, after: nil)
             expectEqual(afterRemove.restores.count, 0, "nothing put back after a remove")
-            expectEqual(afterRemove.rects, [CGRect(origin: CGPoint(x: 0, y: 900), size: size)])
-            // a later create records afresh (overwrites)
-            h.beforeCreate([7: CGPoint(x: 0, y: 900)], at: 100)
-            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "fresh positions before each create")
-            // a second create before the first one's arrange: the first record stands (the monitor may be shoved already)
-            h.beforeCreate([7: CGPoint(x: 1920, y: 900)], at: 101)
-            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "pending create: earlier record kept")
-            h.beforeCreate([7: CGPoint(x: 1920, y: 900)], at: 100 + MonitorHomes.pendingLimit + 1)
-            expectEqual(h.homes, [7: CGPoint(x: 1920, y: 900)], "a create whose arrange never came goes stale")
-            // nothing left (failed create, window server ended them, removed): forgotten
+            expectEqual(afterRemove.rects, [at(0, 900)])
+
+            // back-to-back creates (the mod sends them all at once): the record lasts until the last pending arrange
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 100)
+            h.beforeCreate(slot: 2, [7: CGPoint(x: 3360, y: 0)], at: 100.1) // display 1 already shoved it
+            h.beforeCreate(slot: 3, [7: CGPoint(x: 5280, y: 0)], at: 100.2)
+            expectEqual(h.homes, [7: CGPoint(x: 1440, y: 0)], "the first record stands while creates are pending")
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 100.4, after: 1).restores.first?.to, CGPoint(x: 1440, y: 0))
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 100.6, after: 2).restores.first?.to, CGPoint(x: 1440, y: 0),
+                        "display 2 shoved it again: back again (the record wasn't used up by display 1's arrange)")
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 100.8, after: 3).restores.first?.to, CGPoint(x: 1440, y: 0))
+            expectEqual(h.homes.count, 0, "gone after the last pending arrange")
+            expectEqual(h.forArrange([7: at(3360, 0)], at: 101, after: nil).restores.count, 0)
+
+            // stale: a record older than pendingLimit is ignored by arrange (and a create then records afresh)
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 200)
+            expectEqual(h.forArrange([7: at(0, 900)], at: 200 + MonitorHomes.pendingLimit + 1, after: 1).restores.count, 0,
+                        "a stale record puts nothing back")
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 1440, y: 0)], at: 300)
+            h.beforeCreate(slot: 2, [7: CGPoint(x: 0, y: 900)], at: 300 + MonitorHomes.pendingLimit + 1)
+            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "a create whose arrange never came goes stale: recorded afresh")
+
+            // creates that end without their arrange (failed, timed out, identical, removed meanwhile)
+            h.createEnded(slot: 1)
+            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "kept while display 2's create is pending")
+            h.createEnded(slot: 2)
+            expectEqual(h.homes.count, 0, "cleared when none is pending")
+            h.beforeCreate(slot: 4, [7: CGPoint(x: 1, y: 1)], at: 400)
+            h.nothingCreated()
+            expectEqual(h.homes.count, 1, "an identical CREATE_DISPLAY while a create is pending: kept")
+            h.noneLeft()
+            expectEqual(h.homes.count, 1, "no display left, but a create is pending: kept for its arrange")
+            h.createEnded(slot: 4)
             h.noneLeft()
             expectEqual(h.homes.count, 0)
-            expectEqual(h.forArrange([7: CGRect(origin: CGPoint(x: 5, y: 5), size: size)]).restores.count, 0)
+            h.beforeCreate(slot: 1, [7: CGPoint(x: 2, y: 2)], at: 500)
+            _ = h.forArrange([7: at(2, 2)], at: 500.5, after: 1)
+            h.nothingCreated()
+            expectEqual(h.homes.count, 0, "an identical CREATE_DISPLAY with nothing pending: nothing kept")
             // after a remove: only a monitor that moved since just before it goes back, to that place; gone ones are left
             let back = MonitorHomes.movedSince([7: CGPoint(x: 0, y: 900), 8: CGPoint(x: -1280, y: 0), 9: CGPoint(x: 9, y: 9)],
                                                now: [7: CGPoint(x: 1440, y: 0), 8: CGPoint(x: -1280, y: 0)])

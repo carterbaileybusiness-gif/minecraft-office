@@ -37,12 +37,13 @@ import CoreGraphics
     /// Creates (or keeps, when identical) the display for this slot and returns its id.
     func create(_ spec: DisplaySpec) throws -> CGDirectDisplayID {
         if let existing = displays[spec.slot] {
-            if existing.spec == spec { return existing.displayID }
+            if existing.spec == spec { return existing.displayID } // nothing created: the caller ends it (createEnded)
             remove(slot: spec.slot, keepMonitors: false) // the create below records and restores them
         }
-        homes.beforeCreate(Dictionary(uniqueKeysWithValues: otherIDs().map { ($0, CGDisplayBounds($0).origin) }),
+        homes.beforeCreate(slot: spec.slot, Dictionary(uniqueKeysWithValues: otherIDs().map { ($0, CGDisplayBounds($0).origin) }),
                            at: Date().timeIntervalSinceReferenceDate)
-        defer { if displays.isEmpty { homes.noneLeft() } } // a failed first create leaves nothing to put back
+        var created = false
+        defer { if !created { homes.createEnded(slot: spec.slot) } } // failed: no arrange will follow
         let descriptor = CGVirtualDisplayDescriptor()
         descriptor.queue = DispatchQueue.main
         descriptor.name = spec.name
@@ -73,6 +74,7 @@ import CoreGraphics
         settings.modes = [CGVirtualDisplayMode(width: UInt32(spec.width), height: UInt32(spec.height), refreshRate: 60)]
         guard display.apply(settings) else { throw Failure.applyFailed }
         displays[slot] = Live(spec: spec, display: display)
+        created = true
         log("created \(spec.name) id \(display.displayID) \(spec.width)x\(spec.height) serial \(String(spec.serial, radix: 16))")
         return display.displayID
     }
@@ -126,10 +128,18 @@ import CoreGraphics
     /// (macOS shoves a monitor at the main display's right edge aside for a new display; that edge stays the monitor's).
     /// After a remove nothing is put back to an old place: a monitor the user moved meanwhile stays where they put it
     /// (`remove` even undoes macOS moving it to its remembered layout).
-    func arrange() {
+    /// A create of `slot` ended without its arrange (its display never came online, was removed meanwhile, or was
+    /// identical): the record of monitor positions goes unless another create is pending.
+    func createEnded(slot: Int) { homes.createEnded(slot: slot) }
+
+    /// CREATE_DISPLAY for a display that already exists as asked.
+    func nothingCreated() { homes.nothingCreated() }
+
+    func arrange(after slot: Int? = nil) {
         let main = CGDisplayBounds(CGMainDisplayID())
         // each monitor where it was just before the last create (macOS may have shoved it aside to fit ours in)
-        let others = homes.forArrange(Dictionary(uniqueKeysWithValues: otherIDs().map { ($0, CGDisplayBounds($0)) }))
+        let others = homes.forArrange(Dictionary(uniqueKeysWithValues: otherIDs().map { ($0, CGDisplayBounds($0)) }),
+                                      at: Date().timeIntervalSinceReferenceDate, after: slot)
         let ours = displays.map { (slot: $0.key, size: CGSize(width: $0.value.spec.width, height: $0.value.spec.height)) }
         let wanted = DisplayArrangement.origins(main: main, others: others.rects, ours: ours)
         let moves = wanted.filter { slot, origin in

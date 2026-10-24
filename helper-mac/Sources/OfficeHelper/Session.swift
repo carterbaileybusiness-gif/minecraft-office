@@ -149,6 +149,7 @@ import ScreenCaptureKit
         catch let e as DisplaySpecError { sendError(e.code, e.message); return }
         catch { sendError("bad_request", "\(error)"); return }
         let id: CGDirectDisplayID
+        let identical = displays.displays[p.slot]?.spec == spec
         do {
             if let old = displays.displays[p.slot], old.spec != spec { endCaptures(onSlot: p.slot, reason: "display removed") }
             id = try displays.create(spec)
@@ -156,13 +157,18 @@ import ScreenCaptureKit
             sendError("display_failed", "\(spec.name): \(error)")
             return
         }
+        if identical { displays.nothingCreated() } // nothing new: no shove to undo
         Task {
             guard await VirtualDisplays.waitOnline(id) else {
+                if !identical { self.displays.createEnded(slot: spec.slot) }
                 self.sendError("display_failed", "\(spec.name) did not come online")
                 return
             }
-            guard self.displays.displayID(slot: spec.slot) == id else { return } // removed meanwhile
-            self.displays.arrange() // next to the main display, like monitors next to a laptop
+            guard self.displays.displayID(slot: spec.slot) == id else { // removed meanwhile
+                if !identical { self.displays.createEnded(slot: spec.slot) }
+                return
+            }
+            self.displays.arrange(after: identical ? nil : spec.slot) // next to the main display, like monitors next to a laptop
             let origin = CGDisplayBounds(id).origin, main = CGDisplayBounds(CGMainDisplayID())
             self.server.send(.display(DisplayPayload(slot: spec.slot, displayId: id, w: spec.width, h: spec.height,
                                                      x: Int(origin.x), y: Int(origin.y),

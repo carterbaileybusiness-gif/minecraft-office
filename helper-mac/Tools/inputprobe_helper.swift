@@ -211,6 +211,41 @@ extension Probe {
                 let afterAll = CGDisplayBounds(mid).origin
                 check("W7 …and when the last one is removed (macOS's remembered layout would carry it back; the helper keeps it put)",
                       afterAll == placed, "after removing display 1 too: \(afterAll)")
+
+                // W8: the mod sends every CREATE_DISPLAY at once on each (re)connect. With the monitor at the laptop
+                // screen's right edge, three back-to-back creates: each new display may shove it; it must end where the
+                // user had it, the Office displays to the left in slot order.
+                await sleep(3.5) // the post-remove window is over
+                placeDisplay(mid, at: CGPoint(x: mainBounds.maxX, y: mainBounds.minY))
+                await sleep(1.0)
+                let userPlace = CGDisplayBounds(mid).origin
+                inbox.removeAll()
+                // as the mod sends them; a small gap (PROBE_CREATE_GAP seconds, default none) lets a display come online
+                // between two creates, which is when a shove can slip between a create and its arrange
+                let gap = Double(ProcessInfo.processInfo.environment["PROBE_CREATE_GAP"] ?? "") ?? 0
+                for slot in 1...3 {
+                    client.send(.createDisplay(CreateDisplayPayload(slot: slot, w: 1920, h: 1080)))
+                    if gap > 0 { await sleep(gap) }
+                }
+                var shown: [Int: CGDirectDisplayID] = [:]
+                for _ in 0..<80 where shown.count < 3 {
+                    await sleep(0.1)
+                    for m in inbox { if case .display(let d) = m { shown[d.slot] = d.displayId } }
+                }
+                await sleep(1.5)
+                let monitorNow = CGDisplayBounds(mid).origin
+                let b = (1...3).map { shown[$0].map { CGDisplayBounds($0) } ?? .null }
+                check("W8 three back-to-back creates: the monitor ends where the user had it, displays 1-3 left of the laptop screen in slot order",
+                      userPlace == CGPoint(x: mainBounds.maxX, y: mainBounds.minY) && monitorNow == userPlace && shown.count == 3
+                        && b[0].maxX == mainBounds.minX && b[1].maxX == b[0].minX && b[2].maxX == b[1].minX,
+                      "monitor \(userPlace) → \(monitorNow); 1: \(b[0]), 2: \(b[1]), 3: \(b[2])")
+                for slot in [3, 2, 1] {
+                    client.send(.removeDisplay(SlotPayload(slot: slot)))
+                    await sleep(0.8)
+                }
+                await sleep(1.5)
+                check("W8 …and it stays there when they are removed again", CGDisplayBounds(mid).origin == userPlace,
+                      "monitor now \(CGDisplayBounds(mid).origin)")
             }
             return
         }
