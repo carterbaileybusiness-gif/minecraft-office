@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.jspecify.annotations.Nullable;
+
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
@@ -21,16 +23,21 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.TagKey;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Fallable;
 import net.minecraft.world.level.block.IceBlock;
+import net.minecraft.world.level.block.LevelEvent;
 import net.minecraft.world.level.block.LiquidBlock;
+import net.minecraft.world.level.block.LiquidBlockContainer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
 
@@ -44,6 +51,9 @@ import net.minecraft.world.level.saveddata.SavedDataType;
  * is saved), so a temporary block never reaches the disk in a saved chunk while the server keeps running.</li>
  * <li>{@code SERVER_STARTED} restores what expired while the server was down; {@code SERVER_STOPPING} restores everything.</li>
  * </ul>
+ * A temporary block is never a source of items: breaking one by any means (mining, silk touch, explosions, {@code Level.destroyBlock})
+ * drops nothing and puts the original block back at once ({@link #breakTemp}, wired by {@link TempBlockGuard}); pistons can't
+ * move one, and endermen and silverfish leave it alone.
  * Only inert states ({@link #isSafe}) are placed. {@link #place} is the low-level primitive: spells place temporary blocks
  * through {@link EditBatch#placeTemporary}, which also applies the claim, immunity and budget rules. Server thread only.
  */
@@ -98,13 +108,15 @@ public final class TempBlockData extends SavedData implements TempBlocks {
 
 	/**
 	 * Whether {@code state} may be a temporary block: in {@link #SAFE}, and not a liquid, a falling block, melting ice, a block
-	 * entity, half of a two-block-tall block, or a light source (checked even if the tag is widened). No light, because a chunk
-	 * restore ({@link #onChunkUnload}) skips the light engine.
+	 * entity, half of a two-block-tall block, a light source, or something flowing water or lava can wash away or flow into
+	 * (checked even if the tag is widened). No light, because a chunk restore ({@link #onChunkUnload}) skips the light engine;
+	 * nothing washable, so a fluid never breaks a temporary block (and never drops it).
 	 */
 	public static boolean isSafe(BlockState state) {
 		Block b = state.getBlock();
 		return state.is(SAFE) && !(b instanceof LiquidBlock) && !(b instanceof Fallable) && !(b instanceof IceBlock) && !state.hasBlockEntity()
-				&& !state.hasProperty(BlockStateProperties.DOUBLE_BLOCK_HALF) && state.getFluidState().isEmpty() && state.getLightEmission() == 0;
+				&& !state.hasProperty(BlockStateProperties.DOUBLE_BLOCK_HALF) && state.getFluidState().isEmpty() && state.getLightEmission() == 0
+				&& !state.is(BlockTags.WASHED_AWAY_BY_FLUIDS) && !(b instanceof LiquidBlockContainer);
 	}
 
 	/** Whether a temporary block may replace {@code current}: air or replaceable, not a block entity, not half of a tall plant. */
@@ -136,6 +148,29 @@ public final class TempBlockData extends SavedData implements TempBlocks {
 			if (inChunk.isEmpty()) byChunk.remove(e.chunk());
 		}
 		setDirty();
+	}
+
+	/** Whether {@code pos} holds a live temporary block: an entry here, and its placed state still in the world. */
+	public boolean isTemp(Level level, BlockPos pos) {
+		if (entries.isEmpty()) return false;
+		Entry e = entries.get(GlobalPos.of(level.dimension(), pos));
+		return e != null && level.isLoaded(pos) && level.getBlockState(pos).equals(e.placed());
+	}
+
+	/**
+	 * Breaks the live temporary block at {@code pos}: no items, no XP, and the original block comes back at once (the entry is done,
+	 * so the later restore has nothing to undo). With {@code effects}, other players see and hear the block break (the
+	 * {@code breaker}, if any, already did on their own client). False, changing nothing, when {@code pos} holds no live temporary block.
+	 */
+	public boolean breakTemp(ServerLevel level, BlockPos pos, @Nullable Entity breaker, boolean effects) {
+		if (!isTemp(level, pos)) return false;
+		Entry e = entries.get(GlobalPos.of(level.dimension(), pos));
+		BlockState broken = e.placed();
+		drop(e);
+		if (effects) level.levelEvent(breaker, LevelEvent.PARTICLES_AND_SOUND_DESTROY_BLOCK, pos, Block.getId(broken));
+		level.setBlock(pos, e.original(), Block.UPDATE_ALL);
+		level.gameEvent(GameEvent.BLOCK_DESTROY, pos, GameEvent.Context.of(breaker, broken));
+		return true;
 	}
 
 	@Override

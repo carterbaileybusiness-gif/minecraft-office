@@ -61,6 +61,11 @@ Anti-goals
 - **World effects:** small spells: particles + knockback only. Medium: temporary or minor block changes. Big/ultimate:
   **permanent** terrain change (craters, walls, flood water, displaced blocks with physics) **(Carter)** — but **never inside
   another player's land claim** (Open Parties and Claims) and never in spawn-protected areas **(my call)**.
+- **Temporary blocks are never a source of items (Carter):** a temporary block (Earth Wall, ice, glass…) broken by any means —
+  mining in survival (any tool, silk touch included), explosions (wind bursts break nothing, as in vanilla), `Level.destroyBlock` (the wither, mods) — drops no items and
+  no XP, and the **original block comes back at once** (the entry is done, so the timed restore never fights the player).
+  Pistons can't move one (immovable, like obsidian), endermen can't pick one up, silverfish can't infest one, and fluids can't
+  wash one out (only solid, unwashable blocks may be temporary). Code: `magic/terrain/TempBlockGuard` and the server mixins.
 - **Recall (everyone, any element) (Carter + my call):** "Mark Home" (shift + cast Recall at a spot) and "Recall" (channel
   2 s with a circle under you → teleport home). Available from level 1.
 
