@@ -270,19 +270,18 @@ level 7 and need **hand signs**: press the arrows shown on screen with the **arr
 **7. Your office is safe.** Big spells change the land for good (craters, walls and so on), but **never inside other
 players' claims**. Claim your office (see [claims](#8-voice-chat-and-claims)) and it is protected.
 
-**What's in so far:** each element has its first 2 spells:
+**Every element has 5 spells.** They unlock as your grimoire levels up; the fifth is the ultimate (level 7, hand signs).
 
-| Element | Spells |
+| Element | Spells (last one is the ultimate) |
 |---|---|
-| Fire | Fire Bolt, Fire Wall |
-| Water | Water Bullet, Tidal Push |
-| Wind | Gust, Blade Wind |
-| Lightning | Spark, Chain Lightning |
-| Earth | Stone Bullet, Earth Wall |
-| Shadow | Shadow Bolt, Gravity Well |
+| Fire | Fire Bolt, Fire Wall, Flame Dash, Fireball Barrage, **Meteor** |
+| Water | Water Bullet, Tidal Push, Bubble Shield, Water Prison, **Water Dragon** |
+| Wind | Gust, Blade Wind, Air Step, Tornado, **Wind Sphere** |
+| Lightning | Spark, Chain Lightning, Blink, Thunder Spear, **Chidori Strike** |
+| Earth | Stone Bullet, Earth Wall, Earth Spikes, Quake, **Mountain Fist** |
+| Shadow | Shadow Bolt, Gravity Well, Shadow Step, Shadow Bind, **Black Hole** |
 
-The rest, including the ultimates, arrive in updates over the next few days. You get them automatically when you
-press **Play**.
+Updates arrive automatically when you press **Play**.
 
 **Old handbook?** Type `/handbook` and it is replaced with the latest one.
 
