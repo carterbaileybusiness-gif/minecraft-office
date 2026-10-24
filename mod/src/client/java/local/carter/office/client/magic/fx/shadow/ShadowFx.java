@@ -28,6 +28,10 @@ public final class ShadowFx {
 	public static void register() {
 		SpellFxRegistry.register(SpellIds.SHADOW_BOLT, new ShadowBoltFx());
 		SpellFxRegistry.register(SpellIds.GRAVITY_WELL, new GravityWellFx());
+		SpellFxRegistry.register(SpellIds.SHADOW_STEP, new ShadowStepFx());
+		SpellFxRegistry.register(SpellIds.SHADOW_BIND, new ShadowBindFx());
+		SpellFxRegistry.register(SpellIds.BLACK_HOLE, new BlackHoleFx());
+		Devoured.register();
 	}
 
 	/** {@code v} normalised (+Z if it has no length). */

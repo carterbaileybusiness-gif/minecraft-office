@@ -83,14 +83,22 @@ public final class GravityWell implements Spell {
 	 * inside a block or hidden from the ray point (a low ceiling), the well stays at the stepped-back ray point.
 	 */
 	static Vec3 centre(CastContext ctx) {
+		return hover(ctx, WellGeometry.RANGE, WellGeometry.HEIGHT);
+	}
+
+	/**
+	 * A point {@code height} above the ground under the look ray's point within {@code range}, as {@link #centre} (Gravity Well and
+	 * Black Hole both open this way).
+	 */
+	static Vec3 hover(CastContext ctx, double range, double height) {
 		ServerLevel level = ctx.level();
 		Vec3 eye = ctx.eye();
-		Vec3 hit = Targets.point(ctx, WellGeometry.RANGE);
+		Vec3 hit = Targets.point(ctx, range);
 		Vec3 back = eye.subtract(hit);
 		double len = back.length();
 		Vec3 p = len < 1.0E-6 ? hit : hit.add(back.scale(Math.min(0.5, len) / len));
 		Vec3 ground = Targets.ground(level, p);
-		Vec3 c = new Vec3(p.x, ground.y + WellGeometry.HEIGHT, p.z);
+		Vec3 c = new Vec3(p.x, ground.y + height, p.z);
 		BlockPos cell = BlockPos.containing(c);
 		if (!level.getBlockState(cell).getCollisionShape(level, cell).isEmpty() || !clear(level, p, c)) return p;
 		return c;
