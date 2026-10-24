@@ -22,6 +22,13 @@ import ScreenCaptureKit
     static let permissionPollSeconds: TimeInterval = 2
     private var askedScreenRecording = false
     private var askedAccessibility = false
+    /// The mod's HELLO listed "screens": it understands DISPLAYS pushes and CURSOR `display`.
+    private var screensMod = false
+    /// Where the user put the Office displays (SET_ORIGINS), beside the socket and token.
+    private lazy var arrangement = ArrangementStore(url: server.directory.appendingPathComponent("display-arrangement.json"))
+    /// Debounces DISPLAYS pushes after display reconfigurations (each change comes as several callbacks).
+    private var reconfigureTicket = 0
+    static let reconfigureDebounceSeconds = 0.3
     /// Called when the mod disconnects: the helper quits and its displays vanish with it.
     var onFinished: (() -> Void)?
 
@@ -53,6 +60,11 @@ import ScreenCaptureKit
         launcher.minecraftPid = { [weak self] in self?.minecraftPid }
         launcher.activateMinecraft = { [weak self] in self?.activateMinecraftApp() }
         displays.onTerminated = { [weak self] slot in self?.displayGone(slot: slot) }
+        displays.saved = { [weak self] in
+            guard let self, let main = ScreenCatalog.uuid(CGMainDisplayID()) else { return [:] }
+            return self.arrangement.load().origins(forMain: main)
+        }
+        ScreenCatalog.onReconfigure { [weak self] in self?.screensReconfigured() }
         hotkey.onExit = { [weak self] in
             Log.write("exit hotkey")
             self?.endZoom(notifyMod: true)
@@ -63,7 +75,8 @@ import ScreenCaptureKit
 
     func connected(_ hello: HelloPayload, peerPid: pid_t) {
         minecraftPid = hello.mcPid > 0 ? hello.mcPid : peerPid
-        Log.write("mod connected: mcPid \(hello.mcPid), peer pid \(peerPid)")
+        screensMod = hello.features?.contains(OfficeProtocol.screensFeature) ?? false
+        Log.write("mod connected: mcPid \(hello.mcPid), peer pid \(peerPid), features \(hello.features ?? [])")
         pollTimer?.invalidate()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
@@ -89,6 +102,7 @@ import ScreenCaptureKit
     func shutdown() {
         pollTimer?.invalidate(); pollTimer = nil
         permissionTimer?.invalidate(); permissionTimer = nil
+        screensMod = false
         endZoom(notifyMod: false, activateMinecraft: false)
         input.shutdown()
         for capture in captures.values { capture.stop() }
@@ -97,7 +111,8 @@ import ScreenCaptureKit
     }
 
     nonisolated static var welcome: WelcomePayload {
-        WelcomePayload(version: OfficeProtocol.version, screenRecording: CGPreflightScreenCaptureAccess(), accessibility: AXIsProcessTrusted())
+        WelcomePayload(version: OfficeProtocol.version, screenRecording: CGPreflightScreenCaptureAccess(), accessibility: AXIsProcessTrusted(),
+                       features: [OfficeProtocol.screensFeature])
     }
 
     // MARK: Messages
@@ -129,7 +144,9 @@ import ScreenCaptureKit
         case .openApp(let p):
             if !AXIsProcessTrusted() { askAccessibilityOnce() }
             launcher.open(p)
-        case .listDisplays, .setOrigins, .identify:
+        case .listDisplays: sendDisplays()
+        case .setOrigins(let p): setOrigins(p)
+        case .identify:
             sendError("bad_request", "\(message.type): not yet")
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
@@ -187,6 +204,59 @@ import ScreenCaptureKit
     }
 
     private func displayGone(slot: Int) { endCaptures(onSlot: slot, reason: "display removed") }
+
+    // MARK: Display map ("screens")
+
+    private func sendDisplays() {
+        server.send(.displays(DisplaysPayload(displays: ScreenCatalog.list(ours: displays.displays.mapValues(\.displayID)))))
+    }
+
+    /// SET_ORIGINS: checked as one new layout (OriginRequest), applied in one configuration, then every live Office
+    /// display's origin is remembered for this main display and the mod gets the screens as they are now.
+    private func setOrigins(_ p: SetOriginsPayload) {
+        let live = displays.displays.mapValues { CGDisplayBounds($0.displayID) }
+        let ours = Set(displays.displays.values.map(\.displayID))
+        let fixed = ScreenCatalog.activeIDs().filter { !ours.contains($0) }.map { CGDisplayBounds($0) }
+        let moves: [Int: CGPoint]
+        switch OriginRequest.check(p, live: live, fixed: fixed) {
+        case .failure(let problem):
+            sendError("bad_request", problem.message)
+            sendDisplays()
+            return
+        case .success(let m): moves = m
+        }
+        guard displays.apply(origins: moves) else {
+            sendError("display_failed", "macOS refused the new arrangement")
+            sendDisplays()
+            return
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 150_000_000) // the window server settles the new bounds
+            self.rememberArrangement()
+            self.sendDisplays()
+        }
+    }
+
+    private func rememberArrangement() {
+        guard let main = ScreenCatalog.uuid(CGMainDisplayID()) else { return }
+        var saved = arrangement.load()
+        saved.record(forMain: main, displays.displays.mapValues { CGDisplayBounds($0.displayID).origin })
+        do { try arrangement.save(saved) } catch { Log.write("arrangement not saved: \(error)") }
+    }
+
+    /// A display reconfiguration (plug, unplug, a move in System Settings, ours created / moved / removed): a "screens"
+    /// mod gets DISPLAYS once things settle (300 ms after the last change).
+    private func screensReconfigured() {
+        guard screensMod else { return }
+        reconfigureTicket += 1
+        let ticket = reconfigureTicket
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.reconfigureDebounceSeconds) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.screensMod, self.reconfigureTicket == ticket else { return }
+                self.sendDisplays()
+            }
+        }
+    }
 
     private func endCaptures(onSlot slot: Int, reason: String) {
         guard let id = displays.displayID(slot: slot) else { return }

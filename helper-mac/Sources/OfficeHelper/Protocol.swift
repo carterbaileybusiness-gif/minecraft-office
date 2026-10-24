@@ -226,7 +226,7 @@ struct IdentifyLabel: Codable, Equatable { var display: String; var label: Strin
 struct IdentifyPayload: Codable, Equatable { var labels: [IdentifyLabel] }
 
 /// The "screens" messages' limits, checked by the encoder and the decoder alike (the mod checks the same).
-enum ScreensRules {
+enum ScreensLimits {
     static let maxOrigins = 4
     static let maxLabels = 16
     static let maxDisplays = 16
@@ -411,7 +411,7 @@ enum Message: Equatable {
 
     /// The payload bytes (no envelope).
     func payload() throws -> Data {
-        try ScreensRules.check(self)
+        try ScreensLimits.check(self)
         switch self {
         case .hello(let p): return try Self.json(p)
         case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .listApps, .listDisplays: return try Self.json(Empty())
@@ -499,7 +499,7 @@ enum Message: Equatable {
 
     static func decode(type: MessageType, payload: Data) throws -> Message {
         let message = try decodeFields(type: type, payload: payload)
-        try ScreensRules.check(message)
+        try ScreensLimits.check(message)
         return message
     }
 

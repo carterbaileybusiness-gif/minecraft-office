@@ -26,7 +26,9 @@ Steps (run in order; incoming messages are printed as they arrive):
   work SLOT X Y [BUTTON]     WORK_BEGIN: work mode there (real cursor + real mouse until Esc; CURSOR reports print as
                              they come, at most one line per 0.25 s)
   sleep SECONDS              wait (still printing incoming messages)
-  displays                   print online display ids (CoreGraphics)
+  displays                   LIST_DISPLAYS, wait for DISPLAYS (every screen: UUID, slot, main, name, bounds); also print
+                             the online display ids (CoreGraphics)
+  origins SLOT X Y [SLOT X Y ..]  SET_ORIGINS: move Office displays (global points); waits for DISPLAYS (or ERROR first)
   uuid SLOT                  print the display UUID macOS uses to restore arrangement / window positions
   waitgone SLOT SECONDS      wait until the display reported for SLOT is offline; print how long it took
   badtoken                   open a second connection with a wrong token and report whether it was closed
@@ -49,9 +51,10 @@ NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY"
          69: "ENDED", 70: "EXIT_ZOOM", 71: "ERROR",
          11: "POINTER_DOWN", 12: "POINTER_MOVE", 13: "POINTER_UP", 14: "SCROLL", 15: "CLICK", 16: "EXIT_TYPING",
          19: "LIST_APPS", 20: "APP_ICONS", 21: "OPEN_APP", 72: "TYPING_EXIT", 73: "DRAG_DELTA", 74: "DRAG_ENDED",
-         22: "WORK_BEGIN", 23: "RATE", 75: "APPS", 76: "ICONS", 77: "APP_RESULT", 78: "SECURE_INPUT", 79: "CURSOR", 80: "WALK"}
+         22: "WORK_BEGIN", 23: "RATE", 75: "APPS", 76: "ICONS", 77: "APP_RESULT", 78: "SECURE_INPUT", 79: "CURSOR", 80: "WALK",
+         24: "LIST_DISPLAYS", 25: "SET_ORIGINS", 26: "IDENTIFY", 81: "DISPLAYS"}
 STEPS = {"create", "remove", "list", "capture", "ready", "stop", "zoomin", "zoomout", "permissions", "down", "move", "up",
-         "click", "scroll", "exittyping", "apps", "icons", "open", "work", "sleep", "uuid", "displays", "waitgone", "badtoken"}
+         "click", "scroll", "exittyping", "apps", "icons", "open", "work", "sleep", "uuid", "displays", "origins", "waitgone", "badtoken"}
 MAIN_PICTURE = {"w": 1920, "h": 1080}  # slot 0 (Mirror): the picture size x / y belong to
 CODES = {v: k for k, v in NAMES.items()}
 
@@ -101,7 +104,7 @@ def read_exact(s, n):
 def connect(token):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(SOCK)
-    s.sendall(frame("HELLO", {"token": token, "version": 1, "mcPid": os.getpid()}))
+    s.sendall(frame("HELLO", {"token": token, "version": 1, "mcPid": os.getpid(), "features": ["screens"]}))
     return s
 
 
@@ -259,7 +262,18 @@ def main(argv):
             did = c.displays.get(int(argv[i + 1])); i += 2
             print(f"   display {did} uuid {display_uuid(did)}", flush=True)
         elif step == "displays":
-            print(f"   online displays: {online_displays()}", flush=True); i += 1
+            c.send("LIST_DISPLAYS"); i += 1
+            c.wait_for("DISPLAYS", 5)
+            print(f"   online displays: {online_displays()}", flush=True)
+        elif step == "origins":
+            i += 1
+            origins = []
+            while i + 2 < len(argv) and argv[i] not in STEPS:
+                origins.append({"slot": int(argv[i]), "x": int(argv[i + 1]), "y": int(argv[i + 2])}); i += 3
+            c.send("SET_ORIGINS", {"origins": origins})
+            got = c.wait_for("DISPLAYS", 5, also=("ERROR",))
+            if got and got[0] == "ERROR":
+                c.wait_for("DISPLAYS", 5)
         elif step == "waitgone":
             slot, limit = int(argv[i + 1]), float(argv[i + 2]); i += 3
             did = c.displays.get(slot)

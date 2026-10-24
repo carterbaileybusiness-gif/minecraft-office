@@ -473,8 +473,31 @@ struct MonitorHomes {
 /// laptop and its monitors. If another display (a real monitor) already touches the main display's right edge, the row
 /// goes to its left instead: next to the main display's left edge, or, when a monitor sits there too, past the
 /// leftmost display in that band (so nothing overlaps).
+/// `saved`: where the user last put displays (SET_ORIGINS, remembered per main display). A saved spot is used while it
+/// is valid (ScreenRules: no overlap, touching the main display, a monitor or an Office display already placed) —
+/// placed in slot order, again and again until nothing more fits — and the rest go by the rule above, around them.
 enum DisplayArrangement {
-    static func origins(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)]) -> [Int: CGPoint] {
+    static func origins(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)], saved: [Int: CGPoint] = [:]) -> [Int: CGPoint] {
+        var placed: [Int: CGRect] = [:]
+        let candidates = ours.filter { saved[$0.slot] != nil }.sorted { $0.slot < $1.slot }
+        var grew = true
+        while grew {
+            grew = false
+            for d in candidates where placed[d.slot] == nil {
+                let r = CGRect(origin: saved[d.slot]!, size: d.size)
+                if ScreenRules.valid(r, among: [main] + others + Array(placed.values)) {
+                    placed[d.slot] = r
+                    grew = true
+                }
+            }
+        }
+        var out = automatic(main: main, others: others + placed.keys.sorted().map { placed[$0]! },
+                            ours: ours.filter { placed[$0.slot] == nil })
+        for (slot, r) in placed { out[slot] = r.origin }
+        return out
+    }
+
+    private static func automatic(main: CGRect, others: [CGRect], ours: [(slot: Int, size: CGSize)]) -> [Int: CGPoint] {
         let sorted = ours.sorted { $0.slot < $1.slot }
         let totalWidth = sorted.reduce(0) { $0 + $1.size.width }
         let height = sorted.map(\.size.height).max() ?? 0

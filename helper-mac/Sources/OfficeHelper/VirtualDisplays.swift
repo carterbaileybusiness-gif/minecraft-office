@@ -29,6 +29,9 @@ import CoreGraphics
     /// The window server ended a display on its own (slot).
     var onTerminated: ((Int) -> Void)?
     var log: (String) -> Void = { _ in }
+    /// Where the user last put the Office displays (SET_ORIGINS, remembered for the current main display): `arrange`
+    /// uses these spots while they are valid.
+    var saved: () -> [Int: CGPoint] = { [:] }
 
     func displayID(slot: Int) -> CGDirectDisplayID? { displays[slot]?.displayID }
 
@@ -141,7 +144,7 @@ import CoreGraphics
         let others = homes.forArrange(Dictionary(uniqueKeysWithValues: otherIDs().map { ($0, CGDisplayBounds($0)) }),
                                       at: Date().timeIntervalSinceReferenceDate, after: slot)
         let ours = displays.map { (slot: $0.key, size: CGSize(width: $0.value.spec.width, height: $0.value.spec.height)) }
-        let wanted = DisplayArrangement.origins(main: main, others: others.rects, ours: ours)
+        let wanted = DisplayArrangement.origins(main: main, others: others.rects, ours: ours, saved: saved())
         let moves = wanted.filter { slot, origin in
             guard let id = displays[slot]?.displayID else { return false }
             return CGDisplayBounds(id).origin != origin
@@ -157,6 +160,20 @@ import CoreGraphics
         let result = CGCompleteDisplayConfiguration(config, .forSession)
         log("arranged \(moves.keys.sorted()) next to the main display\(restores.isEmpty ? "" : ", \(restores.count) monitor(s) back where they were"): "
             + (result == .success ? "ok" : "error \(result.rawValue)"))
+    }
+
+    /// SET_ORIGINS (already checked by OriginRequest): moves these Office displays (slot → origin, global points) in one
+    /// display configuration, for this login session like `arrange`. False when macOS refused it.
+    func apply(origins: [Int: CGPoint]) -> Bool {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return false }
+        for (slot, origin) in origins {
+            if let id = displays[slot]?.displayID { CGConfigureDisplayOrigin(config, id, Int32(origin.x), Int32(origin.y)) }
+        }
+        let result = CGCompleteDisplayConfiguration(config, .forSession)
+        log("moved \(origins.sorted { $0.key < $1.key }.map { "\($0.key) → \(Int($0.value.x)),\(Int($0.value.y))" }): "
+            + (result == .success ? "ok" : "error \(result.rawValue)"))
+        return result == .success
     }
 
     static func isOnline(_ id: CGDirectDisplayID) -> Bool {
