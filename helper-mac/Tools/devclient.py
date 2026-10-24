@@ -49,7 +49,7 @@ NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY"
          69: "ENDED", 70: "EXIT_ZOOM", 71: "ERROR",
          11: "POINTER_DOWN", 12: "POINTER_MOVE", 13: "POINTER_UP", 14: "SCROLL", 15: "CLICK", 16: "EXIT_TYPING",
          19: "LIST_APPS", 20: "APP_ICONS", 21: "OPEN_APP", 72: "TYPING_EXIT", 73: "DRAG_DELTA", 74: "DRAG_ENDED",
-         22: "WORK_BEGIN", 23: "RATE", 75: "APPS", 76: "ICONS", 77: "APP_RESULT", 78: "SECURE_INPUT", 79: "CURSOR"}
+         22: "WORK_BEGIN", 23: "RATE", 75: "APPS", 76: "ICONS", 77: "APP_RESULT", 78: "SECURE_INPUT", 79: "CURSOR", 80: "WALK"}
 STEPS = {"create", "remove", "list", "capture", "ready", "stop", "zoomin", "zoomout", "permissions", "down", "move", "up",
          "click", "scroll", "exittyping", "apps", "icons", "open", "work", "sleep", "uuid", "displays", "waitgone", "badtoken"}
 MAIN_PICTURE = {"w": 1920, "h": 1080}  # slot 0 (Mirror): the picture size x / y belong to

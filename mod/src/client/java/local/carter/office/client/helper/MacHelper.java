@@ -119,6 +119,7 @@ public final class MacHelper implements HelperConnection.Listener {
 	private final Set<String> iconsAsked = ConcurrentHashMap.newKeySet();
 	private final List<Consumer<AppResult>> appResultListeners = new CopyOnWriteArrayList<>();
 	private final List<Consumer<Boolean>> secureInputListeners = new CopyOnWriteArrayList<>();
+	private final List<Consumer<java.util.Set<String>>> walkListeners = new CopyOnWriteArrayList<>();
 	/** Which edge of the laptop screen leads to the Office displays ("left" / "right"), from DISPLAY; null until known. */
 	private volatile @Nullable String displaySide;
 
@@ -478,6 +479,11 @@ public final class MacHelper implements HelperConnection.Listener {
 		secureInputListeners.add(listener);
 	}
 
+	/** Called on the client thread with the movement keys held for Minecraft while dragging in work mode (WALK). */
+	public void onWalk(final Consumer<java.util.Set<String>> listener) {
+		walkListeners.add(listener);
+	}
+
 	public boolean exitTyping() {
 		return send(new ExitTyping());
 	}
@@ -650,6 +656,12 @@ public final class MacHelper implements HelperConnection.Listener {
 				}
 			}
 			case HelperProtocol.Cursor c -> cursor = c;
+			case HelperProtocol.Walk w -> {
+				java.util.Set<String> keys = java.util.Set.copyOf(w.keys());
+				for (Consumer<java.util.Set<String>> l : walkListeners) {
+					clientThread.execute(() -> l.accept(keys));
+				}
+			}
 			case HelperProtocol.SecureInput s -> {
 				for (Consumer<Boolean> l : secureInputListeners) {
 					clientThread.execute(() -> l.accept(s.on()));

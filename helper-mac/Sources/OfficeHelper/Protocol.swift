@@ -71,6 +71,9 @@ enum MessageType: UInt8, CaseIterable {
     case secureInput = 78
     /// Work mode: where the real cursor is (for the hologram to draw it), about 120 times a second while it moves.
     case cursor = 79
+    /// Work mode, walk while dragging (round 3): the movement keys held for Minecraft (WASD, Space, Shift taken from the
+    /// app while the mouse button is held), sent whenever that set changes; empty = stop.
+    case walk = 80
 }
 
 enum ProtocolError: Error, Equatable {
@@ -165,6 +168,8 @@ struct SecureInputPayload: Codable, Equatable { var on: Bool }
 /// The real cursor while working: on display `slot` (0 = the main display, 1-4 = virtual displays; -1 = none of them)
 /// at (x, y) of a `w` × `h` grid: the display's pixels for slots 1-4, the main display's points for slot 0.
 struct CursorPayload: Codable, Equatable { var slot: Int; var x: Int; var y: Int; var w: Int; var h: Int }
+/// Movement keys held for Minecraft: any of forward, back, left, right, jump, sneak (sorted); empty = none.
+struct WalkPayload: Codable, Equatable { var keys: [String] }
 /// How an OPEN_APP went. `target` = its bundle id or url.
 struct AppResultPayload: Codable, Equatable { var target: String; var ok: Bool; var message: String }
 struct ReasonPayload: Codable, Equatable { var reason: String }
@@ -253,6 +258,7 @@ enum Message: Equatable {
     case secureInput(SecureInputPayload)
     case workBegin(PointerPayload)
     case cursor(CursorPayload)
+    case walk(WalkPayload)
     case rate(RatePayload)
 
     var type: MessageType {
@@ -293,6 +299,7 @@ enum Message: Equatable {
         case .secureInput: return .secureInput
         case .workBegin: return .workBegin
         case .cursor: return .cursor
+        case .walk: return .walk
         case .rate: return .rate
         }
     }
@@ -314,6 +321,7 @@ enum Message: Equatable {
         case .listWindows, .zoomOut, .requestPermissions, .exitZoom, .exitTyping, .listApps: return try Self.json(Empty())
         case .pointerDown(let p), .pointerMove(let p), .pointerUp(let p), .click(let p), .workBegin(let p): return try Self.json(p)
         case .cursor(let p): return try Self.json(p)
+        case .walk(let p): return try Self.json(p)
         case .rate(let p): return try Self.json(p)
         case .scroll(let p): return try Self.json(p)
         case .appIcons(let p): return try Self.json(p)
@@ -420,6 +428,7 @@ enum Message: Equatable {
             default: return .click(p)
             }
         case .cursor: return .cursor(try decodeJSON(CursorPayload.self, payload))
+        case .walk: return .walk(try decodeJSON(WalkPayload.self, payload))
         case .rate:
             let p = try decodeJSON(RatePayload.self, payload)
             guard (1...60).contains(p.fps) else { throw ProtocolError.badPayload("RATE fps must be 1...60") }

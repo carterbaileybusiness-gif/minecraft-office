@@ -253,6 +253,11 @@ public final class MacPlatform implements Platform {
 		}
 
 		@Override
+		public void onWalk(final java.util.function.Consumer<java.util.Set<String>> listener) {
+			helper.onWalk(listener);
+		}
+
+		@Override
 		public java.util.@Nullable Map<String, String> installedApps() {
 			return helper.apps();
 		}

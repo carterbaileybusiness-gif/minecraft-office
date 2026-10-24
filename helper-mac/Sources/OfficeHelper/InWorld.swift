@@ -39,6 +39,10 @@ import CoreGraphics
     private var cursorTimer: Timer?
     private var lastCursor: CursorPayload?
     private var cursorTicks = 0
+    /// Work mode: the real mouse's events (the cursor reported on each one; the button for walking).
+    private var workTap: CFMachPort?
+    /// Walk while dragging (round 3): which movement keys are Minecraft's now.
+    private var walk = WalkKeys()
     /// The Office displays the cursor can be on (slot, bounds in points, pixel size).
     var cursorDisplays: () -> [(slot: Int, bounds: CGRect, width: Int, height: Int)] = { [] }
 
@@ -182,6 +186,7 @@ import CoreGraphics
                     EventInjector.hidClick(at: point, button: button)
                 }
                 self.perform(self.typing.enter(target: target, work: true))
+                self.sendWalk(self.walk.button(held: held)) // a press-drag: WASD walks from the start
                 CursorVeil.reassert() // the click activated the app under it, which shows the cursor again
                 self.observeActivations()
                 self.watchSecureInput()
@@ -191,19 +196,58 @@ import CoreGraphics
         }
     }
 
-    /// About 120 times a second while working: where the real cursor is, when it changed.
+    /// While working: where the real cursor is, on every mouse event (the work tap, round 3: no timer between the hand
+    /// and the report), and 30 times a second as a fallback (a warp, a tap macOS paused) and for the cursor veil.
     private func startCursorReports() {
         cursorTimer?.invalidate()
         lastCursor = nil
         reportCursor()
-        cursorTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+        startWorkTap()
+        cursorTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reportCursor() }
         }
     }
 
-    private func reportCursor() {
+    private func startWorkTap() {
+        if workTap == nil {
+            let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp,
+                                        .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged]
+            let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
+            workTap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                        eventsOfInterest: mask, callback: inWorldWorkTap, userInfo: nil)
+            if let workTap { CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, workTap, 0), .commonModes) }
+        }
+        if let workTap { CGEvent.tapEnable(tap: workTap, enable: true) } else { log("work: mouse tap not created (Accessibility?)") }
+    }
+
+    /// Work tap (main run loop): reports the cursor at once, follows the button for walking, keeps a taken Shift off
+    /// the app's drag. Never swallows.
+    fileprivate func workMouse(_ event: CGEvent, type: CGEventType) {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let workTap, typing.active, typing.work { CGEvent.tapEnable(tap: workTap, enable: true) }
+            return
+        }
+        guard typing.active, typing.work else { return }
+        switch type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            sendWalk(walk.button(held: true))
+        case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+            sendWalk(walk.button(held: false)) // stops at once, even with W still held
+        default:
+            break
+        }
+        if walk.shiftTaken { event.flags.remove(.maskShift) } // Shift is sneaking, not shift-dragging in the app
+        reportCursor(at: event.location)
+    }
+
+    private func sendWalk(_ moves: Set<WalkKeys.Move>?) {
+        guard let moves else { return }
+        send(.walk(WalkPayload(keys: WalkKeys.names(moves))))
+    }
+
+    private func reportCursor(at point: CGPoint? = nil) {
         guard typing.active, typing.work else { stopWorkExtras(); return }
-        guard let location = CGEvent(source: nil)?.location else { return }
+        guard let location = point ?? CGEvent(source: nil)?.location else { return }
         let here = CursorLocator.locate(location, main: mainBounds(), displays: cursorDisplays())
         if here != lastCursor {
             // on a real monitor (none of the player's screens) the system cursor is the only one they can see
@@ -211,14 +255,18 @@ import CoreGraphics
             lastCursor = here
             send(.cursor(here))
         }
-        cursorTicks += 1
-        if cursorTicks % 12 == 0 { CursorVeil.reassert() } // ten times a second: an app setting its cursor (I-beam) shows it again
+        if point == nil {
+            cursorTicks += 1
+            if cursorTicks % 3 == 0 { CursorVeil.reassert() } // ten times a second: an app setting its cursor (I-beam) shows it again
+        }
     }
 
     /// Work mode is over: the system cursor shows again, no more reports.
     private func stopWorkExtras() {
         let wasWorking = cursorTimer != nil
         cursorTimer?.invalidate(); cursorTimer = nil
+        if let workTap { CGEvent.tapEnable(tap: workTap, enable: false) }
+        sendWalk(walk.reset()) // never leave the player walking
         lastCursor = nil
         CursorVeil.show()
         if wasWorking { warpIntoMinecraft() }
@@ -292,7 +340,7 @@ import CoreGraphics
 
     private func armKeys() {
         if keyTap == nil {
-            let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+            let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
             keyTap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                        eventsOfInterest: CGEventMask(mask), callback: inWorldKeyTap, userInfo: nil)
             guard let keyTap else {
@@ -315,8 +363,16 @@ import CoreGraphics
             if let keyTap, typing.active || typing.swallowingEscape { CGEvent.tapEnable(tap: keyTap, enable: true) }
             return false
         }
-        guard type == .keyDown || type == .keyUp else { return false }
         let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+        if typing.active, typing.work, !EventInjector.isInjected(event) {
+            // walk while dragging: WASD / Space / Shift are Minecraft's while the button is held (WalkKeys)
+            let routed: (swallow: Bool, moves: Set<WalkKeys.Move>?) = type == .flagsChanged ? walk.modifier(code: code)
+                : (type == .keyDown || type == .keyUp) ? walk.key(code: code, down: type == .keyDown) : (false, nil)
+            sendWalk(routed.moves)
+            if routed.swallow { return true }
+            if walk.shiftTaken { event.flags.remove(.maskShift) } // the app's keys while Shift is sneaking: unshifted
+        }
+        guard type == .keyDown || type == .keyUp else { return false }
         let result = typing.key(code: code, down: type == .keyDown, modifiers: Self.modifiers(event.flags))
         perform(result.effects)
         return result.swallow
@@ -475,6 +531,11 @@ import CoreGraphics
 private func inWorldMouseTap(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
     let swallow = MainActor.assumeIsolated { InWorldInput.current?.mouse(event, type: type) ?? false }
     return swallow ? nil : Unmanaged.passUnretained(event)
+}
+
+private func inWorldWorkTap(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
+    MainActor.assumeIsolated { InWorldInput.current?.workMouse(event, type: type) }
+    return Unmanaged.passUnretained(event)
 }
 
 private func inWorldKeyTap(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent, refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {

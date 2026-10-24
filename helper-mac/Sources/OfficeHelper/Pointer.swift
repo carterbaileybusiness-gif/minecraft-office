@@ -253,6 +253,89 @@ enum CursorLocator {
     }
 }
 
+/// Walk while dragging (round 3, Carter's ruling; pure). In work mode, while the real mouse button is held (a drag), the
+/// movement keys — W A S D, Space, Shift — move the player in Minecraft and are NOT delivered to the app; with the button
+/// up they go to the app as usual (typing is untouched). A key is decided when it goes down: one taken from the app stays
+/// taken until its key-up (its repeats and its up never reach the app, which never saw it go down), and one already
+/// down in the app stays the app's. Releasing the button stops all movement at once, even with a key still held.
+struct WalkKeys {
+    enum Move: String, CaseIterable, Comparable {
+        case forward, back, left, right, jump, sneak
+        static func < (a: Move, b: Move) -> Bool { a.rawValue < b.rawValue }
+    }
+
+    /// The movement key for a virtual key code (ANSI positions: W A S D, Space, left / right Shift), else nil.
+    static func move(forKeyCode code: UInt16) -> Move? {
+        switch code {
+        case 13: return .forward
+        case 1: return .back
+        case 0: return .left
+        case 2: return .right
+        case 49: return .jump
+        case 56, 60: return .sneak
+        default: return nil
+        }
+    }
+
+    static let shiftCodes: Set<UInt16> = [56, 60]
+
+    private(set) var buttonHeld = false
+    /// Keys whose down the app never saw: Minecraft's until their up.
+    private(set) var taken: [UInt16: Move] = [:]
+    /// Movement keys down in the app.
+    private var appDown: Set<UInt16> = []
+
+    /// What Minecraft should be doing now.
+    var moves: Set<Move> { buttonHeld ? Set(taken.values) : [] }
+
+    /// A movement key (or Shift) went down / up / repeated. `swallow`: keep it from the app. `moves`: the new set when
+    /// it changed (send it), else nil.
+    mutating func key(code: UInt16, down: Bool) -> (swallow: Bool, moves: Set<Move>?) {
+        guard let move = Self.move(forKeyCode: code) else { return (false, nil) }
+        let before = moves
+        if down {
+            if taken[code] != nil { return (true, nil) } // a repeat of a taken key
+            if appDown.contains(code) { return (false, nil) } // the app's (down before the button)
+            if buttonHeld {
+                taken[code] = move
+                return (true, moves != before ? moves : nil)
+            }
+            appDown.insert(code)
+            return (false, nil)
+        }
+        if taken.removeValue(forKey: code) != nil { return (true, moves != before ? moves : nil) }
+        appDown.remove(code)
+        return (false, nil)
+    }
+
+    /// Shift has no key-down / key-up of its own (flagsChanged): each change of left or right Shift toggles it.
+    mutating func modifier(code: UInt16) -> (swallow: Bool, moves: Set<Move>?) {
+        guard Self.shiftCodes.contains(code) else { return (false, nil) }
+        return key(code: code, down: taken[code] == nil && !appDown.contains(code))
+    }
+
+    /// Shift is taken (held for Minecraft): events the app still gets must not carry it.
+    var shiftTaken: Bool { taken.keys.contains { Self.shiftCodes.contains($0) } }
+
+    /// The physical mouse button went down / up. Returns the new moves when they changed.
+    mutating func button(held: Bool) -> Set<Move>? {
+        let before = moves
+        buttonHeld = held
+        return moves != before ? moves : nil
+    }
+
+    /// Work mode ended: nothing moves, nothing is taken any more. Returns the new (empty) moves when they changed.
+    mutating func reset() -> Set<Move>? {
+        let before = moves
+        taken = [:]
+        appDown = []
+        buttonHeld = false
+        return before.isEmpty ? nil : []
+    }
+
+    static func names(_ moves: Set<Move>) -> [String] { moves.sorted().map(\.rawValue) }
+}
+
 /// Where the other monitors were just before Office displays were created (pure). macOS shoves a monitor aside to fit a
 /// new display in; the arranges that follow put it back where it was. The mod sends every CREATE_DISPLAY at once on each
 /// (re)connect, so the record stays until the arrange of the last create still pending has run — each new display may

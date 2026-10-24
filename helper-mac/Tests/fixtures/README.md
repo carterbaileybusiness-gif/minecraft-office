@@ -66,6 +66,7 @@ Swift change alters them without the fixtures being committed.
 | `app_result.bin` | APP_RESULT = 77 | `{"message":"Notes is on screen 2","ok":true,"target":"com.apple.Notes"}` |
 | `secure_input.bin` | SECURE_INPUT = 78 | `{"on":true}` |
 | `cursor.bin` | CURSOR = 79 | `{"h":1080,"slot":1,"w":1920,"x":100,"y":200}` |
+| `walk.bin` | WALK = 80 | `{"keys":["forward","jump"]}` (movement keys held for Minecraft while dragging; `[]` = stop) |
 
 (`\|` above is a table escape; the bytes contain a plain `|`.)
 
@@ -128,7 +129,12 @@ length=37    67  surface=7    generation=3             width=2      height=2    
   the app there forward, then posts only a **down** if the physical button is still held (the hand finishes the press:
   real drags, the real release) or a **click** if it is already up. From then on the real mouse drives the real cursor;
   the helper reports where it is about 120 times a second while it moves: `CURSOR {slot, x, y, w, h}` (slot 0 = the main
-  display in points, 1–4 = an Office display in its pixels, -1 = another monitor). On another monitor (slot -1: no
+  display in points, 1–4 = an Office display in its pixels, -1 = another monitor), on every real mouse event (round 3;
+  plus 30 times a second as a fallback). **Walk while dragging** (round 3): while a real mouse button is held, W A S D,
+  Space and Shift are taken from the app (swallowed by the key tap; Shift is also stripped from the app's events) and
+  reported as `WALK {keys}` whenever the set changes (forward, back, left, right, jump, sneak); the button's release
+  sends `WALK []` at once. A key taken stays taken until its key-up; a key already down in the app stays the app's.
+  On another monitor (slot -1: no
   hologram shows it) the system cursor is shown, and hidden again when it comes back. Esc (the tap) or Minecraft
   becoming active end it (`TYPING_EXIT esc|minecraft`), other apps coming forward do not; EXIT_TYPING ends it from the
   mod (it also waits a moment before taking clicks again). The cursor shows again when it ends (and by itself if the

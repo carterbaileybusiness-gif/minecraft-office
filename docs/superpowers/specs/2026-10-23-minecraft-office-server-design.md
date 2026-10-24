@@ -170,7 +170,14 @@ the screen wouldn't match with my cursor… it just didn't parity well at all." 
 6. **The view follows the cursor** (Carter, after playing round 2): while working, the camera turns each frame so the
    crosshair sits on the cursor's point on whichever own hologram it is on (also across Mirror → Extend), lightly smoothed
    (settles within ~100 ms). The real cursor still maps 1:1 and clicks land where it's drawn; on a real monitor (not one
-   of the player's screens) the view holds still; the body doesn't move.
+   of the player's screens) the view holds still; the body doesn't move. The drawn cursor itself is never smoothed: the
+   helper reports it on every real mouse event, and each frame draws the newest report (round 3: real move → report
+   ~1 ms, report → drawn within one frame).
+8. **Walk while dragging** (Carter, round 3): while the real mouse button is held in work mode, W A S D, Space and
+   Shift move the player in Minecraft and never reach the Mac app; with the button up they go to the app (typing is
+   unchanged). Releasing the button stops the walk at once, even with a key still held; a key taken that way stays
+   away from the app until it comes up, and a key already down in the app stays the app's. The view keeps following
+   the cursor while walking, so a window can be carried from one big screen to another.
 7. **Extend holograms go where their displays are**: the helper places the Office displays right of the laptop screen,
    or left when a real monitor is there; a newly placed Extend hologram is moved beside the Mirror on that same side, and
    chat says which edge of the Mirror leads to it.

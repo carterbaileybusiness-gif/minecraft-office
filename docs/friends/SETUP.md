@@ -201,6 +201,9 @@ A hologram is a glowing floating screen above a small **emitter**. Emitters are 
    - Friends see your public Extend screens **without your cursor** (it's drawn only on your own client).
    - While you work, **your view follows the cursor** around your screens, so the screen you're using stays in front of
      you. On a real second monitor it holds still.
+   - **Walk while dragging:** hold the mouse button (dragging a window, say) and **W A S D / Space / Shift** walk you
+     around, so you can carry a window to a screen further away. Let go of the button and those keys type into your app
+     again.
    - Place a second screen and it moves next to your Mirror on the side your Mac put that display (chat says which edge
      of the Mirror to move the cursor across).
 7. **Work on it (Windows).** **Click your hologram.** The camera zooms in until it fills your view, and your real

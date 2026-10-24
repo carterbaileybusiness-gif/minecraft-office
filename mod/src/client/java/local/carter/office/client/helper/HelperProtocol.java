@@ -83,6 +83,8 @@ public final class HelperProtocol {
     public static final int SECURE_INPUT = 78;
     /** Work mode: where the real cursor is (slot -1: on none of the player's screens). */
     public static final int CURSOR = 79;
+    /** Work mode, walk while dragging: the movement keys held for Minecraft (forward, back, left, right, jump, sneak). */
+    public static final int WALK = 80;
     /** Pointer slot 0: the main display (a Mirror hologram); x, y are then a pixel of a w x h picture of it. */
     public static final int MAIN_SLOT = 0;
 
@@ -102,7 +104,7 @@ public final class HelperProtocol {
     public sealed interface Message permits Hello, ListWindows, CreateDisplay, RemoveDisplay, Capture, Stop, Ready,
             ZoomIn, ZoomOut, RequestPermissions, PointerDown, PointerMove, PointerUp, Scroll, Click, ExitTyping,
             ListApps, AppIcons, OpenApp, Welcome, Windows, Display, Frame, Patch, Ended, ExitZoom, HelperError, TypingExit,
-            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput, WorkBegin, Cursor, Rate {
+            DragDelta, DragEnded, Apps, Icons, AppResult, SecureInput, WorkBegin, Cursor, Rate, Walk {
         /** The wire type byte of this message. */
         default int type() {
             return switch (this) {
@@ -142,6 +144,7 @@ public final class HelperProtocol {
                 case SecureInput m -> SECURE_INPUT;
                 case WorkBegin m -> WORK_BEGIN;
                 case Cursor m -> CURSOR;
+                case Walk m -> WALK;
                 case Rate m -> RATE;
             };
         }
@@ -348,6 +351,13 @@ public final class HelperProtocol {
      */
     public record Cursor(int slot, int x, int y, int w, int h) implements Message {}
 
+    /** Movement keys held for Minecraft while dragging in work mode (sorted names); empty = stop. */
+    public record Walk(List<String> keys) implements Message {
+        public Walk {
+            keys = List.copyOf(keys);
+        }
+    }
+
     /** A live capture's new frame rate, 1..60. */
     public record Rate(int surface, int fps) implements Message {}
 
@@ -473,6 +483,7 @@ public final class HelperProtocol {
             case SecureInput m -> map("on", m.on());
             case WorkBegin m -> map("button", m.button().wire, "h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
             case Cursor m -> map("h", m.h(), "slot", m.slot(), "w", m.w(), "x", m.x(), "y", m.y());
+            case Walk m -> map("keys", List.copyOf(m.keys()));
             case Rate m -> map("fps", m.fps(), "surface", m.surface());
             case Apps m -> {
                 List<Object> list = new ArrayList<>();
@@ -638,6 +649,8 @@ public final class HelperProtocol {
                 Integer[] wh = picture(o, slot);
                 return new WorkBegin(slot, integer(o, "x"), integer(o, "y"), PointerButton.of(str(o, "button")), wh[0], wh[1]);
             }
+            case WALK:
+                return new Walk(strings(object(root), "keys"));
             case CURSOR: {
                 JsonObject o = object(root);
                 return new Cursor(integer(o, "slot"), integer(o, "x"), integer(o, "y"), integer(o, "w"), integer(o, "h"));
@@ -1084,6 +1097,6 @@ public final class HelperProtocol {
     }
 
     private static boolean isKnownType(int t) {
-        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= RATE) || (t >= WELCOME && t <= CURSOR);
+        return (t >= HELLO && t <= EXIT_TYPING) || (t >= LIST_APPS && t <= RATE) || (t >= WELCOME && t <= WALK);
     }
 }

@@ -131,7 +131,7 @@ import ScreenCaptureKit
         case .hello, .ready:
             break // HELLO is handled by the server's handshake; READY by its frame flow
         case .welcome, .windows, .display, .frame, .patch, .ended, .exitZoom, .error, .typingExit, .dragDelta, .dragEnded,
-             .apps, .icons, .appResult, .secureInput, .cursor:
+             .apps, .icons, .appResult, .secureInput, .cursor, .walk:
             sendError("bad_request", "\(message.type) is a helper → mod message")
         }
     }
