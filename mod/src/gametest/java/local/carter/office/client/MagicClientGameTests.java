@@ -1157,7 +1157,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		if (c.length() != HandSigns.length(FEEL_LEVEL)) throw new AssertionError("6 signs at level 7, got " + c.length());
 		int held = mana(sp);
 		if (held != FEEL_MANA) throw new AssertionError("nothing is spent before the signs: mana " + held);
-		context.waitTicks(4);
+		// Typed no faster than a human (the server fizzles an answer under 120 ms an arrow, or 15 ticks for 6).
+		context.waitTicks(HandSigns.minAnswerTicks(c.length()) + 1);
 		context.takeScreenshot("magic-signs-open-gui4");
 		for (Dir d : HandSigns.sequence(c.seed(), c.length())) {
 			context.getInput().pressKey(switch (d) {

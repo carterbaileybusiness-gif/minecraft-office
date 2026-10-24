@@ -56,10 +56,9 @@ public final class MagicInputGate {
 	 * typing or work mode. (Normally unreachable: vanilla ignores clicks while an item is in use, so work mode can't begin
 	 * mid-charge.)
 	 *
-	 * <p>No {@code CancelCharge} payload is needed: the server never casts on its own, only on a release packet
-	 * ({@code GrimoireItem.releaseUsing}), and the client sends none for a dropped charge. The server's leftover "using" state
-	 * is harmless and short-lived: it costs nothing, the next right-click restarts the use (and recaptures the spell), a
-	 * main-hand item ends it ({@code GrimoireItem.onUseTick}), and death, disconnect and dimension change discard it.
+	 * <p>The server never casts on its own, only on a release packet ({@code GrimoireItem.releaseUsing}), and the client sends
+	 * none for a dropped charge. It sends {@code CancelCharge} instead, so the server stops its own use too: otherwise other
+	 * players would keep seeing the charge circle and Travel would answer BUSY until the next cast.
 	 */
 	public static boolean dropsCharge(boolean typing, boolean usingGrimoire) {
 		return typing && usingGrimoire;

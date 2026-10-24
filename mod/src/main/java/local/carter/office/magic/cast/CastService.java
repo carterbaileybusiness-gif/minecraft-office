@@ -63,6 +63,11 @@ public final class CastService {
 	public static final String SIGN_FIZZLE_REASON_KEY = "magic.office.fizzle_reason";
 	/** Cooldown after a hand-sign fizzle, in ticks. */
 	public static final int FIZZLE_COOLDOWN_TICKS = 100;
+	/**
+	 * Mana regen is added (and so synced to the client) only on ticks that are a multiple of this: at most 2 updates a second per
+	 * player instead of one every 2–6 ticks. The rate is unchanged: each step adds every point of its 10 ticks at once.
+	 */
+	public static final int REGEN_STEP_TICKS = 10;
 
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 	private static final AtomicLong CAST_IDS = new AtomicLong();
@@ -70,7 +75,10 @@ public final class CastService {
 	private static final Map<UUID, Long> LAST_CAST = new HashMap<>();
 	/** True while the player is channeling (Recall, Task 7 installs {@code RecallSpell::channeling}): every cast is BUSY. */
 	private static Predicate<ServerPlayer> channeling = p -> false;
-	/** Player → the spell selected when their current grimoire charge started (release casts that one). */
+	/**
+	 * Player → the spell selected when their current grimoire charge started (release casts that one). Only meaningful while the
+	 * player really is using a grimoire: {@link #charging} drops an entry vanilla left behind.
+	 */
 	private static final Map<UUID, Identifier> CHARGING = new HashMap<>();
 
 	private CastService() {}
@@ -131,9 +139,24 @@ public final class CastService {
 		CHARGING.remove(p.getUUID());
 	}
 
-	/** True while {@code p} is charging a grimoire cast (Travel refuses to start meanwhile). */
+	/**
+	 * True while {@code p} is charging a grimoire cast (Travel refuses to start meanwhile): the server's own item use, with a
+	 * grimoire. Vanilla ends a use without a release (no {@code releaseUsing}) when the hands are swapped (F), the book is
+	 * dropped or the used stack changes, so a {@link #CHARGING} entry can outlive its charge; it is dropped here.
+	 */
 	public static boolean charging(ServerPlayer p) {
-		return CHARGING.containsKey(p.getUUID()) || (p.isUsingItem() && GrimoireItem.isGrimoire(p.getUseItem()));
+		if (p.isUsingItem() && GrimoireItem.isGrimoire(p.getUseItem())) return true;
+		CHARGING.remove(p.getUUID());
+		return false;
+	}
+
+	/**
+	 * The client dropped its charge without a release (it started typing into a monitor, {@code CancelCharge}): the server stops
+	 * the use too, so other players stop seeing the circle and Travel is not BUSY. Nothing is cast or spent.
+	 */
+	public static void cancelCharge(ServerPlayer p) {
+		if (p.isUsingItem() && GrimoireItem.isGrimoire(p.getUseItem())) p.stopUsingItem();
+		CHARGING.remove(p.getUUID());
 	}
 
 	/**
@@ -152,14 +175,18 @@ public final class CastService {
 
 	/**
 	 * The player's hand-sign answer for challenge {@code id} (a partial or null answer is a miss). The id must be the player's
-	 * open challenge, else the answer is {@link Result#IGNORED}. Right and within {@code limit + GRACE_TICKS}, with element,
-	 * unlock, cooldown, mana and XP levels re-checked now → the full ultimate cast ({@link #run}). Wrong, late or no longer
-	 * affordable → {@link Result#FIZZLED} ({@link #fizzle}).
+	 * open challenge, else the answer is {@link Result#IGNORED}. Right, not too fast ({@link HandSigns#MIN_MS_PER_SIGN} per
+	 * arrow: no human types faster, a bot reading the seed does), within {@code limit + GRACE_TICKS}, still in casting stance
+	 * (grimoire in the off hand, main hand empty), with element, unlock, cooldown, mana and XP levels re-checked now → the full
+	 * ultimate cast ({@link #run}). Wrong, too fast, late, out of stance or no longer affordable → {@link Result#FIZZLED}
+	 * ({@link #fizzle}).
 	 */
 	public static Result answer(ServerPlayer p, int id, Dir @Nullable [] dirs) {
 		SignChallenges.Open c = SignChallenges.take(p, id);
 		if (c == null) return Result.IGNORED;
-		if (c.late(p.level().getGameTime()) || !HandSigns.matches(c.expected(), dirs)) return fizzle(p, c.spell(), null);
+		long now = p.level().getGameTime();
+		if (c.late(now) || c.tooFast(now, System.nanoTime()) || !HandSigns.matches(c.expected(), dirs)) return fizzle(p, c.spell(), null);
+		if (!GrimoireItem.isGrimoire(p.getOffhandItem()) || !p.getMainHandItem().isEmpty()) return fizzle(p, c.spell(), null);
 		Checked k = evaluate(p, c.spell(), 1f);
 		if (k.failure() != null) return fizzle(p, c.spell(), k.message());
 		return run(p, c.spell(), k.charge(), k.mana());
@@ -191,13 +218,24 @@ public final class CastService {
 		return Result.FIZZLED;
 	}
 
-	/** Once per server tick: unanswered hand signs fizzle, mana regen, lingering effects, projectiles and dash no-fall windows. */
+	/**
+	 * Once per server tick: unanswered hand signs fizzle, mana regen, lingering effects, projectiles and dash no-fall windows.
+	 * Each part (and each player's fizzle and regen) is guarded: one that throws is logged and the rest still run.
+	 */
 	public static void tick(MinecraftServer server) {
-		for (var expired : SignChallenges.expire(server)) fizzle(expired.getKey(), expired.getValue().spell(), null);
-		for (ServerPlayer p : server.getPlayerList().getPlayers()) regen(p);
-		ActiveEffects.tick();
-		Projectiles.tick();
-		Motion.tick(server);
+		for (var expired : SignChallenges.expire(server)) guarded("hand-sign expiry", () -> fizzle(expired.getKey(), expired.getValue().spell(), null));
+		for (ServerPlayer p : server.getPlayerList().getPlayers()) guarded("mana regen", () -> regen(p));
+		guarded("lingering effects", ActiveEffects::tick);
+		guarded("projectiles", Projectiles::tick);
+		guarded("motion", () -> Motion.tick(server));
+	}
+
+	private static void guarded(String what, Runnable r) {
+		try {
+			r.run();
+		} catch (RuntimeException e) {
+			LOGGER.error("[office] Magic {} failed; skipped this tick", what, e);
+		}
 	}
 
 	/** A player left: forget their regen pause, charge and hand-sign challenge. */
@@ -327,15 +365,24 @@ public final class CastService {
 		MagicServer.sender().title(p, Component.translatable("magic.office.level_up", d.level()), subtitle);
 	}
 
+	/**
+	 * +1 mana every {@link ManaMath#regenInterval} ticks once {@link ManaMath#REGEN_PAUSE_TICKS} have passed since the last cast,
+	 * added in steps of {@link #REGEN_STEP_TICKS}: each step adds the points of the ticks {@code t} in its window with
+	 * {@code t % interval == 0}, counting only those after the pause.
+	 */
 	private static void regen(ServerPlayer p) {
-		if (!p.isAlive()) return;
+		long now = p.level().getGameTime();
+		if (now % REGEN_STEP_TICKS != 0 || !p.isAlive()) return;
 		int level = MagicAttachments.get(p).level();
 		int mana = MagicAttachments.mana(p);
 		if (mana >= ManaMath.max(level)) return;
-		long now = p.level().getGameTime();
+		long from = now - REGEN_STEP_TICKS; // the window is (from, now]
 		Long last = LAST_CAST.get(p.getUUID());
-		if (last != null && now - last < ManaMath.REGEN_PAUSE_TICKS) return;
-		if (now % ManaMath.regenInterval(level) == 0) MagicAttachments.setMana(p, mana + 1);
+		if (last != null) from = Math.max(from, last + ManaMath.REGEN_PAUSE_TICKS - 1);
+		if (from >= now) return;
+		int interval = ManaMath.regenInterval(level);
+		long points = Math.floorDiv(now, interval) - Math.floorDiv(from, interval);
+		if (points > 0) MagicAttachments.setMana(p, (int) Math.min(Integer.MAX_VALUE, mana + points));
 	}
 
 	private static Component cooldownMessage(Spell spell, long ticksLeft) {

@@ -1,6 +1,7 @@
 package local.carter.office.magic;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import local.carter.office.magic.cast.CastService;
@@ -22,6 +23,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
@@ -45,8 +47,18 @@ public class HandSignGameTests {
 		return p;
 	}
 
-	/** Casts the probe and returns the challenge it sent (asserting CHALLENGED). */
+	/**
+	 * Casts the probe and returns the challenge it sent (asserting CHALLENGED), backdated so an answer at once counts as typed at
+	 * human speed ({@link #freshChallenge} keeps the real send time).
+	 */
 	private static SignChallenge challenge(GameTestHelper h, ServerPlayer p, MagicTestKit.Recorder rec) {
+		SignChallenge c = freshChallenge(h, p, rec);
+		SignChallenges.backdateForTesting(p, HandSigns.minAnswerMillis(c.length()));
+		return c;
+	}
+
+	/** Casts the probe and returns the challenge it sent (asserting CHALLENGED), sent just now. */
+	private static SignChallenge freshChallenge(GameTestHelper h, ServerPlayer p, MagicTestKit.Recorder rec) {
 		h.assertValueEqual(MagicTestKit.cast(p, PROBE, 1f), Result.CHALLENGED, "cast result");
 		SignChallenge c = rec.lastChallenge(p);
 		h.assertTrue(c != null, "a challenge was sent");
@@ -128,6 +140,7 @@ public class HandSignGameTests {
 			p.stopUsingItem();
 			SignChallenge c = rec.lastChallenge(p);
 			h.assertTrue(c != null, "a challenge was sent");
+			SignChallenges.backdateForTesting(p, HandSigns.minAnswerMillis(c.length()));
 			h.assertValueEqual(rec.fx().size(), 0, "fx before the answer");
 			h.assertValueEqual(CastService.answer(p, c.id(), right(c)), Result.CAST, "answer");
 			h.assertValueEqual(MagicAttachments.mana(p), MAX_MANA - 60, "mana (base cost, no charge scaling)");
@@ -207,6 +220,54 @@ public class HandSignGameTests {
 			h.assertValueEqual(rec.fx().size(), 0, "fx sent");
 			h.succeed();
 		});
+	}
+
+	// ---- Final review M1, M2: no bot-speed answers, still in casting stance ----
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 60)
+	public void answerFasterThanAHumanFizzles(GameTestHelper h) {
+		ServerPlayer p = ultimateCaster(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		SignChallenge c = freshChallenge(h, p, rec);
+		// The right arrows in the same tick (a bot reading the seed): under 120 ms an arrow by both clocks.
+		h.assertValueEqual(CastService.answer(p, c.id(), right(c)), Result.FIZZLED, "instant answer");
+		h.assertValueEqual(MagicAttachments.mana(p), MAX_MANA - 30, "fizzle mana");
+		h.assertValueEqual(cooldown(h, p), 100L, "fizzle cooldown");
+		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
+		// Positive control: the same answer after the floor in game ticks (15 for 6 arrows) casts.
+		MagicAttachments.set(p, MagicAttachments.get(p).withReadyAt(Map.of()));
+		MagicAttachments.setMana(p, MAX_MANA);
+		SignChallenge c2 = freshChallenge(h, p, rec);
+		h.runAfterDelay(HandSigns.minAnswerTicks(c2.length()), () -> {
+			h.assertValueEqual(CastService.answer(p, c2.id(), right(c2)), Result.CAST, "answer after " + HandSigns.minAnswerTicks(c2.length()) + " ticks");
+			h.assertValueEqual(rec.fx(p).size(), 1, "fx sent");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void answerOutOfCastingStanceFizzles(GameTestHelper h) {
+		ServerPlayer p = ultimateCaster(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ItemStack grimoire = p.getOffhandItem();
+		// Something in the main hand by the time the signs come back.
+		SignChallenge c = challenge(h, p, rec);
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.STICK));
+		h.assertValueEqual(CastService.answer(p, c.id(), right(c)), Result.FIZZLED, "main hand full");
+		// No grimoire in the off hand at all.
+		MagicAttachments.set(p, MagicAttachments.get(p).withReadyAt(Map.of()));
+		p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+		SignChallenge c2 = challenge(h, p, rec);
+		p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+		h.assertValueEqual(CastService.answer(p, c2.id(), right(c2)), Result.FIZZLED, "grimoire gone");
+		h.assertValueEqual(rec.fx().size(), 0, "fx sent");
+		// Positive control: back in stance, the answer casts.
+		MagicAttachments.set(p, MagicAttachments.get(p).withReadyAt(Map.of()));
+		MagicAttachments.setMana(p, MAX_MANA);
+		p.setItemInHand(InteractionHand.OFF_HAND, grimoire);
+		SignChallenge c3 = challenge(h, p, rec);
+		h.assertValueEqual(CastService.answer(p, c3.id(), right(c3)), Result.CAST, "in stance");
+		h.succeed();
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA)

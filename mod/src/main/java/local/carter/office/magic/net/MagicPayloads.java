@@ -217,6 +217,21 @@ public final class MagicPayloads {
 		}
 	}
 
+	/**
+	 * The client dropped its grimoire charge without a release (it began typing into a monitor): the server stops the use too,
+	 * so nobody keeps seeing the charge circle and Travel stops answering BUSY. Never casts anything.
+	 */
+	public record CancelCharge() implements CustomPacketPayload {
+		public static final CancelCharge INSTANCE = new CancelCharge();
+		public static final Type<CancelCharge> TYPE = new Type<>(OfficeMod.id("cancel_charge"));
+		public static final StreamCodec<FriendlyByteBuf, CancelCharge> CODEC = StreamCodec.unit(INSTANCE);
+
+		@Override
+		public Type<CancelCharge> type() {
+			return TYPE;
+		}
+	}
+
 	/** The arrows typed for challenge {@code id} as {@link Dir} ordinals (at most {@link #MAX_SIGNS}; a partial answer is a miss). */
 	public record SignAnswer(int id, byte[] dirs) implements CustomPacketPayload {
 		public static final Type<SignAnswer> TYPE = new Type<>(OfficeMod.id("sign_answer"));
@@ -273,5 +288,6 @@ public final class MagicPayloads {
 		c2s.register(SignAnswer.TYPE, SignAnswer.CODEC);
 		c2s.register(TravelRequest.TYPE, TravelRequest.CODEC);
 		c2s.register(TravelRosterQuery.TYPE, TravelRosterQuery.CODEC);
+		c2s.register(CancelCharge.TYPE, CancelCharge.CODEC);
 	}
 }

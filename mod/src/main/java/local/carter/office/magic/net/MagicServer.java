@@ -1,17 +1,22 @@
 package local.carter.office.magic.net;
 
+import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.cast.ElementChoice;
 import local.carter.office.magic.cast.Travel;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.net.MagicPayloads.CancelCharge;
 import local.carter.office.magic.net.MagicPayloads.CastFx;
 import local.carter.office.magic.net.MagicPayloads.ChooseElement;
 import local.carter.office.magic.net.MagicPayloads.FxCancel;
@@ -41,10 +46,14 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 public final class MagicServer {
 	/** Cancels reach this far around the caster (the longest {@code CastFx} range). */
 	public static final double CANCEL_RANGE = 128;
+	/** {@code SelectSpell} packets handled per player per second (20 ticks); the rest are ignored. */
+	public static final int SELECTS_PER_SECOND = 20;
 
 	private static final MagicSender NETWORK = new NetworkSender();
 	private static @Nullable MagicSender testSender;
 	private static SpellKit kit = SpellKit.NONE;
+	/** Player → {second (server tick / 20), SelectSpell packets handled in it}. Server thread only. */
+	private static final Map<UUID, long[]> SELECTS = new HashMap<>();
 
 	private MagicServer() {}
 
@@ -74,7 +83,8 @@ public final class MagicServer {
 
 	public static void registerReceivers() {
 		ServerPlayNetworking.registerGlobalReceiver(ChooseElement.TYPE, (p, ctx) -> chooseElement(ctx.player(), p.element()));
-		ServerPlayNetworking.registerGlobalReceiver(SelectSpell.TYPE, (p, ctx) -> select(ctx.player(), p.spell()));
+		ServerPlayNetworking.registerGlobalReceiver(SelectSpell.TYPE, (p, ctx) -> receiveSelect(ctx.player(), p.spell()));
+		ServerPlayNetworking.registerGlobalReceiver(CancelCharge.TYPE, (p, ctx) -> CastService.cancelCharge(ctx.player()));
 		ServerPlayNetworking.registerGlobalReceiver(TravelRequest.TYPE, (p, ctx) -> {
 			Travel.request(ctx.player(), p.target());
 			Travel.query(ctx.player()); // the page shows the outcome (throttled like any roster query)
@@ -90,6 +100,27 @@ public final class MagicServer {
 		if (ElementChoice.rebind(p, e)) return true;
 		boolean holding = GrimoireItem.isGrimoire(p.getMainHandItem()) || GrimoireItem.isGrimoire(p.getOffhandItem());
 		return holding && ElementChoice.choose(p, e);
+	}
+
+	/**
+	 * The {@code SelectSpell} receiver: at most {@link #SELECTS_PER_SECOND} per player each second are handled ({@link #select});
+	 * the rest are ignored, so a flood cannot make the server re-sync the player's data and re-stamp the grimoire every packet.
+	 */
+	public static boolean receiveSelect(ServerPlayer p, Identifier spell) {
+		long second = p.level().getServer().getTickCount() / 20;
+		long[] window = SELECTS.computeIfAbsent(p.getUUID(), id -> new long[] {second, 0});
+		if (window[0] != second) {
+			window[0] = second;
+			window[1] = 0;
+		}
+		if (++window[1] > SELECTS_PER_SECOND) return false;
+		return select(p, spell);
+	}
+
+	/** A player left (or the server stops, with {@code null}): forget their select throttle. */
+	public static void forget(@Nullable ServerPlayer p) {
+		if (p == null) SELECTS.clear();
+		else SELECTS.remove(p.getUUID());
 	}
 
 	/** Selects {@code spell} if it is one of the player's unlocked spells; anything else is ignored. */

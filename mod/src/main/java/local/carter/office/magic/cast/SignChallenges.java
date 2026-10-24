@@ -25,11 +25,25 @@ import net.minecraft.server.level.ServerPlayer;
  * time. {@link #discard} (death, disconnect, dimension change) drops one at no cost.
  */
 public final class SignChallenges {
-	/** What the server remembers about a challenge it sent. */
-	record Open(int id, Spell spell, float power, Dir[] expected, long issuedAt, int limitTicks) {
+	/**
+	 * What the server remembers about a challenge it sent: the game time ({@code issuedAt}) and the wall clock
+	 * ({@code issuedNanos}, {@code System.nanoTime}) when it was sent.
+	 */
+	record Open(int id, Spell spell, float power, Dir[] expected, long issuedAt, int limitTicks, long issuedNanos) {
 		/** True once {@code now} is past the client limit plus {@link HandSigns#GRACE_TICKS}. */
 		boolean late(long now) {
 			return now - issuedAt > (long) limitTicks + HandSigns.GRACE_TICKS;
+		}
+
+		/**
+		 * True when an answer at game time {@code now} and wall clock {@code nowNanos} came too soon by both clocks: under
+		 * {@link HandSigns#minAnswerMillis} of real time and under {@link HandSigns#minAnswerTicks} ticks. Either clock passing is
+		 * enough, so slow ticks on a lagging server never make a human look fast (real time passed), nor does a test harness
+		 * that runs ticks faster than real time (the ticks passed). On a server at 20 ticks a second both say the same.
+		 */
+		boolean tooFast(long now, long nowNanos) {
+			int length = expected.length;
+			return now - issuedAt < HandSigns.minAnswerTicks(length) && nowNanos - issuedNanos < HandSigns.minAnswerMillis(length) * 1_000_000L;
 		}
 	}
 
@@ -50,7 +64,8 @@ public final class SignChallenges {
 		int limit = HandSigns.limitTicks(length);
 		long seed = p.level().getRandom().nextLong();
 		SignChallenge c = new SignChallenge(IDS.incrementAndGet(), spell.id(), seed, length, limit);
-		OPEN.put(p.getUUID(), new Open(c.id(), spell, power, HandSigns.sequence(seed, length), p.level().getGameTime(), limit));
+		OPEN.put(p.getUUID(), new Open(c.id(), spell, power, HandSigns.sequence(seed, length), p.level().getGameTime(), limit,
+				System.nanoTime()));
 		MagicServer.sender().challenge(p, c);
 		return c;
 	}
@@ -89,6 +104,18 @@ public final class SignChallenges {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * GameTests only: makes {@code p}'s open challenge look sent {@code millis} earlier (wall clock), so a test can answer at once
+	 * without tripping the too-fast floor. Game-time lateness is unchanged.
+	 */
+	public static void backdateForTesting(ServerPlayer p, long millis) {
+		Open o = OPEN.get(p.getUUID());
+		if (o != null) {
+			OPEN.put(p.getUUID(), new Open(o.id(), o.spell(), o.power(), o.expected(), o.issuedAt(), o.limitTicks(),
+					o.issuedNanos() - millis * 1_000_000L));
+		}
 	}
 
 	/** Server stopping: forget every challenge. */

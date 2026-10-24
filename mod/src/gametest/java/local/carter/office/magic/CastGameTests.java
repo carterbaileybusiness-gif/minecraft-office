@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.item.GrimoireItem;
@@ -25,6 +26,7 @@ import local.carter.office.magic.spell.ProjectileHit;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.SpellCost;
+import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 
@@ -718,5 +720,55 @@ public class CastGameTests {
 		h.assertValueEqual(fresh.getInvulnerableTime(), 0, "no i-frames granted");
 		h.assertValueEqual(recentlyHit.getInvulnerableTime(), 15, "i-frames kept");
 		h.succeed();
+	}
+
+	// ---- Final review M5, M6: mana sync and selection floods ----
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 80)
+	public void manaRegenSyncsAtMostTwiceASecond(GameTestHelper h) {
+		ServerPlayer p = probeCaster(h, 1);
+		MagicAttachments.setMana(p, 20);
+		int interval = ManaMath.regenInterval(1);
+		List<Long> changes = new ArrayList<>();
+		int[] last = {MagicAttachments.mana(p)};
+		long start = now(h);
+		h.onEachTick(() -> {
+			int mana = MagicAttachments.mana(p);
+			if (mana != last[0]) changes.add(now(h));
+			last[0] = mana;
+		});
+		h.runAfterDelay(61, () -> {
+			h.assertTrue(!changes.isEmpty(), "mana regenerated");
+			// Seen by the test's own tick (before the end-of-tick regen) one tick late; what counts is the spacing.
+			for (long t : changes) {
+				h.assertValueEqual((t - changes.get(0)) % CastService.REGEN_STEP_TICKS, 0L, "mana changed (and synced) only every 10 ticks: " + changes);
+			}
+			for (int i = 1; i < changes.size(); i++) {
+				h.assertTrue(changes.get(i) - changes.get(i - 1) >= CastService.REGEN_STEP_TICKS, "at most 2 a second: " + changes);
+			}
+			h.assertTrue(changes.size() >= 4, "regen kept going every step: " + changes);
+			// The rate is unchanged: one point every interval ticks.
+			long expected = (now(h) / interval) - (start / interval);
+			int gained = MagicAttachments.mana(p) - 20;
+			h.assertTrue(Math.abs(gained - expected) <= 10 / interval + 1, "gained " + gained + ", about " + expected);
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 40)
+	public void selectSpellFloodIsThrottled(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 2);
+		Identifier a = SpellIds.at(Element.FIRE, 0);
+		Identifier b = SpellIds.at(Element.FIRE, 1);
+		// Wait for a fresh second so the whole flood lands in one window.
+		long second = h.getLevel().getServer().getTickCount() / 20;
+		h.succeedWhen(() -> {
+			h.assertTrue(h.getLevel().getServer().getTickCount() / 20 != second, "waiting for the next second");
+			int handled = 0;
+			for (int i = 0; i < 30; i++) if (MagicServer.receiveSelect(p, i % 2 == 0 ? b : a)) handled++;
+			h.assertValueEqual(handled, MagicServer.SELECTS_PER_SECOND, "SelectSpell packets handled in one second");
+			// The 20th (an "a", odd i) was the last one handled.
+			h.assertValueEqual(MagicAttachments.get(p).selected(), Optional.of(a), "the selection the last handled packet made");
+		});
 	}
 }

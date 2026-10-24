@@ -15,6 +15,15 @@ class HandSignsTest {
 		assertEquals(92, HandSigns.limitTicks(6));
 		assertEquals(10, HandSigns.GRACE_TICKS);
 	}
+	@Test void minAnswerTime() {
+		assertEquals(120, HandSigns.MIN_MS_PER_SIGN);
+		assertEquals(720, HandSigns.minAnswerMillis(6));
+		assertEquals(480, HandSigns.minAnswerMillis(4));
+		assertEquals(15, HandSigns.minAnswerTicks(6));
+		assertEquals(10, HandSigns.minAnswerTicks(4));
+		// Always well inside the client's time limit (50 ms ticks), so a human has room to answer.
+		for (int len = 4; len <= 6; len++) assertTrue(HandSigns.minAnswerMillis(len) * 2 < HandSigns.limitTicks(len) * 50L, "length " + len);
+	}
 	@Test void sequenceDeterministic() {
 		Dir[] a = HandSigns.sequence(42, 6);
 		assertArrayEquals(a, HandSigns.sequence(42, 6));

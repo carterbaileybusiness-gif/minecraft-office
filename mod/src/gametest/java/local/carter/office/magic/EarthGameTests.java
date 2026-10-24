@@ -1,5 +1,7 @@
 package local.carter.office.magic;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import local.carter.office.magic.cast.CastService;
@@ -9,6 +11,7 @@ import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellCost;
 import local.carter.office.magic.spell.SpellIds;
@@ -888,6 +891,61 @@ public class EarthGameTests {
 			h.assertTrue(rec.messageKeys(p).contains("magic.office.protected"), "told the land is protected: " + rec.messageKeys(p));
 			// Positive control: the strike itself still lands.
 			h.assertTrue(z.getHealth() <= 200 - MountainFistGeometry.DAMAGE, "the zombie is still hurt: " + z.getHealth());
+			h.succeed();
+		});
+	}
+
+	// ---- Final review C1: an ultimate never turns a wall into real blocks ----
+
+	/**
+	 * An Earth Wall raised on blue ice is temporary blue ice; Mountain Fist's debris ring right beside it must never throw a wall
+	 * top (it would land as a real, mineable block: a dupe). The ring round the target is filled with more temporary blue ice
+	 * columns, so every debris cell finds a temporary block on top (the ray from the caster to the target is left clear). After
+	 * the strike, after an undo, and after the wall expires there is never more blue ice than the real floor under the wall.
+	 */
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 720)
+	public void mountainFistNeverThrowsAWall(GameTestHelper h) {
+		TempBlockData temp = (TempBlockData) MagicServer.kit().temp();
+		// The wall's caster stands west of the target and faces east: the wall is x = 12, z 14..18, on real blue ice.
+		ServerPlayer builder = MagicTestKit.caster(h, Element.EARTH, 2);
+		MagicTestKit.teleportTo(builder, new BlockPos(9, 4, 16));
+		lookAt(h, builder, new Vec3(20.5, 5.62, 16.5));
+		for (int z = 14; z <= 18; z++) h.setBlock(new BlockPos(12, 3, z), Blocks.BLUE_ICE);
+		int floor = MagicTestKit.count(h, Blocks.BLUE_ICE);
+		h.assertValueEqual(MagicTestKit.cast(builder, SpellIds.EARTH_WALL, 0f), Result.CAST, "wall");
+		List<BlockPos> columns = new ArrayList<>();
+		h.runAfterDelay(10, () -> {
+			for (int z = 14; z <= 18; z++) for (int y = 4; y <= 6; y++) assertWall(h, new BlockPos(12, y, z), Blocks.BLUE_ICE);
+			// More temporary blue ice all round the debris ring (3.5..5.5 out), except the caster's line of sight.
+			for (int x = 10; x <= 22; x++) {
+				for (int z = 10; z <= 22; z++) {
+					double d = Math.sqrt((x - 16) * (x - 16) + (z - 16) * (z - 16));
+					if (d < 3.5 || d > 5.5 || x == 12 || (Math.abs(x - 16) <= 1 && z < 16)) continue;
+					for (int y = 4; y <= 6; y++) {
+						BlockPos rel = new BlockPos(x, y, z);
+						h.assertTrue(temp.place(h.getLevel(), h.absolutePos(rel), Blocks.BLUE_ICE.defaultBlockState(), EarthWallGeometry.DURATION),
+								"temporary column at " + rel);
+						columns.add(rel);
+					}
+				}
+			}
+			for (int z = 14; z <= 18; z++) for (int y = 4; y <= 6; y++) columns.add(new BlockPos(12, y, z));
+			ServerPlayer p = fistCaster(h, 7);
+			h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.CAST, "fist");
+			h.runAfterDelay(MountainFistGeometry.RISE + 30, () -> {
+				h.assertTrue(spireBlocks(h, 3) >= 50, "positive control: the spire stands (" + spireBlocks(h, 3) + ")");
+				for (BlockPos rel : columns) {
+					h.assertBlockPresent(Blocks.BLUE_ICE, rel);
+					h.assertTrue(temp.isTemp(h.getLevel(), h.absolutePos(rel)), "still temporary at " + rel);
+				}
+				h.assertValueEqual(MagicTestKit.count(h, Blocks.BLUE_ICE), floor + columns.size(), "no blue ice besides the floor and the live columns");
+				MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
+				h.assertValueEqual(MagicTestKit.count(h, Blocks.BLUE_ICE), floor + columns.size(), "the undo wrote no blue ice back");
+			});
+		});
+		h.runAfterDelay(EarthWallGeometry.DURATION + 40, () -> {
+			for (BlockPos rel : columns) h.assertBlockPresent(Blocks.AIR, rel);
+			h.assertValueEqual(MagicTestKit.count(h, Blocks.BLUE_ICE), floor, "after the wall falls, only the real floor is blue ice");
 			h.succeed();
 		});
 	}

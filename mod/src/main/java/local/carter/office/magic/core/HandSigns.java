@@ -5,6 +5,11 @@ import java.util.Random;
 public final class HandSigns {
 	/** Extra server-side ticks allowed on top of the client limit. */
 	public static final int GRACE_TICKS = 10;
+	/**
+	 * The fastest a human types one arrow, in ms: an answer sooner than this × the sequence length after the challenge was sent
+	 * fizzles (a bot reading the seed answers in one tick). Measured on the server, so it includes the round trip.
+	 */
+	public static final int MIN_MS_PER_SIGN = 120;
 
 	private HandSigns() {}
 
@@ -16,6 +21,12 @@ public final class HandSigns {
 	}
 
 	public static int limitTicks(int length) { return 20 + 12 * length; }
+
+	/** No answer to a {@code length}-arrow challenge comes sooner than this (ms): {@link #MIN_MS_PER_SIGN} per arrow. */
+	public static long minAnswerMillis(int length) { return (long) MIN_MS_PER_SIGN * length; }
+
+	/** {@link #minAnswerMillis} in 50 ms game ticks, rounded up (15 for 6 arrows, 10 for 4). */
+	public static int minAnswerTicks(int length) { return (int) ((minAnswerMillis(length) + 49) / 50); }
 
 	/** Deterministic sequence from the seed with no two equal arrows in a row. */
 	public static Dir[] sequence(long seed, int length) {

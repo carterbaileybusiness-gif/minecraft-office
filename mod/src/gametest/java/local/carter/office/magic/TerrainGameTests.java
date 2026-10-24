@@ -51,6 +51,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.chunk.storage.SerializableChunkData;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.storage.LevelData;
 import net.minecraft.world.phys.AABB;
@@ -717,6 +718,160 @@ public class TerrainGameTests {
 		for (int i = 0; i < 3; i++) edits.tick();
 		for (int x = 14; x <= 18; x++) h.assertBlockPresent(Blocks.AIR, new BlockPos(x, 6, 16));
 		h.assertTrue(edits.log().casts(p.getUUID()).isEmpty(), "nothing logged after the undo");
+		h.succeed();
+	}
+
+	// ---- Final review C1: a live temporary block is never set, removed or launched ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	public void editsNeverTouchLiveTempBlocks(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 2);
+		TempBlockData temp = new TempBlockData();
+		MinecraftServer s = server(h);
+		WorldTerrainEdits edits = new WorldTerrainEdits(s, ClaimCheck.NONE, temp, EditLog.forServer(s));
+		SpellKit kit = new SpellKit(edits, temp);
+		BlockState ice = Blocks.BLUE_ICE.defaultBlockState();
+		List<BlockPos> cells = List.of(new BlockPos(14, 4, 16), new BlockPos(15, 4, 16), new BlockPos(16, 4, 16), new BlockPos(17, 4, 16));
+		for (BlockPos rel : cells.subList(0, 3)) h.assertTrue(temp.place(h.getLevel(), h.absolutePos(rel), ice, 1000), "temp at " + rel);
+		BlockPos late = h.absolutePos(cells.get(3));
+		try (EditBatch b = edits.begin(ctx(h, p, kit), abs(h, 16, 4, 14), EditTier.ULTIMATE)) {
+			h.assertFalse(b.set(h.absolutePos(cells.get(0)), GLASS), "set over a temporary block");
+			h.assertFalse(b.remove(h.absolutePos(cells.get(1))), "remove a temporary block");
+			h.assertFalse(b.launch(h.absolutePos(cells.get(2)), new Vec3(0, 0.5, 0)), "launch a temporary block");
+			h.assertValueEqual(b.refused(), 3, "refused");
+			// Accepted while the cell is air; a temporary block goes up there before the applier gets to it.
+			h.assertTrue(b.set(late, GLASS), "set over air");
+			// Positive control: a real blue ice block next to them is set.
+			h.setBlock(new BlockPos(18, 4, 16), Blocks.BLUE_ICE);
+			h.assertTrue(b.set(abs(h, 18, 4, 16), GLASS), "set over real blue ice");
+		}
+		h.assertTrue(temp.place(h.getLevel(), late, ice, 1000), "temp after the offer");
+		edits.tick();
+		for (BlockPos rel : cells) {
+			h.assertBlockPresent(Blocks.BLUE_ICE, rel);
+			h.assertTrue(temp.isTemp(h.getLevel(), h.absolutePos(rel)), "still temporary at " + rel);
+		}
+		h.assertBlockPresent(Blocks.GLASS, new BlockPos(18, 4, 16));
+		h.assertTrue(h.getLevel().getEntitiesOfClass(FallingBlockEntity.class, new AABB(h.absolutePos(BlockPos.ZERO)).inflate(40)).stream()
+				.noneMatch(e -> e.getBlockState().is(Blocks.BLUE_ICE)), "no blue ice debris");
+		h.assertValueEqual(edits.log().casts(p.getUUID()).get(0).edits().size(), 1, "only the real block's edit is logged");
+		// Undo never writes over a live temporary block (a log naming one as its "after").
+		BlockPos logged = h.absolutePos(cells.get(0));
+		edits.log().write(new LoggedCast(p.getUUID(), id("old_cast"), h.getLevel().dimension(), h.getLevel().getGameTime() + 1,
+				List.of(new EditLog.LoggedEdit(logged, Blocks.STONE.defaultBlockState(), ice, true))), CAST_IDS.incrementAndGet());
+		h.assertValueEqual(edits.undo(p.getUUID(), 1), new UndoReport(0, 1, 1), "undo skips the temporary block");
+		h.assertTrue(temp.isTemp(h.getLevel(), logged), "still temporary after the undo");
+		h.assertValueEqual(edits.undo(p.getUUID(), 1), new UndoReport(1, 1, 0), "the real edit is undone");
+		h.assertBlockPresent(Blocks.BLUE_ICE, new BlockPos(18, 4, 16));
+		// And when they expire nothing of them is left: only the real block's blue ice.
+		temp.restoreAll(s);
+		h.assertValueEqual(MagicTestKit.count(h, Blocks.BLUE_ICE), 1, "blue ice left");
+		h.succeed();
+	}
+
+	// ---- Final review I3: freed fluids need their whole flow range ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	public void fluidsNeedTheirFlowRangeOutsideClaims(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 7);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		int edge = abs(h, 24, 0, 0).getX();
+		// Someone else's claim from x = 24 on: the target cells are outside it, their flow range is not always.
+		WorldTerrainEdits edits = local(h, (caster, level, origin, radius) -> pos -> pos.getX() >= edge);
+		BlockState water = Blocks.WATER.defaultBlockState();
+		BlockState stairs = Blocks.STONE_STAIRS.defaultBlockState().setValue(BlockStateProperties.WATERLOGGED, true);
+		h.setBlock(new BlockPos(20, 4, 10), stairs);
+		h.setBlock(new BlockPos(10, 4, 10), stairs);
+		try (EditBatch b = edits.begin(ctx(h, p, kitOf(edits)), abs(h, 16, 4, 16), EditTier.ULTIMATE)) {
+			h.assertFalse(b.set(abs(h, 16, 4, 16), water), "a source 8 from the claim (it would flow in)");
+			h.assertFalse(b.remove(abs(h, 20, 4, 10)), "a waterlogged block 4 from the claim (its water would flow in)");
+			h.assertValueEqual(b.refused(), 2, "refused");
+			// Positive controls: a source 9 away, a waterlogged block far away, and a plain block at the claim's edge.
+			h.assertTrue(b.set(abs(h, 15, 4, 16), water), "a source 9 from the claim");
+			h.assertTrue(b.remove(abs(h, 10, 4, 10)), "a waterlogged block 14 from the claim");
+			h.assertTrue(b.set(abs(h, 23, 6, 20), GLASS), "a plain block next to the claim");
+		}
+		edits.tick();
+		h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 4, 16));
+		h.assertValueEqual(h.getBlockState(new BlockPos(20, 4, 10)), stairs, "the waterlogged stairs by the claim");
+		h.assertValueEqual(h.getBlockState(new BlockPos(15, 4, 16)), water, "the far source");
+		h.assertValueEqual(h.getBlockState(new BlockPos(10, 4, 10)), water, "the far stairs' water");
+		h.assertBlockPresent(Blocks.GLASS, new BlockPos(23, 6, 20));
+		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.protected"), "told the land is protected");
+		h.succeed();
+	}
+
+	// ---- Final review I1: temporary entries are saved with their chunk ----
+
+	/** A chunk far from every arena that no other test uses ({@code tempBlocksSurviveRepeatedChunkUnloadAndLoad} is at 30 000). */
+	private static ChunkPos farChunk(ServerLevel level, int salt) {
+		return ChunkPos.containing(new BlockPos(-40_000 - 64 * (int) (level.getGameTime() % 64) - 32 * salt, 0, 40_000));
+	}
+
+	private static boolean hasEntry(@org.jspecify.annotations.Nullable List<TempBlockData.Entry> list, BlockPos pos) {
+		return list != null && list.stream().anyMatch(e -> e.pos().equals(pos));
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 100)
+	public void tempEntriesAreSavedWithTheirChunk(GameTestHelper h) {
+		world(h);
+		TempBlockData temp = (TempBlockData) MagicServer.kit().temp();
+		ServerLevel level = h.getLevel();
+		ChunkPos c = farChunk(level, 0);
+		level.setChunkForced(c.x(), c.z(), true);
+		try {
+			LevelChunk chunk = level.getChunk(c.x(), c.z());
+			BlockPos cell = new BlockPos(c.getMinBlockX() + 5, 150, c.getMinBlockZ() + 7);
+			h.assertTrue(temp.place(level, cell, GLASS, 1_000_000), "temporary glass");
+			// In the same tick the chunk itself carries the entry...
+			h.assertTrue(hasEntry(chunk.getAttached(TempBlockData.CHUNK), cell), "entry on the chunk: " + chunk.getAttached(TempBlockData.CHUNK));
+			// ...and the chunk's saved form (what ChunkMap writes, blocks and attachments in one snapshot) holds it next to the block.
+			CompoundTag saved = SerializableChunkData.copyOf(level, chunk).write();
+			CompoundTag attachments = saved.getCompoundOrEmpty("fabric:attachments");
+			Tag entries = attachments.get(TempBlockData.CHUNK.identifier().toString());
+			h.assertTrue(entries != null, "saved attachments: " + attachments.keySet());
+			List<TempBlockData.Entry> back = TempBlockData.Entry.CODEC.listOf().parse(NbtOps.INSTANCE, entries).getOrThrow();
+			h.assertTrue(hasEntry(back, cell), "the saved chunk's entries: " + back);
+			// Broken (or restored), the entry leaves the chunk in the same tick too.
+			h.assertTrue(temp.breakTemp(level, cell, null, false), "broken");
+			h.assertFalse(hasEntry(chunk.getAttached(TempBlockData.CHUNK), cell), "entry gone from the chunk");
+			h.assertValueEqual(level.getBlockState(cell), AIR, "original back");
+		} finally {
+			level.setChunkForced(c.x(), c.z(), false);
+		}
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 100)
+	public void entriesSavedOnAChunkAreAdoptedOnLoad(GameTestHelper h) {
+		world(h);
+		TempBlockData temp = (TempBlockData) MagicServer.kit().temp();
+		ServerLevel level = h.getLevel();
+		ChunkPos c = farChunk(level, 1);
+		level.setChunkForced(c.x(), c.z(), true);
+		try {
+			LevelChunk chunk = level.getChunk(c.x(), c.z());
+			BlockPos due = new BlockPos(c.getMinBlockX() + 2, 150, c.getMinBlockZ() + 2);
+			BlockPos live = new BlockPos(c.getMinBlockX() + 9, 151, c.getMinBlockZ() + 9);
+			long now = level.getGameTime();
+			// As a crash leaves it: the chunk was saved with its temporary blocks and their entries, magic_temp.dat was not.
+			chunk.setBlockState(due, GLASS, Block.UPDATE_SKIP_ALL_SIDEEFFECTS);
+			chunk.setBlockState(live, GLASS, Block.UPDATE_SKIP_ALL_SIDEEFFECTS);
+			chunk.setAttached(TempBlockData.CHUNK, List.of(new TempBlockData.Entry(level.dimension(), due, AIR, GLASS, now - 1),
+					new TempBlockData.Entry(level.dimension(), live, AIR, GLASS, now + 200)));
+			h.assertFalse(temp.isTemp(level, due) || temp.isTemp(level, live), "the server's data does not know them");
+			temp.onChunkLoad(level, chunk); // what CHUNK_LOAD does
+			h.assertValueEqual(chunk.getBlockState(due), AIR, "the due one is restored on load");
+			h.assertTrue(temp.isTemp(level, live), "the other is a live temporary block again");
+			h.assertFalse(hasEntry(chunk.getAttached(TempBlockData.CHUNK), due), "the restored entry leaves the chunk");
+			h.assertTrue(hasEntry(chunk.getAttached(TempBlockData.CHUNK), live), "the live one stays on it");
+			// It drops nothing and restores like any temporary block.
+			h.assertTrue(temp.breakTemp(level, live, null, false), "broken");
+			h.assertValueEqual(chunk.getBlockState(live), AIR, "original back");
+			h.assertFalse(chunk.hasAttached(TempBlockData.CHUNK), "no entries left on the chunk");
+		} finally {
+			level.setChunkForced(c.x(), c.z(), false);
+		}
 		h.succeed();
 	}
 }

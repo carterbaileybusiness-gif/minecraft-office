@@ -11,6 +11,8 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import local.carter.office.OfficeMod;
 import local.carter.office.magic.core.TerrainRules;
@@ -51,6 +53,12 @@ import net.minecraft.world.phys.Vec3;
  * is immune counts as a block entity / immune change too, and so does touching (or setting) half of a two-block-tall block
  * (doors, tall plants: changing one half would break the other). A change that would change nothing returns false and is
  * neither applied nor refused. The first claimed or spawn-protected refusal of a cast shows {@code magic.office.protected}.</li>
+ * <li>A live temporary block ({@link TempBlocks#isTemp}) is immune to every change but {@code placeTemporary}: setting, removing or
+ * launching it would turn it into a real, mineable block (and lose the original under it). Checked when offered and again
+ * when applied, and debris never lands on one.</li>
+ * <li>A change that frees a fluid (a water source set, a waterlogged block removed or launched) is also refused unless every
+ * cell within {@link #FLUID_REACH} blocks horizontally is outside other players' claims and spawn protection: water flows 7
+ * blocks and would wash out crops, torches and redstone over the border.</li>
  * <li>Accepted changes queue for one applier (FIFO across casts, at most {@link #PER_TICK} per {@link #tick}). The block
  * is re-read when the change is applied: {@code before} is captured then, and a block that became a block entity or immune
  * meanwhile is left alone.</li>
@@ -72,9 +80,12 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	public static final int MAX_LAUNCH = 48;
 	/** Logs of casts still running (or whose batch was never closed) are written this often. */
 	public static final int FLUSH_TICKS = 100;
+	/** How far (horizontally) round a freed fluid the land must be the caster's to change: a source flows 7 blocks. */
+	public static final int FLUID_REACH = 8;
 	/** A finished cast's budget is forgotten this long after its last activity. */
 	private static final int FORGET_TICKS = 1200;
 	private static final String PROTECTED_KEY = "magic.office.protected";
+	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 
 	/** Whether spawn protection stops {@code caster} at {@code pos} (vanilla: {@code !level.mayInteract}). */
 	@FunctionalInterface
@@ -158,14 +169,19 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		cast.openBatches++;
 		cast.lastActive = ticks;
 		origin = origin.immutable();
-		return new Batch(cast, ctx.caster(), ctx.level(), origin, tier, claims.forBatch(ctx.caster(), ctx.level(), origin, tier.radius()));
+		// FLUID_REACH further: a freed fluid's flow cells are checked too.
+		return new Batch(cast, ctx.caster(), ctx.level(), origin, tier,
+				claims.forBatch(ctx.caster(), ctx.level(), origin, tier.radius() + FLUID_REACH));
 	}
 
-	/** Applies up to {@link #PER_TICK} queued changes, then writes the logs of casts that are done (and, periodically, of running ones). */
+	/**
+	 * Applies up to {@link #PER_TICK} queued changes, then writes the logs of casts that are done (and, periodically, of running
+	 * ones). A change that throws (a neighbour's block update, say) is logged and skipped; the rest still apply.
+	 */
 	public void tick() {
 		ticks++;
 		LaunchedDebris.prune(server.getTickCount());
-		for (int i = 0; i < PER_TICK && !queue.isEmpty(); i++) apply(queue.poll());
+		for (int i = 0; i < PER_TICK && !queue.isEmpty(); i++) applyGuarded(queue.poll());
 		boolean periodic = ticks % FLUSH_TICKS == 0;
 		for (Iterator<Cast> it = casts.values().iterator(); it.hasNext();) {
 			Cast c = it.next();
@@ -177,7 +193,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	/** Server stopping: applies everything still queued and writes every log. */
 	public void stop() {
 		LaunchedDebris.clear();
-		while (!queue.isEmpty()) apply(queue.poll());
+		while (!queue.isEmpty()) applyGuarded(queue.poll());
 		for (Cast c : casts.values()) if (c.dirty) flush(c);
 		casts.clear();
 	}
@@ -185,7 +201,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	/**
 	 * {@code /magic undo}: drops the player's queued changes, writes their pending logs, revokes their running casts (open
 	 * batches refuse everything, in-memory edits are cleared, so nothing lands or is logged after the undo), then undoes their
-	 * newest {@code n} logged casts ({@link EditLog#undo}).
+	 * newest {@code n} logged casts ({@link EditLog#undo}), leaving live temporary blocks alone.
 	 */
 	public UndoReport undo(UUID player, int n) {
 		queue.removeIf(ch -> {
@@ -200,13 +216,21 @@ public final class WorldTerrainEdits implements TerrainEdits {
 			c.revoked = true;
 			c.lastActive = ticks;
 		}
-		return log.undo(server, player, n);
+		return log.undo(server, player, n, temp::isTemp);
 	}
 
 	private void flush(Cast c) {
 		c.dirty = false;
 		if (c.edits.isEmpty()) return;
 		log.write(new LoggedCast(c.player, c.spell, c.dimension, c.gameTime, c.edits), c.id);
+	}
+
+	private void applyGuarded(Change ch) {
+		try {
+			apply(ch);
+		} catch (RuntimeException e) {
+			LOGGER.error("Magic terrain: a {} at {} failed; skipped", ch.kind(), ch.pos(), e);
+		}
 	}
 
 	private void apply(Change ch) {
@@ -218,6 +242,8 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		if (!level.isLoaded(pos)) return;
 		BlockState before = level.getBlockState(pos);
 		if (before.hasBlockEntity() || before.is(IMMUNE) || tall(before)) return;
+		// A temporary block may have gone up here since the offer (an Earth Wall): never set, remove or launch it.
+		if (ch.kind() != Kind.TEMP && temp.isTemp(level, pos)) return;
 		switch (ch.kind()) {
 			case SET -> {
 				if (before.equals(ch.state())) return;
@@ -244,6 +270,27 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		if (after.equals(before)) return;
 		cast.edits.add(new LoggedEdit(pos, before, after, ch.kind() == Kind.LAUNCH));
 		cast.dirty = true;
+	}
+
+	/**
+	 * Whether changing {@code current} to {@code target} frees a fluid that will flow: {@code target} is a liquid block (a source
+	 * set, or the water a removed or launched waterlogged block leaves) and {@code current} was not one already.
+	 */
+	static boolean freesFluid(BlockState current, @Nullable BlockState target) {
+		return target != null && target.getBlock() instanceof LiquidBlock && !target.getFluidState().isEmpty()
+				&& !(current.getBlock() instanceof LiquidBlock);
+	}
+
+	/** The cells a fluid freed at {@code pos} may flow into on its own level: within {@link #FLUID_REACH} horizontally. */
+	static Iterable<BlockPos> flowCells(BlockPos pos) {
+		List<BlockPos> out = new ArrayList<>();
+		int r2 = FLUID_REACH * FLUID_REACH;
+		for (int dx = -FLUID_REACH; dx <= FLUID_REACH; dx++) {
+			for (int dz = -FLUID_REACH; dz <= FLUID_REACH; dz++) {
+				if (dx * dx + dz * dz <= r2 && (dx != 0 || dz != 0)) out.add(pos.offset(dx, 0, dz));
+			}
+		}
+		return out;
 	}
 
 	/** Half of a two-block-tall block (door, tall plant, pitcher…). */
@@ -307,12 +354,28 @@ public final class WorldTerrainEdits implements TerrainEdits {
 				case TEMP -> TempBlockData.canReplace(current) || temp.holds(level, pos, state) ? state : null;
 			};
 			boolean blockEntity = current.hasBlockEntity() || level.getBlockEntity(pos) != null || (target != null && target.hasBlockEntity());
-			boolean immune = current.is(IMMUNE) || tall(current) || (target != null && (target.is(IMMUNE) || tall(target)));
+			// A live temporary block only takes placeTemporary (a refresh): anything else would make it a real block.
+			boolean liveTemp = kind != Kind.TEMP && temp.isTemp(level, pos);
+			boolean immune = liveTemp || current.is(IMMUNE) || tall(current) || (target != null && (target.is(IMMUNE) || tall(target)));
 			boolean insideBorder = level.getWorldBorder().isWithinBounds(pos);
 			// mayInteract also fails outside the border: keep that a border refusal, not "protected".
 			boolean spawnProtected = insideBorder && spawn.test(caster, level, pos);
+			boolean isClaimed = claimed.test(pos);
+			if (!blockEntity && !immune && !isClaimed && !spawnProtected && freesFluid(current, target)) {
+				// The fluid flows FLUID_REACH blocks: all of that must be land the caster may change.
+				for (BlockPos q : flowCells(pos)) {
+					if (claimed.test(q)) {
+						isClaimed = true;
+						break;
+					}
+					if (level.getWorldBorder().isWithinBounds(q) && spawn.test(caster, level, q)) {
+						spawnProtected = true;
+						break;
+					}
+				}
+			}
 			double distance = Math.sqrt(pos.distSqr(origin));
-			Verdict v = TerrainRules.decide(blockEntity, immune, claimed.test(pos), spawnProtected, insideBorder, distance, tier.radius(),
+			Verdict v = TerrainRules.decide(blockEntity, immune, isClaimed, spawnProtected, insideBorder, distance, tier.radius(),
 					cast.used, tier.budget());
 			if (v == Verdict.ALLOW && kind == Kind.LAUNCH && target != null && cast.launched >= MAX_LAUNCH) v = Verdict.OVER_BUDGET;
 			if (v != Verdict.ALLOW) return refuse(v);
@@ -374,7 +437,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 			if (caster == null || level.isOutsideBuildHeight(pos) || !level.isLoaded(pos)) return false;
 			BlockState current = level.getBlockState(pos);
 			boolean blockEntity = current.hasBlockEntity() || level.getBlockEntity(pos) != null || state.hasBlockEntity();
-			boolean immune = current.is(IMMUNE) || tall(current) || state.is(IMMUNE) || tall(state);
+			boolean immune = temp.isTemp(level, pos) || current.is(IMMUNE) || tall(current) || state.is(IMMUNE) || tall(state);
 			boolean insideBorder = level.getWorldBorder().isWithinBounds(pos);
 			boolean spawnProtected = insideBorder && spawn.test(caster, level, pos);
 			boolean claimed = claims.forBatch(caster, level, pos, 0).test(pos);

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.BiPredicate;
 import java.util.stream.Stream;
 
 import com.mojang.serialization.Codec;
@@ -131,13 +132,19 @@ public final class EditLog {
 		return out;
 	}
 
+	/** {@link #undo(MinecraftServer, UUID, int, BiPredicate)} with no temporary blocks to spare. */
+	public UndoReport undo(MinecraftServer server, UUID player, int n) {
+		return undo(server, player, n, (level, pos) -> false);
+	}
+
 	/**
 	 * Undoes the player's newest {@code n} casts, newest first: each edit (last applied first) goes back to {@code before} only
 	 * if the block is still the edit's {@code after} (for a launched block: the air or fluid it left); the others are skipped, so
-	 * a block a player put there since stays. A landing on its own launch cell is undone before the launch. Undone casts leave
-	 * the log.
+	 * a block a player put there since stays. A cell holding a live temporary block ({@code liveTemp}) is skipped too: writing
+	 * over it would orphan its entry and lose its original. (A logged {@code before} is never a temporary block: the applier
+	 * refuses to change one.) A landing on its own launch cell is undone before the launch. Undone casts leave the log.
 	 */
-	public UndoReport undo(MinecraftServer server, UUID player, int n) {
+	public UndoReport undo(MinecraftServer server, UUID player, int n, BiPredicate<ServerLevel, BlockPos> liveTemp) {
 		int restored = 0;
 		int casts = 0;
 		int skipped = 0;
@@ -156,7 +163,7 @@ public final class EditLog {
 			List<LoggedEdit> edits = cast.edits();
 			for (int j = edits.size() - 1; j >= 0; j--) {
 				LoggedEdit e = edits.get(j);
-				if (level.getBlockState(e.pos()).equals(e.after())) {
+				if (level.getBlockState(e.pos()).equals(e.after()) && !liveTemp.test(level, e.pos())) {
 					level.setBlock(e.pos(), e.before(), Block.UPDATE_ALL);
 					restored++;
 				} else {

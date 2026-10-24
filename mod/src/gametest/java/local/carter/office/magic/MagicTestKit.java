@@ -19,6 +19,7 @@ import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.cast.CastService.Result;
+import local.carter.office.magic.cast.SignChallenges;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.HandSigns;
 import local.carter.office.magic.core.ManaMath;
@@ -233,6 +234,7 @@ public final class MagicTestKit {
 		if (r != Result.CHALLENGED) return r;
 		SignChallenge c = rec.lastChallenge(p);
 		if (c == null || rec.challenges.size() == before) throw new IllegalStateException("CHALLENGED but no challenge was sent");
+		SignChallenges.backdateForTesting(p, HandSigns.minAnswerMillis(c.length())); // as if typed at human speed
 		return CastService.answer(p, c.id(), HandSigns.sequence(c.seed(), c.length()));
 	}
 

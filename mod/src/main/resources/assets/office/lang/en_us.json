@@ -111,6 +111,7 @@
   "magic.office.stronger": "Your magic grows stronger",
   "magic.office.no_home": "No home yet — Shift + cast Recall to mark one",
   "magic.office.home_marked": "Home marked",
+  "magic.office.home_claimed": "You can't mark your home inside someone else's claim",
   "magic.office.recalling": "Recalling…",
   "magic.office.recall_interrupted": "Recall interrupted",
   "magic.office.home_blocked": "Your home is blocked or unsafe — you stay where you are",

@@ -10,6 +10,7 @@ import local.carter.office.OfficeMod;
 import local.carter.office.magic.core.ScrollSelect;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.net.MagicPayloads.CancelCharge;
 import local.carter.office.magic.net.MagicPayloads.SelectSpell;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellRegistry;
@@ -78,7 +79,9 @@ public final class MagicKeys {
 	private static void beforeTick(Minecraft mc) {
 		LocalPlayer p = mc.player;
 		if (p != null && MagicInputGate.dropsCharge(MagicInputGate.typing(), MagicInputGate.usingGrimoire(p))) {
-			p.stopUsingItem(); // client side only: vanilla then sends no release, so nothing is cast
+			p.stopUsingItem(); // vanilla then sends no release, so nothing is cast
+			// The server stops its use too: no charge circle left for others, and Travel isn't BUSY.
+			if (ClientPlayNetworking.canSend(CancelCharge.TYPE)) ClientPlayNetworking.send(CancelCharge.INSTANCE);
 		}
 	}
 
