@@ -1,0 +1,8 @@
+name = "Minecraft Office"
+filename = "office-0.2.0.jar"
+side = "both"
+
+[download]
+url = "https://github.com/carterbaileybusiness-gif/minecraft-office/releases/download/v0.2.0/office-0.2.0.jar"
+hash-format = "sha512"
+hash = "3498bc4e0bc52d0ff8cee21b919d89dac17893657f8dfb0825bd9d9f6e2469b4dd3a54fd4cb0073be8fb3c56583577e934e31b7c712302eb782a7a534d8c4ee9"
