@@ -39,6 +39,7 @@ public class OfficeMod implements ModInitializer {
 		ServerLifecycleEvents.SERVER_STARTED.register(StreamService::start);
 		ServerLifecycleEvents.SERVER_STARTED.register(HologramActions::resetWorking);
 		ServerLifecycleEvents.SERVER_STOPPING.register(server -> StreamService.stop());
+		ServerTickEvents.END_SERVER_TICK.register(HologramActions::flushWorking);
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			StreamService s = StreamService.get();
 			if (s != null) {
