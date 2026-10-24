@@ -95,7 +95,7 @@ public final class MagicServer {
 	/** Selects {@code spell} if it is one of the player's unlocked spells; anything else is ignored. */
 	public static boolean select(ServerPlayer p, Identifier spell) {
 		MagicData d = MagicAttachments.get(p);
-		for (Spell s : SpellRegistry.unlocked(d)) {
+		for (Spell s : SpellRegistry.unlocked(p.getUUID(), d)) {
 			if (s.id().equals(spell)) {
 				if (!d.selected().equals(Optional.of(spell))) MagicAttachments.set(p, d.withSelected(Optional.of(spell)));
 				return true;

@@ -15,7 +15,7 @@ comment starts each element's five spells, `// recall` marks Recall). Writes und
   gui/magic/sigil_<key>.png     64x64 element medallion
   gui/magic/book_open.png       192x128 open grimoire (parchment pages; text is drawn on top)
   gui/magic/padlock.png         16x16 locked-slot padlock
-  gui/magic/wheel_slice.png     128x128 white 60-degree wheel slice, wheel centre = image centre, pointing up (tint + rotate)
+  gui/magic/wheel_slice.png     256x256 white 60-degree wheel slice, wheel centre = image centre, pointing up (tint + rotate)
   gui/magic/glow.png            64x64 white radial glow (additive)
   misc/magic/ring_0..4.png      128x128 white summoning-circle rings, inner (0) to outer (4) (tint at render)
   misc/magic/runes.png          128x16 atlas of 8 white 16x16 runes
@@ -890,9 +890,10 @@ def padlock():
 
 
 def wheel_slice():
-    S = 128
+    # 256 px (not 128) so the slice's arcs stay smooth on the wheel at GUI scale 4 (drawn about 2x there).
+    S = 256
     c = S / 2.0
-    r_in, r_out = 20.0, 63.0
+    r_in, r_out = 40.0, 126.0
     cv = Canvas(S, S)
     for y in range(S):
         for x in range(S):
@@ -903,9 +904,9 @@ def wheel_slice():
                 edge_r = min(d - r_in, r_out - d)
                 edge_a = (30 - abs(a)) * math.pi / 180 * d
                 edge = min(edge_r, edge_a)
-                if edge < 1.0:
+                if edge < 2.0:
                     cv.set(x, y, (255, 255, 255, 255))
-                elif edge < 2.0:
+                elif edge < 4.0:
                     cv.set(x, y, (255, 255, 255, 120))
                 else:
                     t = (d - r_in) / (r_out - r_in)

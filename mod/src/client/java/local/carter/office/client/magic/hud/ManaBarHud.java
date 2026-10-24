@@ -6,6 +6,7 @@ import java.util.Optional;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.client.magic.SpellWheel;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
 import local.carter.office.client.magic.screen.UiKit;
 import local.carter.office.magic.core.Element;
@@ -64,6 +65,7 @@ public final class ManaBarHud {
 		HudElementRegistry.replaceElement(VanillaHudElements.EXPERIENCE_LEVEL, vanilla -> wrap(vanilla, ManaBarHud::xpLevel));
 		HudElementRegistry.replaceElement(VanillaHudElements.INFO_BAR_FOREGROUND, vanilla -> wrap(vanilla, (g, dt) -> {}));
 		HudElementRegistry.replaceElement(VanillaHudElements.HELD_ITEM_TOOLTIP, vanilla -> (g, dt) -> {
+			if (SpellWheel.visible()) return; // the open wheel shows the selection (and sits here)
 			if (label != null && labelTicks > 0 && active(Minecraft.getInstance())) spellLabel(g, dt);
 			else vanilla.extractRenderState(g, dt);
 		});
@@ -166,7 +168,7 @@ public final class ManaBarHud {
 			g.fill(x + n, y + 1, x + n + 1, y1 - 1, filled ? UiKit.mix(colour, 0xFF000000, 0.45f) : 0x50FFFFFF);
 		}
 		// What the selected spell needs, while mana is short of it.
-		Optional<Spell> spell = d.selected().flatMap(SpellRegistry::get);
+		Optional<Spell> spell = d.selected().flatMap(id -> SpellRegistry.get(p.getUUID(), id));
 		Identifier sel = d.selected().orElse(null);
 		if (sel != null && !p.hasInfiniteMaterials()) {
 			int need = spell.map(Spell::cost).map(SpellCost::mana).orElse(0);
@@ -221,7 +223,7 @@ public final class ManaBarHud {
 		float k = Math.min(UiKit.clamp01(age / FADE_IN), UiKit.clamp01(t / FADE_OUT));
 		if (k <= 0.01f) return;
 		Element e = MagicAttachments.get(mc.player).element().orElse(null);
-		int colour = SpellRegistry.get(id).map(s -> s.element() == null ? Element.RECALL_ARGB : s.element().argb())
+		int colour = SpellRegistry.get(mc.player.getUUID(), id).map(s -> s.element() == null ? Element.RECALL_ARGB : s.element().argb())
 				.orElse(e != null && !id.getPath().equals("recall") ? e.argb() : Element.RECALL_ARGB);
 		ManaBarLayout.Layout l = ManaBarLayout.layout(g.guiWidth(), g.guiHeight());
 		Component name = UiKit.spellName(id);

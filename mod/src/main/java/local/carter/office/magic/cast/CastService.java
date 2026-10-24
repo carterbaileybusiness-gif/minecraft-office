@@ -114,7 +114,7 @@ public final class CastService {
 		Identifier captured = CHARGING.remove(p.getUUID());
 		Optional<Identifier> selected = captured != null ? Optional.of(captured) : MagicAttachments.get(p).selected();
 		if (selected.isEmpty()) return;
-		Optional<Spell> spell = SpellRegistry.get(selected.get());
+		Optional<Spell> spell = SpellRegistry.get(p.getUUID(), selected.get());
 		if (spell.isEmpty()) return;
 		Spell s = spell.get();
 		float charge = s.slot() == Slots.RECALL ? 0f : isUltimate(s) ? 1f : ChargeMath.charge(ticksHeld);
@@ -318,7 +318,7 @@ public final class CastService {
 		for (int slot = 0; slot < Slots.WHEEL_SLICES; slot++) {
 			int at = Slots.unlockLevel(slot);
 			if (at > oldLevel && at <= d.level()) {
-				Optional<Spell> s = SpellRegistry.at(d.element().orElseThrow(), slot);
+				Optional<Spell> s = SpellRegistry.at(p.getUUID(), d.element().orElseThrow(), slot);
 				if (s.isPresent()) unlocked = s.get();
 			}
 		}
