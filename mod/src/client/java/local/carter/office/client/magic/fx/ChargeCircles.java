@@ -41,8 +41,8 @@ public final class ChargeCircles {
 	public static final double BELOW = 0.25;
 	public static final float ALPHA = 0.55F;
 	/** The caster's own circle in first person: dimmer, and empty in the middle so the crosshair and its target stay clear. */
-	public static final float FIRST_PERSON_ALPHA = 0.3F;
-	public static final float FIRST_PERSON_CLEAR = 0.35F * MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS);
+	public static final float FIRST_PERSON_ALPHA = MagicCircleRenderer.FIRST_PERSON_ALPHA;
+	public static final float FIRST_PERSON_CLEAR = MagicCircleRenderer.FIRST_PERSON_CLEAR * MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS);
 
 	/** The charging circle shown for each player, by entity id. */
 	private static final Map<Integer, Circle> SHOWN = new HashMap<>();

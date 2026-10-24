@@ -19,6 +19,7 @@ The magic fx core adapts Wildercord's client code. These files start with
 | `client/magic/fx/Shake.java` | `fx/ScreenEffects.java` (decaying shake, FOV kick curve, Screen Effect Scale) |
 | `client/magic/fx/HitStop.java`, `mixin/client/HitStopMixin.java` | `fx/HitStop.java`, `mixin/EntityRenderDispatcherHitStopMixin.java` |
 | `client/magic/fx/ShaderCompat.java` | `compat/ShaderCompat.java`, `mixin/QuadParticleRenderStateMixin.java` (magic on vanilla's translucent layer under a shader pack) |
+| `client/magic/fx/wind/WindRibbon.java` | `fx/Facing.java` (`along`, via our `BoltParticle`: ribbon pieces turned to face the camera) |
 
 No Wildercord textures or other assets are included: the fx textures are drawn by `tools/make_fx_textures.py`.
 
