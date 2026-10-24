@@ -38,7 +38,7 @@ class EditLogTest {
 				new LoggedEdit(new BlockPos(1, 64, -2), Blocks.STONE.defaultBlockState(), Blocks.AIR.defaultBlockState()),
 				new LoggedEdit(new BlockPos(-30_000, -60, 7), Blocks.GRASS_BLOCK.defaultBlockState(), Blocks.MAGMA_BLOCK.defaultBlockState()),
 				new LoggedEdit(new BlockPos(5, 300, 5), Blocks.AIR.defaultBlockState(),
-						Blocks.OAK_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.TOP))));
+						Blocks.OAK_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.TOP), true)));
 	}
 
 	@Test
@@ -49,6 +49,20 @@ class EditLogTest {
 		assertEquals(c, back);
 		assertEquals(3, back.edits().size());
 		assertEquals(SlabType.TOP, back.edits().get(2).after().getValue(SlabBlock.TYPE));
+		assertFalse(back.edits().get(0).launched(), "plain edit");
+		assertTrue(back.edits().get(2).launched(), "launched edit");
+	}
+
+	@Test
+	void staleTempFilesAreDeleted(@TempDir Path dir) throws Exception {
+		EditLog log = new EditLog(dir);
+		UUID player = UUID.randomUUID();
+		log.write(cast(player, 5), 1);
+		Path stale = dir.resolve(player.toString()).resolve("6-2.nbt.tmp");
+		Files.writeString(stale, "half written");
+		log.deleteStaleTemp();
+		assertFalse(Files.exists(stale), "stale tmp deleted");
+		assertEquals(1, log.casts(player).size(), "the log itself stays");
 	}
 
 	@Test

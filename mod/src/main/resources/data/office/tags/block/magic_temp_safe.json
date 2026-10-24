@@ -1,0 +1,31 @@
+{
+  "values": [
+    "minecraft:stone",
+    "minecraft:cobblestone",
+    "minecraft:mossy_cobblestone",
+    "minecraft:smooth_stone",
+    "minecraft:stone_bricks",
+    "minecraft:andesite",
+    "minecraft:diorite",
+    "minecraft:granite",
+    "minecraft:tuff",
+    "minecraft:calcite",
+    "minecraft:deepslate",
+    "minecraft:cobbled_deepslate",
+    "minecraft:mud_bricks",
+    "minecraft:packed_mud",
+    "minecraft:packed_ice",
+    "minecraft:blue_ice",
+    "minecraft:glass",
+    "minecraft:tinted_glass",
+    "minecraft:basalt",
+    "minecraft:smooth_basalt",
+    "minecraft:blackstone",
+    "minecraft:sandstone",
+    "minecraft:red_sandstone",
+    "minecraft:terracotta",
+    "minecraft:prismarine",
+    "minecraft:dark_prismarine",
+    "minecraft:amethyst_block"
+  ]
+}

@@ -16,7 +16,11 @@ public interface EditBatch extends AutoCloseable {
 	/** Turns the block into a falling block flying with {@code velocity} (no item drop). */
 	boolean launch(BlockPos pos, Vec3 velocity);
 
-	/** MEDIUM only: places {@code state} over air or a replaceable block for {@code ticks}, then restores it. */
+	/**
+	 * MEDIUM only: places {@code state} over air or a replaceable block for {@code ticks}, then restores it. Placing the same
+	 * state again on a live temporary block refreshes its timer. {@code state} must be inert ({@code #office:magic_temp_safe};
+	 * see {@link TempBlocks}): water and ice effects use packed or blue ice, or display entities, never a temporary liquid.
+	 */
 	boolean placeTemporary(BlockPos pos, BlockState state, int ticks);
 
 	int applied();

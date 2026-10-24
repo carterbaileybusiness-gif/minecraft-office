@@ -107,6 +107,6 @@
   "magic.office.busy": "Too much magic here — wait a moment",
   "magic.office.wrong_element": "%s belongs to another element — you are bound to %s",
   "magic.office.spell_failed": "The spell failed",
-  "magic.office.undo_done": "Restored %d blocks from %d casts (%d changed since, left alone)",
-  "magic.office.undo_help": "Undo a player's last n terrain casts (the newest 20 are kept)"
+  "magic.office.undo_done": "Restored %d blocks from %d casts; %d left alone (changed since, or thrown as debris)",
+  "magic.office.undo_help": "Undo a player's last n terrain casts (the newest 20 are kept). Blocks changed since the cast are left alone"
 }

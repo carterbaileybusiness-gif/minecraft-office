@@ -34,6 +34,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -43,13 +44,16 @@ import net.minecraft.world.phys.Vec3;
  * <li>Each call runs {@link TerrainRules#decide}: block entity, {@code #office:magic_immune}, claimed ({@link ClaimCheck}),
  * spawn protection ({@code !mayInteract}), world border, distance from the batch origin ({@code tier.radius()}), and the cast's
  * budget ({@code tier.budget()}, summed over every batch of {@code ctx.castId()}). Setting a state that has a block entity or
- * is immune counts as a block entity / immune change too. A change that would change nothing returns false and is neither
- * applied nor refused. The first claimed or spawn-protected refusal of a cast shows {@code magic.office.protected}.</li>
+ * is immune counts as a block entity / immune change too, and so does touching (or setting) half of a two-block-tall block
+ * (doors, tall plants: changing one half would break the other). A change that would change nothing returns false and is
+ * neither applied nor refused. The first claimed or spawn-protected refusal of a cast shows {@code magic.office.protected}.</li>
  * <li>Accepted changes queue for one applier (FIFO across casts, at most {@link #PER_TICK} per {@link #tick}). The block
  * is re-read when the change is applied: {@code before} is captured then, and a block that became a block entity or immune
  * meanwhile is left alone.</li>
  * <li>Applied changes (not temporary blocks) are logged per cast to {@link EditLog}, written once the cast's queued changes
- * are applied and its batches closed.</li>
+ * are applied and its batches closed, and every {@link #FLUSH_TICKS} ticks while it runs.</li>
+ * <li>Temporary blocks must be inert ({@link TempBlockData#isSafe}); placing the same state on a live temporary block refreshes
+ * its timer.</li>
  * </ul>
  * Server thread only.
  */
@@ -59,11 +63,19 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	public static final int PER_TICK = 256;
 	/** Falling blocks launched per cast. */
 	public static final int MAX_LAUNCH = 48;
-	/** The log is written this long after the cast's last activity even if a batch was never closed. */
-	private static final int UNCLOSED_FLUSH_TICKS = 100;
+	/** Logs of casts still running (or whose batch was never closed) are written this often. */
+	public static final int FLUSH_TICKS = 100;
 	/** A finished cast's budget is forgotten this long after its last activity. */
 	private static final int FORGET_TICKS = 1200;
 	private static final String PROTECTED_KEY = "magic.office.protected";
+
+	/** Whether spawn protection stops {@code caster} at {@code pos} (vanilla: {@code !level.mayInteract}). */
+	@FunctionalInterface
+	public interface SpawnProtection {
+		SpawnProtection VANILLA = (caster, level, pos) -> !level.mayInteract(caster, pos);
+
+		boolean test(ServerPlayer caster, ServerLevel level, BlockPos pos);
+	}
 
 	private enum Kind { SET, REMOVE, LAUNCH, TEMP }
 
@@ -84,6 +96,8 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		int openBatches;
 		boolean warned;
 		boolean dirty;
+		/** Undone: its batches refuse everything from now on. */
+		boolean revoked;
 		long lastActive;
 
 		Cast(long id, UUID player, Identifier spell, ResourceKey<Level> dimension, long gameTime) {
@@ -99,15 +113,21 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	private final ClaimCheck claims;
 	private final TempBlocks temp;
 	private final EditLog log;
+	private final SpawnProtection spawn;
 	private final ArrayDeque<Change> queue = new ArrayDeque<>();
 	private final Map<Long, Cast> casts = new HashMap<>();
 	private long ticks;
 
 	public WorldTerrainEdits(MinecraftServer server, ClaimCheck claims, TempBlocks temp, EditLog log) {
+		this(server, claims, temp, log, SpawnProtection.VANILLA);
+	}
+
+	public WorldTerrainEdits(MinecraftServer server, ClaimCheck claims, TempBlocks temp, EditLog log, SpawnProtection spawn) {
 		this.server = server;
 		this.claims = claims;
 		this.temp = temp;
 		this.log = log;
+		this.spawn = spawn;
 	}
 
 	public EditLog log() {
@@ -129,15 +149,15 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		return new Batch(cast, ctx.caster(), ctx.level(), origin, tier, claims.forBatch(ctx.caster(), ctx.level(), origin, tier.radius()));
 	}
 
-	/** Applies up to {@link #PER_TICK} queued changes, then writes the logs of casts that are done. */
+	/** Applies up to {@link #PER_TICK} queued changes, then writes the logs of casts that are done (and, periodically, of running ones). */
 	public void tick() {
 		ticks++;
 		for (int i = 0; i < PER_TICK && !queue.isEmpty(); i++) apply(queue.poll());
+		boolean periodic = ticks % FLUSH_TICKS == 0;
 		for (Iterator<Cast> it = casts.values().iterator(); it.hasNext();) {
 			Cast c = it.next();
-			if (c.pending > 0) continue;
-			if (c.dirty && (c.openBatches == 0 || ticks - c.lastActive > UNCLOSED_FLUSH_TICKS)) flush(c);
-			if (!c.dirty && ticks - c.lastActive > FORGET_TICKS) it.remove();
+			if (c.dirty && (periodic || (c.pending == 0 && c.openBatches == 0))) flush(c);
+			if (!c.dirty && c.pending == 0 && ticks - c.lastActive > FORGET_TICKS) it.remove();
 		}
 	}
 
@@ -149,8 +169,9 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	}
 
 	/**
-	 * {@code /magic undo}: drops the player's queued changes, writes their pending logs, then undoes their newest {@code n}
-	 * logged casts ({@link EditLog#undo}).
+	 * {@code /magic undo}: drops the player's queued changes, writes their pending logs, revokes their running casts (open
+	 * batches refuse everything, in-memory edits are cleared, so nothing lands or is logged after the undo), then undoes their
+	 * newest {@code n} logged casts ({@link EditLog#undo}).
 	 */
 	public UndoReport undo(UUID player, int n) {
 		queue.removeIf(ch -> {
@@ -158,7 +179,13 @@ public final class WorldTerrainEdits implements TerrainEdits {
 			ch.cast().pending--;
 			return true;
 		});
-		for (Cast c : casts.values()) if (c.player.equals(player) && c.dirty) flush(c);
+		for (Cast c : casts.values()) {
+			if (!c.player.equals(player)) continue;
+			if (c.dirty) flush(c);
+			c.edits.clear();
+			c.revoked = true;
+			c.lastActive = ticks;
+		}
 		return log.undo(server, player, n);
 	}
 
@@ -176,7 +203,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		BlockPos pos = ch.pos();
 		if (!level.isLoaded(pos)) return;
 		BlockState before = level.getBlockState(pos);
-		if (before.hasBlockEntity() || before.is(IMMUNE)) return;
+		if (before.hasBlockEntity() || before.is(IMMUNE) || tall(before)) return;
 		switch (ch.kind()) {
 			case SET -> {
 				if (before.equals(ch.state())) return;
@@ -200,8 +227,13 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		}
 		BlockState after = level.getBlockState(pos);
 		if (after.equals(before)) return;
-		cast.edits.add(new LoggedEdit(pos, before, after));
+		cast.edits.add(new LoggedEdit(pos, before, after, ch.kind() == Kind.LAUNCH));
 		cast.dirty = true;
+	}
+
+	/** Half of a two-block-tall block (door, tall plant, pitcher…). */
+	private static boolean tall(BlockState s) {
+		return s.hasProperty(BlockStateProperties.DOUBLE_BLOCK_HALF);
 	}
 
 	private final class Batch implements EditBatch {
@@ -241,12 +273,12 @@ public final class WorldTerrainEdits implements TerrainEdits {
 
 		@Override
 		public boolean placeTemporary(BlockPos pos, BlockState state, int ticks) {
-			if (tier != EditTier.MEDIUM || ticks <= 0) return refuse(null);
+			if (tier != EditTier.MEDIUM || ticks <= 0 || !TempBlockData.isSafe(state)) return refuse(null);
 			return offer(pos, Kind.TEMP, state, null, ticks);
 		}
 
 		private boolean offer(BlockPos pos, Kind kind, @Nullable BlockState state, @Nullable Vec3 velocity, int ticks) {
-			if (closed || level.isOutsideBuildHeight(pos) || !level.isLoaded(pos)) return refuse(null);
+			if (closed || cast.revoked || level.isOutsideBuildHeight(pos) || !level.isLoaded(pos)) return refuse(null);
 			pos = pos.immutable();
 			BlockState current = level.getBlockState(pos);
 			// What the change would leave; null when it would change nothing.
@@ -257,22 +289,21 @@ public final class WorldTerrainEdits implements TerrainEdits {
 					yield current.equals(left) ? null : left;
 				}
 				case LAUNCH -> current.isAir() || current.getBlock() instanceof LiquidBlock ? null : current.getFluidState().createLegacyBlock();
-				case TEMP -> current.isAir() || current.canBeReplaced() ? (current.equals(state) ? null : state) : null;
+				case TEMP -> TempBlockData.canReplace(current) || temp.holds(level, pos, state) ? state : null;
 			};
 			boolean blockEntity = current.hasBlockEntity() || level.getBlockEntity(pos) != null || (target != null && target.hasBlockEntity());
-			boolean immune = current.is(IMMUNE) || (target != null && target.is(IMMUNE));
+			boolean immune = current.is(IMMUNE) || tall(current) || (target != null && (target.is(IMMUNE) || tall(target)));
 			boolean insideBorder = level.getWorldBorder().isWithinBounds(pos);
 			// mayInteract also fails outside the border: keep that a border refusal, not "protected".
-			boolean spawnProtected = insideBorder && !level.mayInteract(caster, pos);
+			boolean spawnProtected = insideBorder && spawn.test(caster, level, pos);
 			double distance = Math.sqrt(pos.distSqr(origin));
 			Verdict v = TerrainRules.decide(blockEntity, immune, claimed.test(pos), spawnProtected, insideBorder, distance, tier.radius(),
 					cast.used, tier.budget());
 			if (v == Verdict.ALLOW && kind == Kind.LAUNCH && target != null && cast.launched >= MAX_LAUNCH) v = Verdict.OVER_BUDGET;
 			if (v != Verdict.ALLOW) return refuse(v);
 			if (target == null) {
-				// Nothing to change (already that block, nothing to launch, or not air/replaceable for a temporary block).
-				if (kind == Kind.TEMP && !(current.isAir() || current.canBeReplaced())) return refuse(null);
-				return false;
+				// Nothing to change (already that block, nothing to launch), or a temporary block over a solid block.
+				return kind == Kind.TEMP ? refuse(null) : false;
 			}
 			cast.used++;
 			if (kind == Kind.LAUNCH) cast.launched++;

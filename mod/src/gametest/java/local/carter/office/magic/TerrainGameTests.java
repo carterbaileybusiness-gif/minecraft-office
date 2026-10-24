@@ -3,6 +3,7 @@ package local.carter.office.magic;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -24,6 +25,8 @@ import local.carter.office.magic.terrain.EditLog;
 import local.carter.office.magic.terrain.EditLog.LoggedCast;
 import local.carter.office.magic.terrain.EditLog.UndoReport;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.terrain.FallbackClaims;
+import local.carter.office.magic.terrain.OpacClaims;
 import local.carter.office.magic.terrain.NoTerrain;
 import local.carter.office.magic.terrain.TempBlockData;
 import local.carter.office.magic.terrain.WorldTerrainEdits;
@@ -31,14 +34,22 @@ import local.carter.office.magic.terrain.WorldTerrainEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.item.FallingBlockEntity;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.storage.LevelData;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -55,6 +66,7 @@ public class TerrainGameTests {
 	private static final String ENV_EMITTER = "office-test:magic_terrain_emitter";
 	private static final String ENV_EMITTER_FAR = "office-test:magic_terrain_emitter_far";
 	private static final String ENV_HOME = "office-test:magic_terrain_home";
+	private static final String ENV_DIMENSION = "office-test:magic_terrain_dimension";
 
 	/** Cast ids for hand-made contexts, far above {@code CastService}'s counter. */
 	private static final AtomicLong CAST_IDS = new AtomicLong(1L << 40);
@@ -241,7 +253,12 @@ public class TerrainGameTests {
 			h.assertTrue(f.getDeltaMovement().y > 0.5, "launched upward: " + f.getDeltaMovement());
 		}
 		h.assertValueEqual(edits.log().casts(p.getUUID()).get(0).edits().size(), WorldTerrainEdits.MAX_LAUNCH, "launches logged");
+		h.assertTrue(edits.log().casts(p.getUUID()).get(0).edits().stream().allMatch(EditLog.LoggedEdit::launched), "flagged as launched");
 		for (FallingBlockEntity f : falling) f.discard();
+		int stone = MagicTestKit.count(h, Blocks.STONE);
+		// Launched blocks may have landed somewhere: undo never puts them back (no duplicates).
+		h.assertValueEqual(edits.undo(p.getUUID(), 1), new UndoReport(0, 1, WorldTerrainEdits.MAX_LAUNCH), "undo report");
+		h.assertValueEqual(MagicTestKit.count(h, Blocks.STONE), stone, "stone after undo");
 		h.succeed();
 	}
 
@@ -399,16 +416,17 @@ public class TerrainGameTests {
 	public void tempBlocksRestoreWhenExpired(GameTestHelper h) {
 		TempBlockData temp = new TempBlockData();
 		MinecraftServer s = server(h);
-		BlockPos pit = new BlockPos(16, 3, 16); // a one-block pit, so the water cannot flow
+		BlockPos pit = new BlockPos(16, 3, 16);
 		BlockPos replaced = new BlockPos(10, 4, 10);
 		h.setBlock(pit, Blocks.AIR);
-		h.assertTrue(temp.place(h.getLevel(), h.absolutePos(pit), Blocks.WATER.defaultBlockState(), 20), "temp water");
+		h.assertFalse(temp.place(h.getLevel(), h.absolutePos(pit), Blocks.WATER.defaultBlockState(), 20), "temp water (never a liquid)");
+		h.assertTrue(temp.place(h.getLevel(), h.absolutePos(pit), Blocks.PACKED_ICE.defaultBlockState(), 20), "temp packed ice");
 		h.assertTrue(temp.place(h.getLevel(), h.absolutePos(replaced), GLASS, 20), "temp glass");
 		h.assertFalse(temp.place(h.getLevel(), h.absolutePos(new BlockPos(10, 3, 10)), GLASS, 20), "over stone");
 		h.setBlock(replaced, Blocks.DIRT);
 		h.onEachTick(() -> temp.tick(s));
 		h.runAfterDelay(10, () -> {
-			h.assertBlockPresent(Blocks.WATER, pit);
+			h.assertBlockPresent(Blocks.PACKED_ICE, pit);
 			h.assertValueEqual(temp.active(), 2, "active");
 		});
 		h.runAfterDelay(21, () -> {
@@ -454,5 +472,184 @@ public class TerrainGameTests {
 			h.assertValueEqual(loaded.active(), 0, "active");
 			h.succeed();
 		});
+	}
+
+	// ---- Fix round 1 ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	public void refusesTallBlockHalves(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 2);
+		BlockState lower = Blocks.TALL_GRASS.defaultBlockState();
+		BlockState upper = lower.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER);
+		h.setBlock(new BlockPos(10, 3, 10), Blocks.DIRT);
+		h.setBlock(new BlockPos(10, 4, 10), lower);
+		h.setBlock(new BlockPos(10, 5, 10), upper);
+		WorldTerrainEdits edits = local(h, ClaimCheck.NONE);
+		try (EditBatch b = edits.begin(ctx(h, p, kitOf(edits)), abs(h, 10, 5, 12), EditTier.MEDIUM)) {
+			h.assertFalse(b.remove(abs(h, 10, 4, 10)), "lower half removed");
+			h.assertFalse(b.launch(abs(h, 10, 5, 10), new Vec3(0, 1, 0)), "upper half launched");
+			h.assertFalse(b.set(abs(h, 12, 4, 10), lower), "half a tall plant set");
+			h.assertTrue(b.set(abs(h, 12, 5, 10), GLASS), "plain block next to it");
+			h.assertValueEqual(b.refused(), 3, "refused");
+		}
+		edits.tick();
+		h.assertValueEqual(h.getBlockState(new BlockPos(10, 4, 10)), lower, "lower half");
+		h.assertValueEqual(h.getBlockState(new BlockPos(10, 5, 10)), upper, "upper half");
+		h.assertBlockPresent(Blocks.AIR, new BlockPos(12, 4, 10));
+		h.assertBlockPresent(Blocks.GLASS, new BlockPos(12, 5, 10));
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	public void refusesSpawnProtection(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 2);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertFalse(WorldTerrainEdits.SpawnProtection.VANILLA.test(p, h.getLevel(), abs(h, 16, 6, 10)),
+				"GameTest servers have no spawn protection");
+		MinecraftServer s = server(h);
+		int edge = abs(h, 0, 0, 10).getZ();
+		// Spawn protection reaching up to z = 10 of this arena (a GameTest server has none of its own).
+		WorldTerrainEdits edits = new WorldTerrainEdits(s, ClaimCheck.NONE, new TempBlockData(), EditLog.forServer(s),
+				(caster, level, pos) -> pos.getZ() <= edge);
+		try (EditBatch b = edits.begin(ctx(h, p, kitOf(edits)), abs(h, 16, 6, 12), EditTier.MEDIUM)) {
+			h.assertFalse(b.set(abs(h, 16, 6, 10), GLASS), "inside spawn protection");
+			h.assertFalse(b.remove(abs(h, 16, 3, 9)), "inside spawn protection, below");
+			h.assertTrue(b.set(abs(h, 16, 6, 14), GLASS), "outside spawn protection");
+			h.assertValueEqual(b.refused(), 2, "refused");
+		}
+		edits.tick();
+		h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 6, 10));
+		h.assertBlockPresent(Blocks.STONE, new BlockPos(16, 3, 9));
+		h.assertBlockPresent(Blocks.GLASS, new BlockPos(16, 6, 14));
+		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.protected"), "one protected message per cast");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV_DIMENSION, maxTicks = 100)
+	public void claimsStayInTheirDimension(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 2);
+		ServerPlayer other = MagicTestKit.otherPlayer(h, new BlockPos(28, 4, 28));
+		MinecraftServer s = server(h);
+		ServerLevel nether = s.getLevel(Level.NETHER);
+		h.assertTrue(nether != null, "the Nether exists");
+		BlockPos target = abs(h, 16, 4, 22);
+		// Fallback: another player's home in the Nether, at the same coordinates as the overworld target.
+		MagicAttachments.set(other, MagicData.EMPTY.withHome(Optional.of(GlobalPos.of(Level.NETHER, target))));
+		FallbackClaims fallback = new FallbackClaims(s);
+		h.assertFalse(fallback.forBatch(p, h.getLevel(), target, 6).test(target), "fallback: overworld under a Nether home");
+		h.assertTrue(fallback.forBatch(p, nether, target, 6).test(target), "fallback: the Nether at the home");
+		// OPAC: the lookup is asked for the batch's own dimension.
+		UUID owner = other.getUUID();
+		OpacClaims opac = new OpacClaims((level, cx, cz) -> level.dimension().equals(Level.NETHER) && cx == target.getX() >> 4
+				&& cz == target.getZ() >> 4 ? owner : null);
+		h.assertFalse(opac.forBatch(p, h.getLevel(), target, 6).test(target), "OPAC: overworld chunk under a Nether claim");
+		h.assertTrue(opac.forBatch(p, nether, target, 6).test(target), "OPAC: the claimed Nether chunk");
+		// And the installed kit lets the overworld edit through.
+		try (EditBatch b = world(h).begin(ctx(h, p, MagicServer.kit()), target, EditTier.MEDIUM)) {
+			h.assertTrue(b.set(target, GLASS), "overworld edit under a Nether home");
+		}
+		h.succeedWhen(() -> h.assertBlockPresent(Blocks.GLASS, new BlockPos(16, 4, 22)));
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	public void tempBlocksMustBeInertAndRefresh(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 7);
+		TempBlockData temp = new TempBlockData();
+		MinecraftServer s = server(h);
+		WorldTerrainEdits edits = new WorldTerrainEdits(s, ClaimCheck.NONE, temp, EditLog.forServer(s));
+		SpellKit kit = new SpellKit(edits, temp);
+		BlockPos cell = abs(h, 16, 6, 16);
+		BlockState ice = Blocks.PACKED_ICE.defaultBlockState();
+		List<BlockState> unsafe = List.of(Blocks.WATER.defaultBlockState(), Blocks.LAVA.defaultBlockState(), Blocks.ICE.defaultBlockState(),
+				Blocks.SAND.defaultBlockState(), Blocks.CHEST.defaultBlockState(), Blocks.TALL_GRASS.defaultBlockState(),
+				Blocks.OAK_DOOR.defaultBlockState(), Blocks.GLOWSTONE.defaultBlockState(), Blocks.DIRT.defaultBlockState());
+		try (EditBatch b = edits.begin(ctx(h, p, kit), cell, EditTier.MEDIUM)) {
+			for (BlockState bad : unsafe) h.assertFalse(b.placeTemporary(cell, bad, 100), "temporary " + bad);
+			h.assertValueEqual(b.refused(), unsafe.size(), "refused");
+			h.assertTrue(b.placeTemporary(cell, ice, 20), "temporary packed ice");
+		}
+		for (BlockState bad : unsafe) h.assertFalse(temp.place(h.getLevel(), abs(h, 17, 6, 16), bad, 20), "direct temporary " + bad);
+		edits.tick();
+		h.assertBlockPresent(Blocks.PACKED_ICE, new BlockPos(16, 6, 16));
+		long firstExpire = temp.entries().get(0).expireGameTime();
+		// The same state again through a batch refreshes the timer (the original stays air).
+		try (EditBatch b = edits.begin(ctx(h, p, kit), cell, EditTier.MEDIUM)) {
+			h.assertTrue(b.placeTemporary(cell, ice, 200), "refresh");
+			h.assertFalse(b.placeTemporary(cell, GLASS, 200), "a different block over a live temporary one");
+		}
+		edits.tick();
+		h.assertValueEqual(temp.active(), 1, "one entry");
+		TempBlockData.Entry e = temp.entries().get(0);
+		h.assertTrue(e.expireGameTime() >= firstExpire + 150, "timer refreshed: " + firstExpire + " -> " + e.expireGameTime());
+		h.assertValueEqual(e.original(), AIR, "original kept");
+		temp.restoreAll(s);
+		h.assertBlockPresent(Blocks.AIR, new BlockPos(16, 6, 16));
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	public void tempBlocksRestoredOnChunkUnload(GameTestHelper h) {
+		ServerLevel level = h.getLevel();
+		TempBlockData temp = new TempBlockData();
+		BlockPos a = abs(h, 2, 6, 2);
+		BlockPos b = abs(h, 29, 6, 29);
+		h.assertTrue(ChunkPos.pack(a) != ChunkPos.pack(b), "two chunks");
+		BlockState ice = Blocks.PACKED_ICE.defaultBlockState();
+		h.assertTrue(temp.place(level, a, ice, 10_000), "temp a");
+		h.assertTrue(temp.place(level, a.above(), ice, 10_000), "temp a, above");
+		h.assertTrue(temp.place(level, b, ice, 10_000), "temp b");
+		// What CHUNK_UNLOAD does before the chunk is saved: every entry of that chunk back, due or not.
+		temp.onChunkUnload(level, level.getChunkAt(a));
+		h.assertValueEqual(level.getBlockState(a), AIR, "a restored");
+		h.assertValueEqual(level.getBlockState(a.above()), AIR, "a above restored");
+		h.assertValueEqual(level.getBlockState(b), ice, "other chunk untouched");
+		h.assertValueEqual(temp.active(), 1, "entries left");
+		temp.restoreAll(server(h));
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 200)
+	public void expiredTempBlockInUnloadedChunkRestoredOnLoad(GameTestHelper h) {
+		ServerLevel level = h.getLevel();
+		MinecraftServer s = server(h);
+		BlockPos far = new BlockPos(h.absolutePos(BlockPos.ZERO).getX() + 8192, 200, h.absolutePos(BlockPos.ZERO).getZ());
+		h.assertFalse(level.isLoaded(far), "far chunk not loaded");
+		// As a crash leaves it: the saved data holds an expired entry for a chunk saved with the temporary block in it.
+		TempBlockData.Entry entry = new TempBlockData.Entry(level.dimension(), far, AIR, GLASS, level.getGameTime() - 1);
+		CompoundTag tag = new CompoundTag();
+		tag.put("entries", TempBlockData.Entry.CODEC.listOf().encodeStart(NbtOps.INSTANCE, List.of(entry)).getOrThrow());
+		TempBlockData temp = TempBlockData.TYPE.codec().parse(NbtOps.INSTANCE, tag).getOrThrow();
+		temp.tick(s);
+		h.assertValueEqual(temp.active(), 1, "kept while its chunk is unloaded");
+		h.assertValueEqual(temp.waiting(), 1, "waiting for the chunk");
+		h.assertFalse(level.isLoaded(far), "tick never loads the chunk");
+		temp.tick(s);
+		LevelChunk chunk = level.getChunk(far.getX() >> 4, far.getZ() >> 4);
+		chunk.setBlockState(far, GLASS, Block.UPDATE_SKIP_ALL_SIDEEFFECTS); // the chunk as saved, with the temporary block
+		temp.onChunkLoad(level, chunk); // what CHUNK_LOAD does
+		h.assertValueEqual(chunk.getBlockState(far), AIR, "restored on load");
+		h.assertValueEqual(temp.active(), 0, "entries");
+		h.assertValueEqual(temp.waiting(), 0, "waiting");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
+	public void undoRevokesRunningCast(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 2);
+		WorldTerrainEdits edits = local(h, ClaimCheck.NONE);
+		EditBatch b = edits.begin(ctx(h, p, kitOf(edits)), abs(h, 16, 6, 16), EditTier.MEDIUM);
+		for (int x = 14; x <= 16; x++) h.assertTrue(b.set(abs(h, x, 6, 16), GLASS), "set " + x);
+		for (int i = 0; i < WorldTerrainEdits.FLUSH_TICKS; i++) edits.tick();
+		List<LoggedCast> logged = edits.log().casts(p.getUUID());
+		h.assertValueEqual(logged.size(), 1, "periodic flush of a running cast");
+		h.assertValueEqual(logged.get(0).edits().size(), 3, "edits flushed");
+		h.assertTrue(b.set(abs(h, 17, 6, 16), GLASS), "queued, not yet applied");
+		h.assertValueEqual(edits.undo(p.getUUID(), 1), new UndoReport(3, 1, 0), "undo report");
+		h.assertFalse(b.set(abs(h, 18, 6, 16), GLASS), "the undone cast's batch refuses");
+		b.close();
+		for (int i = 0; i < 3; i++) edits.tick();
+		for (int x = 14; x <= 18; x++) h.assertBlockPresent(Blocks.AIR, new BlockPos(x, 6, 16));
+		h.assertTrue(edits.log().casts(p.getUUID()).isEmpty(), "nothing logged after the undo");
+		h.succeed();
 	}
 }

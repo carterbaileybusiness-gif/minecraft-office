@@ -23,6 +23,7 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerEntityLevelChangeEvents;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -71,14 +72,23 @@ public final class MagicMod {
 
 	/**
 	 * The world kit: installed on {@code SERVER_STARTED} (after restoring temporary blocks that expired while the server was
-	 * down), ticked at the end of every server tick, and on {@code SERVER_STOPPING} the queue is applied, the logs written and
-	 * every temporary block restored (after {@code CastService.stop} ended the lingering effects).
+	 * down and deleting half-written edit logs), ticked at the end of every server tick, and on {@code SERVER_STOPPING} the queue
+	 * is applied, the logs written and every temporary block restored (after {@code CastService.stop} ended the lingering
+	 * effects). A chunk's temporary blocks are restored before it unloads (and saves), and expired ones when it loads.
 	 */
 	private static void registerTerrainHooks() {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			TempBlockData temp = TempBlockData.get(server);
 			temp.tick(server);
-			MagicServer.setKit(new SpellKit(new WorldTerrainEdits(server, ClaimCheck.forServer(server), temp, EditLog.forServer(server)), temp));
+			EditLog log = EditLog.forServer(server);
+			log.deleteStaleTemp();
+			MagicServer.setKit(new SpellKit(new WorldTerrainEdits(server, ClaimCheck.forServer(server), temp, log), temp));
+		});
+		ServerChunkEvents.CHUNK_UNLOAD.register((level, chunk) -> {
+			if (MagicServer.kit().temp() instanceof TempBlockData temp) temp.onChunkUnload(level, chunk);
+		});
+		ServerChunkEvents.CHUNK_LOAD.register((level, chunk, generated) -> {
+			if (MagicServer.kit().temp() instanceof TempBlockData temp) temp.onChunkLoad(level, chunk);
 		});
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			if (MagicServer.kit().terrain() instanceof WorldTerrainEdits edits) edits.tick();

@@ -19,7 +19,7 @@ import xaero.pac.common.server.api.OpenPACServerAPI;
 
 /**
  * Claims from Open Parties and Claims: a chunk claimed by any UUID but the caster's (another player, a party mate, the
- * server) is protected. Lookups are cached per chunk for one batch. A lookup that throws counts as claimed.
+ * server) is protected. Lookups are cached per chunk for one batch. A lookup that throws or fails to link counts as claimed.
  *
  * <p>OPAC classes are touched only by {@link Api}, which is loaded only when {@link #api} runs (after the mod is known to be
  * installed), so this class itself loads without OPAC.
@@ -51,7 +51,7 @@ public final class OpacClaims implements ClaimCheck {
 			try {
 				UUID owner = lookup.owner(level, cx, cz);
 				claimed = owner != null && !owner.equals(caster);
-			} catch (RuntimeException e) {
+			} catch (RuntimeException | LinkageError e) { // a broken or changed OPAC API must never let an edit through
 				if (!warned) {
 					warned = true;
 					LOGGER.warn("Magic terrain: claim lookup failed; treating the chunk as claimed", e);
@@ -71,9 +71,13 @@ public final class OpacClaims implements ClaimCheck {
 	private static final class Api implements ClaimLookup {
 		private final MinecraftServer server;
 
+		/** Resolves the API and links the lookup once now, so a mismatch shows at startup (and falls back) instead of mid-cast. */
 		Api(MinecraftServer server) {
 			this.server = server;
-			if (OpenPACServerAPI.get(server).getServerClaimsManager() == null) throw new IllegalStateException("no OPAC claims manager");
+			var manager = OpenPACServerAPI.get(server).getServerClaimsManager();
+			if (manager == null) throw new IllegalStateException("no OPAC claims manager");
+			IPlayerChunkClaimAPI probe = manager.get(server.overworld().dimension().identifier(), 0, 0);
+			if (probe != null) probe.getPlayerId();
 		}
 
 		@Override

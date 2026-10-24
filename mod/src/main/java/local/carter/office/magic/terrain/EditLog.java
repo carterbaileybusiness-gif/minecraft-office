@@ -43,13 +43,23 @@ public final class EditLog {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger("office");
 	private static final String EXT = ".nbt";
+	private static final String TMP = ".tmp";
 
-	/** One block change: what was there when the change was applied, and what the change left. */
-	public record LoggedEdit(BlockPos pos, BlockState before, BlockState after) {
+	/**
+	 * One block change: what was there when the change was applied, and what the change left. {@code launched}: the block flew
+	 * off as a falling block; undo leaves it alone (the debris may have landed as a block somewhere, so putting it back would
+	 * duplicate it).
+	 */
+	public record LoggedEdit(BlockPos pos, BlockState before, BlockState after, boolean launched) {
 		public static final Codec<LoggedEdit> CODEC = RecordCodecBuilder.create(i -> i.group(
 				BlockPos.CODEC.fieldOf("pos").forGetter(LoggedEdit::pos),
 				BlockState.CODEC.fieldOf("before").forGetter(LoggedEdit::before),
-				BlockState.CODEC.fieldOf("after").forGetter(LoggedEdit::after)).apply(i, LoggedEdit::new));
+				BlockState.CODEC.fieldOf("after").forGetter(LoggedEdit::after),
+				Codec.BOOL.optionalFieldOf("launched", false).forGetter(LoggedEdit::launched)).apply(i, LoggedEdit::new));
+
+		public LoggedEdit(BlockPos pos, BlockState before, BlockState after) {
+			this(pos, before, after, false);
+		}
 	}
 
 	/** Every applied edit of one cast (all of its batches), in the order applied. */
@@ -66,7 +76,7 @@ public final class EditLog {
 		}
 	}
 
-	/** Blocks put back, casts undone, and blocks left alone because they changed since the cast. */
+	/** Blocks put back, casts undone, and blocks left alone (changed since the cast, or launched as debris). */
 	public record UndoReport(int restored, int casts, int skipped) {
 		public UndoReport plus(UndoReport o) {
 			return new UndoReport(restored + o.restored, casts + o.casts, skipped + o.skipped);
@@ -100,7 +110,7 @@ public final class EditLog {
 		try {
 			Files.createDirectories(playerDir);
 			Tag tag = LoggedCast.CODEC.encodeStart(NbtOps.INSTANCE, cast).getOrThrow();
-			Path tmp = playerDir.resolve(file.getFileName() + ".tmp");
+			Path tmp = playerDir.resolve(file.getFileName() + TMP);
 			NbtIo.writeCompressed((CompoundTag) tag, tmp);
 			Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
 		} catch (IOException | RuntimeException e) {
@@ -123,7 +133,7 @@ public final class EditLog {
 
 	/**
 	 * Undoes the player's newest {@code n} casts, newest first: each edit (last applied first) goes back to {@code before} only
-	 * if the block is still the edit's {@code after}; the others are skipped. Undone casts leave the log.
+	 * if the block is still the edit's {@code after}; the others, and launched blocks, are skipped. Undone casts leave the log.
 	 */
 	public UndoReport undo(MinecraftServer server, UUID player, int n) {
 		int restored = 0;
@@ -144,7 +154,7 @@ public final class EditLog {
 			List<LoggedEdit> edits = cast.edits();
 			for (int j = edits.size() - 1; j >= 0; j--) {
 				LoggedEdit e = edits.get(j);
-				if (level.getBlockState(e.pos()).equals(e.after())) {
+				if (!e.launched() && level.getBlockState(e.pos()).equals(e.after())) {
 					level.setBlock(e.pos(), e.before(), Block.UPDATE_ALL);
 					restored++;
 				} else {
@@ -153,6 +163,16 @@ public final class EditLog {
 			}
 		}
 		return new UndoReport(restored, casts, skipped);
+	}
+
+	/** Deletes {@code *.tmp} files a crash left mid-write (server start). */
+	public void deleteStaleTemp() {
+		if (!Files.isDirectory(dir)) return;
+		try (Stream<Path> files = Files.walk(dir, 2)) {
+			files.filter(f -> f.getFileName().toString().endsWith(TMP)).forEach(EditLog::delete);
+		} catch (IOException e) {
+			LOGGER.warn("Magic terrain: could not clean {}", dir, e);
+		}
 	}
 
 	private List<Entry> entries(UUID player) {
