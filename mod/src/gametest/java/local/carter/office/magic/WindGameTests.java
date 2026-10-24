@@ -33,11 +33,11 @@ public class WindGameTests {
 	@GameTest(structure = MagicTestKit.ARENA)
 	public void gustLaunchesZombie(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 1);
-		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 4, 7));
+		Zombie z = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 7));
 		MagicTestKit.aim(p, new BlockPos(16, 5, 7));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		Vec3 start = z.position();
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.GUST, 0f), Result.CAST, "result");
-		// NoAI dummies never simulate their own movement: the throw shows in the velocity.
 		Vec3 v = z.getDeltaMovement();
 		h.assertTrue(v.y >= 0.3, "upward velocity " + v);
 		h.assertTrue(v.dot(ahead(h)) > 1.0, "thrown away along +Z " + v);
@@ -47,7 +47,14 @@ public class WindGameTests {
 		h.assertValueEqual(fx.size(), 1, "one fx");
 		h.assertTrue(fx.get(0).entities().length == 1 && fx.get(0).entities()[0] == z.getId(), "fx names the zombie");
 		h.assertValueEqual(fx.get(0).data()[0], 6f, "range at charge 0");
-		h.succeed();
+		// A movable dummy really flies: up and away along +Z.
+		double[] peak = {0};
+		h.onEachTick(() -> peak[0] = Math.max(peak[0], z.getY() - start.y));
+		h.runAfterDelay(10, () -> {
+			h.assertTrue(z.position().subtract(start).dot(ahead(h)) > 2.0, "thrown along +Z, moved " + z.position().subtract(start));
+			h.assertTrue(peak[0] > 0.3, "lifted off the ground, peak " + peak[0]);
+			h.succeed();
+		});
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA)
@@ -55,7 +62,7 @@ public class WindGameTests {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 1);
 		ServerPlayer other = MagicTestKit.otherPlayer(h, new BlockPos(16, 4, 7));
 		Villager villager = MagicTestKit.villager(h, new BlockPos(18, 4, 8));
-		Zombie control = MagicTestKit.dummy(h, new BlockPos(14, 4, 8));
+		Zombie control = MagicTestKit.movableDummy(h, new BlockPos(14, 4, 8));
 		Vec3 at = other.position();
 		Vec3 v = other.getDeltaMovement();
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.GUST, 1f), Result.CAST, "result");
@@ -75,8 +82,8 @@ public class WindGameTests {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 1);
 		// A one-wide pillar 2 ahead hides the zombie straight behind it; the one to the side stands in the open.
 		MagicTestKit.fill(h, new BlockPos(16, 4, 6), new BlockPos(16, 7, 6), Blocks.STONE);
-		Zombie hidden = MagicTestKit.dummy(h, new BlockPos(16, 4, 8));
-		Zombie open = MagicTestKit.dummy(h, new BlockPos(18, 4, 8));
+		Zombie hidden = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 8));
+		Zombie open = MagicTestKit.movableDummy(h, new BlockPos(18, 4, 8));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.GUST, 1f), Result.CAST, "result");
 		h.assertValueEqual(hidden.getDeltaMovement().horizontalDistance(), 0.0, "hidden zombie velocity");
@@ -94,7 +101,7 @@ public class WindGameTests {
 		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 1);
 		ItemEntity item = MagicTestKit.item(h, new BlockPos(16, 4, 8));
 		// 7.5 ahead: outside the tap's 6, inside the full charge's 8.
-		Zombie far = MagicTestKit.dummy(h, new BlockPos(16, 4, 12));
+		Zombie far = MagicTestKit.movableDummy(h, new BlockPos(16, 4, 12));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.GUST, 0f), Result.CAST, "tap");
 		h.assertTrue(item.getDeltaMovement().dot(ahead(h)) > 0.5, "item blown " + item.getDeltaMovement());
