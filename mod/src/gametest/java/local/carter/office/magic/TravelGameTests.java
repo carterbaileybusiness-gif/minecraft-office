@@ -6,6 +6,7 @@ import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.cast.TeleportChannel;
 import local.carter.office.magic.cast.Travel;
@@ -18,10 +19,12 @@ import local.carter.office.magic.net.MagicPayloads.TravelRoster;
 import local.carter.office.magic.spell.SpellIds;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -662,5 +665,66 @@ public class TravelGameTests {
 			h.assertValueEqual(rec.rosters(p).get(1).state(), TravelRoster.State.TRAVELLING, "with the fresh state");
 			h.succeed();
 		});
+	}
+
+	// ---- Final review I2, M12: stale charges, spectators ----
+
+	/** The F key as the server gets it: vanilla swaps the hands and ends the item use without a release. */
+	private static void swapHands(ServerPlayer p) {
+		p.connection.handlePlayerAction(new ServerboundPlayerActionPacket(ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND,
+				BlockPos.ZERO, Direction.DOWN));
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 40)
+	public void swappingHandsEndsTheChargeForTravel(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerPlayer f = friend(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
+		h.assertTrue(CastService.charging(p), "charging");
+		// Positive control: a real charge is busy.
+		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.BUSY, "busy while charging");
+		h.assertValueEqual(Travel.roster(p).state(), TravelRoster.State.BUSY, "Friends page while charging");
+		swapHands(p);
+		h.assertFalse(p.isUsingItem(), "vanilla ended the use");
+		h.assertTrue(MagicItems.GRIMOIRE == p.getMainHandItem().getItem(), "the grimoire is in the main hand now");
+		h.assertFalse(CastService.charging(p), "no charge left behind");
+		h.assertValueEqual(Travel.roster(p).state(), TravelRoster.State.READY, "Friends page after the swap");
+		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.SENT, "request after the swap");
+		h.assertTrue(rec.messageKeys(p).contains("magic.office.travel_sent"), "caster told " + rec.messageKeys(p));
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 40)
+	public void cancelChargeStopsTheServerUse(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerPlayer f = friend(h);
+		MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
+		h.assertTrue(p.isUsingItem() && CastService.charging(p), "charging");
+		// What the client sends when it drops a charge for typing: nothing cast, the use over for everyone.
+		CastService.cancelCharge(p);
+		h.assertFalse(p.isUsingItem(), "the server's use is over (others stop drawing the circle)");
+		h.assertFalse(CastService.charging(p), "not charging");
+		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.SENT, "request after the cancel");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 40)
+	public void noTravelRequestsToSpectators(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerPlayer f = friend(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		f.setGameMode(GameType.SPECTATOR);
+		h.assertValueEqual(Travel.request(p, f.getUUID()), Travel.Result.OFFLINE, "a spectating friend counts as offline");
+		h.assertTrue(rec.chats(f).isEmpty(), "the spectator got no request line");
+		h.assertTrue(Travel.pendingFrom(p).isEmpty(), "no request open");
+		// Positive control: back in survival the same request goes out.
+		f.setGameMode(GameType.SURVIVAL);
+		int id = ask(h, rec, p, f);
+		// A friend who turned spectator since cannot accept: nothing starts.
+		f.setGameMode(GameType.SPECTATOR);
+		h.assertValueEqual(Travel.accept(f, id), Travel.Answer.CANNOT, "a spectator accepting");
+		h.assertFalse(TeleportChannel.channeling(p), "no channel");
+		h.succeed();
 	}
 }

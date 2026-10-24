@@ -15,6 +15,9 @@ import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.terrain.ClaimCheck;
+import local.carter.office.magic.terrain.OpacClaims;
+import local.carter.office.magic.terrain.WorldTerrainEdits;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
@@ -33,15 +36,17 @@ import net.minecraft.world.phys.Vec3;
  * <ul>
  * <li><b>Shift + cast</b> marks home: the feet block, in any dimension, replacing the old home (one home per player). It sets
  * its own cooldown ({@link #MARK_KEY}, {@link #MARK_COOLDOWN_TICKS}) so a double press cannot mark twice; Recall's 60 s cooldown
- * never blocks it ({@link #cooldownKey}).
+ * never blocks it ({@link #cooldownKey}). Never inside another player's Open Parties and Claims claim ({@link #homeClaims}):
+ * {@link #HOME_CLAIMED_KEY}, nothing changes, so no one keeps a way back into someone else's base.
  * <li><b>Cast</b> with a home starts the shared 3 s {@link TeleportChannel} toward it (interrupted by damage, death, disconnect
  * or a dimension change; no cost then). When it completes the caster is home and the 60 s cooldown, which Travel shares, starts.
  * </ul>
  *
  * <p><b>Teleport safety</b> ({@link #destination}) is {@link TeleportChannel#safeSpot} around the home cell, decided when the
  * channel starts (so a doomed recall fizzles free instead of making the player wait 3 s) and again at the end. The home
- * dimension must still exist. If nothing is safe the player stays, is told {@code magic.office.home_blocked} and pays no
- * cooldown; the home is kept (the obstruction may be cleared later). The home chunk is loaded on demand and held by a PORTAL
+ * dimension must still exist. If nothing is safe the player stays, is told {@code magic.office.home_blocked} and pays only a
+ * short {@link #BLOCKED_COOLDOWN_TICKS} Recall cooldown (each try loads the home chunk, so it must not be spammed); the home
+ * is kept (the obstruction may be cleared later). The home chunk is loaded on demand and held by a PORTAL
  * ticket for the channel.
  */
 public final class RecallSpell implements Spell {
@@ -56,6 +61,10 @@ public final class RecallSpell implements Spell {
 	public static final Identifier MARK_KEY = OfficeMod.id("recall_mark");
 	/** Action-bar message when the home cannot be reached safely. */
 	public static final String HOME_BLOCKED_KEY = "magic.office.home_blocked";
+	/** Recall's cooldown after a blocked start, in ticks (3 s): the try loaded the home chunk. Never lowers a longer one. */
+	public static final int BLOCKED_COOLDOWN_TICKS = 60;
+	/** Action-bar message when Mark Home is refused inside another player's claim. */
+	public static final String HOME_CLAIMED_KEY = "magic.office.home_claimed";
 	/** How far from the home cell a safe cell is looked for. */
 	public static final int SEARCH_XZ = TeleportChannel.SEARCH_XZ;
 	public static final int SEARCH_Y = TeleportChannel.SEARCH_Y;
@@ -100,10 +109,12 @@ public final class RecallSpell implements Spell {
 
 	private static CastOutcome markHome(CastContext ctx) {
 		ServerPlayer p = ctx.caster();
+		BlockPos cell = p.blockPosition();
+		if (homeClaims().forBatch(p, ctx.level(), cell, 0).test(cell)) return CastOutcome.fizzle(HOME_CLAIMED_KEY);
 		long now = ctx.level().getGameTime();
 		MagicData d = MagicAttachments.get(p);
 		Long existing = d.readyAt().get(MARK_KEY);
-		MagicAttachments.set(p, d.withHome(Optional.of(GlobalPos.of(ctx.level().dimension(), p.blockPosition())))
+		MagicAttachments.set(p, d.withHome(Optional.of(GlobalPos.of(ctx.level().dimension(), cell)))
 				.withReady(MARK_KEY, Math.max(existing == null ? Long.MIN_VALUE : existing, now + MARK_COOLDOWN_TICKS)));
 		MagicServer.sender().actionBar(p, Component.translatable("magic.office.home_marked"));
 		// Mark Home's fx: a short flash (duration 0, data[0] = 1).
@@ -118,7 +129,14 @@ public final class RecallSpell implements Spell {
 		if (home.isEmpty()) return CastOutcome.fizzle("magic.office.no_home");
 		Home trip = new Home(home.get());
 		TeleportChannel.Landing at = trip.resolve(p);
-		if (at == null) return CastOutcome.fizzle(HOME_BLOCKED_KEY);
+		if (at == null) {
+			// The search loaded the home chunk (maybe in another dimension): a short cooldown, so taps can't keep loading it.
+			MagicData d = MagicAttachments.get(p);
+			Long existing = d.readyAt().get(SpellIds.RECALL);
+			long until = ctx.level().getGameTime() + BLOCKED_COOLDOWN_TICKS;
+			MagicAttachments.set(p, d.withReady(SpellIds.RECALL, Math.max(existing == null ? Long.MIN_VALUE : existing, until)));
+			return CastOutcome.fizzle(HOME_BLOCKED_KEY);
+		}
 		if (!TeleportChannel.start(p, trip)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		// The check above loaded the home chunk; hold it (and its neighbours) so the teleport does not load it a second time.
 		at.level().getChunkSource().addTicketWithRadius(TicketType.PORTAL, ChunkPos.containing(BlockPos.containing(at.pos())), 1);
@@ -143,6 +161,25 @@ public final class RecallSpell implements Spell {
 	public static @Nullable Vec3 destination(ServerPlayer p, GlobalPos home) {
 		ServerLevel level = p.level().getServer().getLevel(home.dimension());
 		return level == null ? null : TeleportChannel.safeSpot(p, level, home.pos(), false);
+	}
+
+	private static @Nullable ClaimCheck testHomeClaims;
+
+	/**
+	 * The claims Mark Home respects: the terrain kit's Open Parties and Claims rule, asked as the caster. Without OPAC there are
+	 * no claims to respect: the fallback rule's circles round homes, beds and emitters are a terrain heuristic, and refusing a
+	 * home near a friend's would only get in the way.
+	 */
+	static ClaimCheck homeClaims() {
+		ClaimCheck test = testHomeClaims;
+		if (test != null) return test;
+		ClaimCheck c = MagicServer.kit().terrain() instanceof WorldTerrainEdits edits ? edits.claims() : ClaimCheck.NONE;
+		return c instanceof OpacClaims ? c : ClaimCheck.NONE;
+	}
+
+	/** GameTests only: the claims Mark Home asks instead of {@link #homeClaims}'s (null restores them). */
+	public static void setHomeClaimsForTesting(@Nullable ClaimCheck c) {
+		testHomeClaims = c;
 	}
 
 	/** Recall's trip: the home, resolved again when the channel ends; the caster keeps their facing. */

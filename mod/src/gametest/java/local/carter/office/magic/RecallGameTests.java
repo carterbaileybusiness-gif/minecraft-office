@@ -2,6 +2,7 @@ package local.carter.office.magic;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -16,6 +17,7 @@ import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.SpellRegistry;
+import local.carter.office.magic.terrain.OpacClaims;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
@@ -375,8 +377,9 @@ public class RecallGameTests {
 		MagicTestKit.fill(h, centre.offset(-r, -dyDown, -r), centre.offset(r, dyUp, r), b);
 	}
 
+	/** Final review M4: a blocked start costs a short cooldown only, so taps can't keep loading the home chunk. */
 	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
-	public void blockedHomeFizzlesFreeAtTheStart(GameTestHelper h) {
+	public void blockedHomeFizzlesAtTheStartWithAShortCooldown(GameTestHelper h) {
 		ServerPlayer p = caster(h);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		setHome(h, p, HOME);
@@ -384,10 +387,19 @@ public class RecallGameTests {
 		h.assertValueEqual(recall(p), Result.FIZZLED, "result");
 		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.home_blocked"), "message");
 		h.assertFalse(RecallSpell.channeling(p), "no channel");
-		h.assertValueEqual(cooldownLeft(h, p), 0L, "no cooldown");
+		h.assertValueEqual(cooldownLeft(h, p), (long) RecallSpell.BLOCKED_COOLDOWN_TICKS, "a 3 s cooldown, not Recall's 60 s");
 		h.assertValueEqual(rec.fx(p).size(), 0, "no fx");
 		h.assertTrue(home(p).isPresent(), "the home is kept");
-		h.succeed();
+		h.assertValueEqual(recall(p), Result.COOLDOWN, "a second tap at once");
+		// Mark Home has its own key: never blocked by it.
+		h.runAfterDelay(RecallSpell.BLOCKED_COOLDOWN_TICKS, () -> {
+			h.assertValueEqual(cooldownLeft(h, p), 0L, "over after 3 s");
+			// Positive control: cleared, the same home recalls.
+			fillAround(h, HOME, 3, 0, 3, Blocks.AIR);
+			h.setBlock(HOME.below(), Blocks.STONE);
+			h.assertValueEqual(recall(p), Result.CAST, "cleared home");
+			h.succeed();
+		});
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
@@ -431,7 +443,7 @@ public class RecallGameTests {
 		MagicTestKit.fill(h, HOME.offset(-3, 0, -3), HOME.offset(3, 0, 3), Blocks.LAVA); // a lava lake over the floor
 		h.assertValueEqual(recall(p), Result.FIZZLED, "lava all around");
 		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.home_blocked"), "message");
-		h.assertValueEqual(cooldownLeft(h, p), 0L, "no cooldown");
+		h.assertValueEqual(cooldownLeft(h, p), (long) RecallSpell.BLOCKED_COOLDOWN_TICKS, "only the short blocked cooldown");
 		assertStayed(h, p, "stayed");
 		h.succeed();
 	}
@@ -460,12 +472,13 @@ public class RecallGameTests {
 		// Mid-air, well over a drop of three blocks: the arena floor is 8 blocks below.
 		setHome(h, p, new BlockPos(16, 12, 28));
 		h.assertValueEqual(recall(p), Result.FIZZLED, "mid-air home");
+		MagicAttachments.set(p, MagicAttachments.get(p).withReadyAt(Map.of())); // the short blocked cooldown
 		// Below the world: nothing there at all.
 		ServerLevel level = h.getLevel();
 		setHome(p, GlobalPos.of(level.dimension(), new BlockPos(h.absolutePos(HOME).getX(), level.getMinY() - 20, h.absolutePos(HOME).getZ())));
 		h.assertValueEqual(recall(p), Result.FIZZLED, "home below the world");
 		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.home_blocked", "magic.office.home_blocked"), "messages");
-		h.assertValueEqual(cooldownLeft(h, p), 0L, "no cooldown");
+		h.assertValueEqual(cooldownLeft(h, p), (long) RecallSpell.BLOCKED_COOLDOWN_TICKS, "only the short blocked cooldown");
 		assertStayed(h, p, "stayed");
 		h.succeed();
 	}
@@ -666,6 +679,35 @@ public class RecallGameTests {
 		h.assertTrue(rec.messageKeys().contains("magic.office.signs"), "message " + rec.messageKeys());
 		h.assertFalse(RecallSpell.channeling(p), "no channel");
 		h.assertValueEqual(cooldownLeft(h, p), 0L, "no cooldown");
+		h.succeed();
+	}
+
+	// ---- Final review M11: no home inside another player's claim ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 40)
+	public void markHomeRefusedInsideAnotherPlayersClaim(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerPlayer owner = MagicTestKit.otherPlayer(h, new BlockPos(28, 4, 28));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		BlockPos at = p.blockPosition();
+		// Open Parties and Claims says the owner claimed the caster's chunk. Asked for this test's caster only, and set and
+		// cleared within this tick, so concurrent tests never see it.
+		OpacClaims theirs = new OpacClaims((level, cx, cz) -> cx == at.getX() >> 4 && cz == at.getZ() >> 4 ? owner.getUUID() : null);
+		OpacClaims mine = new OpacClaims((level, cx, cz) -> p.getUUID());
+		try {
+			RecallSpell.setHomeClaimsForTesting((caster, level, origin, r) -> caster == p ? theirs.forBatch(caster, level, origin, r) : pos -> false);
+			p.setShiftKeyDown(true);
+			h.assertValueEqual(recall(p), Result.FIZZLED, "Mark Home in someone else's claim");
+			h.assertTrue(home(p).isEmpty(), "no home marked");
+			h.assertValueEqual(rec.messageKeys(), List.of(RecallSpell.HOME_CLAIMED_KEY), "message");
+			h.assertValueEqual(MagicAttachments.get(p).cooldownLeft(RecallSpell.MARK_KEY, now(h)), 0L, "no mark cooldown");
+			// Positive control: in the caster's own claim the same press marks home.
+			RecallSpell.setHomeClaimsForTesting((caster, level, origin, r) -> caster == p ? mine.forBatch(caster, level, origin, r) : pos -> false);
+			h.assertValueEqual(recall(p), Result.CAST, "Mark Home in your own claim");
+			h.assertValueEqual(home(p).map(GlobalPos::pos), Optional.of(at), "home marked");
+		} finally {
+			RecallSpell.setHomeClaimsForTesting(null);
+		}
 		h.succeed();
 	}
 }

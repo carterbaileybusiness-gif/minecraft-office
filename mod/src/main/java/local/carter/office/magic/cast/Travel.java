@@ -88,8 +88,8 @@ public final class Travel {
 
 	/**
 	 * {@code caster} asks to travel to {@code targetId}. Checked in order: bound; a grimoire in either hand; not channeling,
-	 * answering hand signs or charging, alive and not a spectator; Recall's cooldown ready; not themselves; the target online
-	 * and accepting requests; no other open request; not declined by (or expired with) that friend in the last
+	 * answering hand signs or charging, alive and not a spectator; Recall's cooldown ready; not themselves; the target online,
+	 * not a spectator (the roster hides them: one counts as offline) and accepting requests; no other open request; not declined by (or expired with) that friend in the last
 	 * {@link #RETRY_TICKS}; the friend has fewer than {@link #MAX_OPEN_PER_FRIEND} requests waiting. A refusal goes to the
 	 * caster's action bar and changes nothing.
 	 */
@@ -119,7 +119,7 @@ public final class Travel {
 		if (cooldownLeft(caster) > 0) return Result.COOLDOWN;
 		if (caster.getUUID().equals(targetId)) return Result.SELF;
 		ServerPlayer target = caster.level().getServer().getPlayerList().getPlayer(targetId);
-		if (target == null) return Result.OFFLINE;
+		if (target == null || spectator(target)) return Result.OFFLINE;
 		if (!MagicAttachments.get(target).travel()) return Result.TRAVEL_OFF;
 		if (BY_CASTER.containsKey(caster.getUUID())) return Result.PENDING;
 		if (retryLeft(caster, targetId) > 0) return Result.TOO_SOON;
@@ -170,8 +170,9 @@ public final class Travel {
 	// ---------------------------------------------------------------- answering
 
 	/**
-	 * {@code target} accepts request {@code id}. The caster is checked again (online, alive, not busy, Recall's cooldown ready)
-	 * and so is the landing beside {@code target}; then the caster's channel starts (one fx, nothing spent yet).
+	 * {@code target} accepts request {@code id}. The caster is checked again (online, alive, not busy, Recall's cooldown ready),
+	 * {@code target} must not be a spectator, and the landing beside {@code target} is checked; then the caster's channel
+	 * starts (one fx, nothing spent yet).
 	 */
 	public static Answer accept(ServerPlayer target, int id) {
 		Request req = take(target, id);
@@ -185,7 +186,8 @@ public final class Travel {
 			return Answer.GONE;
 		}
 		Component why = null;
-		if (busy(caster)) why = Component.translatable("magic.office.travel_busy");
+		if (spectator(target)) why = Component.translatable("magic.office.travel_offline");
+		else if (busy(caster)) why = Component.translatable("magic.office.travel_busy");
 		else if (cooldownLeft(caster) > 0) why = Component.translatable("magic.office.travel_cooldown", seconds(cooldownLeft(caster)));
 		Friend trip = new Friend(target.getUUID(), req.targetName());
 		if (why == null && trip.resolve(caster) == null) why = Component.translatable("magic.office.travel_blocked", req.targetName());

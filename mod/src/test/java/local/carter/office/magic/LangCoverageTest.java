@@ -35,7 +35,9 @@ class LangCoverageTest {
 			"tab_friends", "friends_title", "friends_none", "friends_page", "friend_ask", "why_off", "why_cooldown", "why_busy",
 			"why_waiting", "why_travelling", "travel_title", "travel_blurb", "panel_ready", "panel_cooldown", "panel_waiting",
 			"panel_travelling", "panel_busy", "panel_requests_on", "panel_requests_off", "toggle_off", "toggle_on", "friends_hint",
-			"travel_too_soon", "travel_friend_full", "why_one");
+			"travel_too_soon", "travel_friend_full", "why_one",
+			// Final review M11: no home inside someone else's claim.
+			"home_claimed");
 
 	private static JsonObject lang() throws Exception {
 		try (InputStream in = LangCoverageTest.class.getResourceAsStream("/assets/office/lang/en_us.json")) {

@@ -9,6 +9,7 @@ import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Motion;
@@ -24,6 +25,7 @@ import local.carter.office.magic.spell.fire.FireballBarrage;
 import local.carter.office.magic.spell.fire.FlameDash;
 import local.carter.office.magic.spell.fire.Meteor;
 import local.carter.office.magic.spell.fire.MeteorGeometry;
+import local.carter.office.magic.terrain.TempBlockData;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
@@ -715,6 +717,45 @@ public class FireGameTests {
 			h.assertTrue(removed >= 400, "blocks removed " + removed);
 			h.assertTrue(MagicTestKit.count(h, Blocks.MAGMA_BLOCK) + MagicTestKit.count(h, Blocks.BLACKSTONE) > 0,
 					"a scorched floor, within what the budget leaves");
+			h.succeed();
+		});
+	}
+
+	// ---- Final review C1: Meteor's rim never throws a temporary block ----
+
+	/**
+	 * The crater's rim band (the top floor layer 5..7.5 out) is temporary blue ice: Meteor launches its rim as debris, which
+	 * would make real blue ice of it. Every rim cell stays a live temporary block; the stone inside still craters (the control).
+	 */
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 140)
+	public void meteorNeverThrowsTemporaryBlocks(GameTestHelper h) {
+		TempBlockData temp = (TempBlockData) MagicServer.kit().temp();
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 7);
+		fence(h);
+		BlockPos centre = BlockPos.containing(FLOOR_12_AHEAD);
+		List<BlockPos> rim = new ArrayList<>();
+		for (int x = 0; x < MagicTestKit.SIZE_X; x++) {
+			for (int z = 0; z < MagicTestKit.SIZE_Z; z++) {
+				double d = Math.sqrt((x - centre.getX()) * (x - centre.getX()) + (z - centre.getZ()) * (z - centre.getZ()));
+				if (d < 5 || d > 7.5) continue;
+				BlockPos rel = new BlockPos(x, MagicTestKit.FLOOR_TOP, z);
+				h.setBlock(rel, Blocks.AIR);
+				h.assertTrue(temp.place(h.getLevel(), h.absolutePos(rel), Blocks.BLUE_ICE.defaultBlockState(), 2000), "temporary rim at " + rel);
+				rim.add(rel);
+			}
+		}
+		aimAt(h, p, FLOOR_12_AHEAD);
+		long t0 = h.getTick();
+		h.assertValueEqual(MagicTestKit.castUltimate(p, METEOR), Result.CAST, "result");
+		h.runAtTickTime(t0 + 60, () -> {
+			h.assertBlockPresent(Blocks.AIR, centre); // the positive control: the crater
+			for (BlockPos rel : rim) {
+				h.assertBlockPresent(Blocks.BLUE_ICE, rel);
+				h.assertTrue(temp.isTemp(h.getLevel(), h.absolutePos(rel)), "still temporary at " + rel);
+			}
+			h.assertValueEqual(MagicTestKit.count(h, Blocks.BLUE_ICE), rim.size(), "no blue ice debris anywhere");
+			for (BlockPos rel : rim) temp.breakTemp(h.getLevel(), h.absolutePos(rel), null, false);
+			h.assertValueEqual(MagicTestKit.count(h, Blocks.BLUE_ICE), 0, "none left once they are restored");
 			h.succeed();
 		});
 	}

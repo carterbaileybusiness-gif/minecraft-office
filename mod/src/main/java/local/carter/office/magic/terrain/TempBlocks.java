@@ -3,6 +3,7 @@ package local.carter.office.magic.terrain;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -17,6 +18,14 @@ public interface TempBlocks {
 
 	/** True when {@code pos} holds a live temporary {@code state} placed here (placing it again refreshes its timer). */
 	default boolean holds(ServerLevel level, BlockPos pos, BlockState state) {
+		return false;
+	}
+
+	/**
+	 * True when {@code pos} holds a live temporary block (its entry, and its placed state still in the world). Terrain edits
+	 * never set, remove or launch such a cell: that would turn the temporary block into a real one.
+	 */
+	default boolean isTemp(Level level, BlockPos pos) {
 		return false;
 	}
 
