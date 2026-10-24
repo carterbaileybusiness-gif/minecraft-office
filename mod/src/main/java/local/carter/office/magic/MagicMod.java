@@ -1,6 +1,7 @@
 package local.carter.office.magic;
 
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.cast.ElementChoice;
 import local.carter.office.magic.cast.RecallSpell;
 import local.carter.office.magic.cast.SignChallenges;
 import local.carter.office.magic.command.MagicCommand;
@@ -79,6 +80,7 @@ public final class MagicMod {
 			if (entity instanceof ServerPlayer p) {
 				discardPending(p);
 				RecallSpell.interrupt(p, true);
+				ElementChoice.forget(p);
 			}
 		});
 		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, from, to) -> {
@@ -89,6 +91,7 @@ public final class MagicMod {
 			discardPending(handler.player);
 			RecallSpell.interrupt(handler.player, false);
 			CastService.forget(handler.player);
+			ElementChoice.forget(handler.player);
 		});
 	}
 

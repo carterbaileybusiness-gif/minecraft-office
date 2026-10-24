@@ -3,10 +3,14 @@ package local.carter.office.client.magic;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import local.carter.office.client.magic.hud.ManaBarHud;
+import local.carter.office.client.magic.screen.ElementChoiceScreen;
+import local.carter.office.client.magic.screen.GrimoireScreen;
 import local.carter.office.client.magic.screen.HandSignScreen;
 import local.carter.office.client.pointer.PointerClient;
 import local.carter.office.client.zoom.ZoomClient;
 import local.carter.office.client.zoom.ZoomController;
+import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
 import local.carter.office.magic.net.MagicPayloads.SignAnswer;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
 
@@ -25,6 +29,17 @@ public final class MagicClient {
 
 	public static void register() {
 		ClientPlayNetworking.registerGlobalReceiver(SignChallenge.TYPE, (payload, ctx) -> onChallenge(ctx.client(), payload));
+		ClientPlayNetworking.registerGlobalReceiver(OpenGrimoire.TYPE, (payload, ctx) -> onOpenGrimoire(ctx.client(), payload));
+		ManaBarHud.register();
+	}
+
+	/**
+	 * The grimoire was used: unbound → the element choice scene; bound (main hand) → the grimoire screen. A hand-sign prompt
+	 * that is still open keeps priority (closing it would fizzle the ultimate).
+	 */
+	private static void onOpenGrimoire(Minecraft mc, OpenGrimoire p) {
+		if (mc.player == null || mc.gui.screen() instanceof HandSignScreen) return;
+		mc.gui.setScreen(p.mode() == OpenGrimoire.Mode.CHOOSE ? new ElementChoiceScreen() : new GrimoireScreen());
 	}
 
 	/**

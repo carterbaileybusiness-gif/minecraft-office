@@ -73,8 +73,12 @@ public final class MagicServer {
 		ServerPlayNetworking.registerGlobalReceiver(SelectSpell.TYPE, (p, ctx) -> select(ctx.player(), p.spell()));
 	}
 
-	/** The {@code ChooseElement} receiver: only while a grimoire is in either hand (the choice screen is opened from one). */
+	/**
+	 * The {@code ChooseElement} receiver. A rebind that a Rebinding Seal opened (a seal still in either hand) spends one seal and
+	 * rebinds; otherwise a first binding needs a grimoire in either hand (the choice screen is opened from one) and no element.
+	 */
 	public static boolean chooseElement(ServerPlayer p, Element e) {
+		if (ElementChoice.rebind(p, e)) return true;
 		boolean holding = GrimoireItem.isGrimoire(p.getMainHandItem()) || GrimoireItem.isGrimoire(p.getOffhandItem());
 		return holding && ElementChoice.choose(p, e);
 	}
