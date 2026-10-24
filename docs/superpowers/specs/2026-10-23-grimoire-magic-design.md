@@ -93,7 +93,12 @@ Anti-goals
   emitter or another player's bed/home), and an op command `/magic undo <player> [n]` that restores that player's last n
   terrain-changing casts (edits logged to disk).
 - **Recall:** one home per player ("Mark Home" anywhere, any dimension); Recall = 3 s channel with a circle under you,
-  cancelled by taking damage, 60 s cooldown, no mana cost. Waystones stay in the pack.
+  cancelled by taking damage, 60 s cooldown, no mana cost. Waystones and JEI are removed from the pack **(Carter, 2026-10-24)**.
+- **Travel to a friend (Carter, 2026-10-24; details my call):** the grimoire screen gets a **Friends** page listing online
+  players; clicking one sends a request, the friend gets a chat prompt **[Accept] [Deny]** (expires after 30 s). On accept,
+  the caster channels 3 s like Recall (same circle, cancelled by damage) and lands at a safe spot beside the friend (same
+  safety rules as Recall, any dimension). Shares Recall's 60 s cooldown, no mana, available from level 1. One pending
+  request per caster; a friend can turn requests off with `/magic travel off`.
 - **Input precedence:** while aiming at a hologram, clicks belong to the monitor; R/V still work; typing mode blocks all
   magic keys. Hand-sign entry uses arrow keys and WASD while the sign prompt is open (movement paused during it).
 - **Pack:** clean swap — remove Wizards, Spell Engine, Spell Power and any deps only they need (incl. Better Combat
