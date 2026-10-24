@@ -33,6 +33,8 @@ import local.carter.office.client.pointer.PointerPoint;
 class MacHelperInWorldTest {
 	private final List<Message> sent = new ArrayList<>();
 	private final List<HelperConnection.Listener> listeners = new ArrayList<>();
+	private final List<Runnable> scheduled = new ArrayList<>();
+	private final List<Long> delays = new ArrayList<>();
 	private MacHelper helper;
 
 	@BeforeEach
@@ -52,7 +54,10 @@ class MacHelperInWorldTest {
 				@Override
 				public void close() {}
 			};
-		}, Runnable::run, (task, delayMs) -> {});
+		}, Runnable::run, (task, delayMs) -> {
+			scheduled.add(task);
+			delays.add(delayMs);
+		});
 		helper.setSetUp(true);
 		helper.setMoveWindowsOnJoin(true);
 		helper.start();
@@ -63,18 +68,29 @@ class MacHelperInWorldTest {
 		return listeners.get(listeners.size() - 1);
 	}
 
+	private void runScheduled() {
+		List<Runnable> now = new ArrayList<>(scheduled);
+		scheduled.clear();
+		now.forEach(Runnable::run);
+	}
+
 	private List<Message> sentOf(final Class<?> type) {
 		return sent.stream().filter(type::isInstance).toList();
 	}
 
 	@Test
-	void theFirstDisplayOfTheSessionGetsThePlayersWindowsAndLeavingPutsThemBack() {
+	void theWindowsGoToTheLowestSlotOnlineASecondAfterTheFirstDisplayAndLeavingPutsThemBack() {
+		helper.ensureDisplay(2, 1920, 1080);
+		listener().message(new Display(2, 31, 1920, 1080)); // hologram 2's chunk loaded first
+		assertTrue(sentOf(WindowsToDisplay.class).isEmpty(), "not at once");
+		assertEquals(List.of(MacHelper.WINDOWS_MOVE_DELAY_MS), delays);
 		helper.ensureDisplay(1, 1920, 1080);
 		listener().message(new Display(1, 30, 1920, 1080));
-		helper.ensureDisplay(2, 1920, 1080);
-		listener().message(new Display(2, 31, 1920, 1080));
+		assertEquals(1, scheduled.size(), "one move per connection");
+		runScheduled();
 		listener().message(new Display(1, 30, 1920, 1080)); // re-announced: no second move
-		assertEquals(List.of(new WindowsToDisplay(1, null)), sentOf(WindowsToDisplay.class));
+		runScheduled();
+		assertEquals(List.of(new WindowsToDisplay(1, null)), sentOf(WindowsToDisplay.class), "slot 1, the first hologram's display");
 		sent.clear();
 		helper.stop();
 		assertEquals(new WindowsBack(), sent.get(0), "windows go back before any display is removed");
@@ -84,10 +100,32 @@ class MacHelperInWorldTest {
 	@Test
 	void aReconnectedHelperMovesTheWindowsAgain() {
 		listener().message(new Display(1, 30, 1920, 1080));
+		runScheduled();
 		listener().disconnected(); // the helper crashed: macOS put the windows back when its displays vanished
 		listener().connected(new Welcome(1, true, true));
 		listener().message(new Display(1, 40, 1920, 1080));
+		runScheduled();
 		assertEquals(2, sentOf(WindowsToDisplay.class).size());
+	}
+
+	@Test
+	void aMoveScheduledBeforeLeavingNeverHappensAndNothingGoesBack() {
+		listener().message(new Display(1, 30, 1920, 1080));
+		helper.stop();
+		runScheduled();
+		assertTrue(sentOf(WindowsToDisplay.class).isEmpty());
+		assertTrue(sentOf(WindowsBack.class).isEmpty());
+	}
+
+	@Test
+	void theHelperDyingEndsADragAndTypingOnTheClientThread() {
+		List<String> events = new ArrayList<>();
+		helper.onTypingExit(reason -> events.add("typing " + reason));
+		helper.onDragEnded(reason -> events.add("drag " + reason));
+		listener().message(new DragDelta(5, 5));
+		listener().disconnected();
+		assertEquals(List.of("drag cancelled", "typing helper"), events);
+		assertArrayEquals(new int[] {0, 0}, helper.drainDragDelta(), "no stale motion turns the head later");
 	}
 
 	@Test

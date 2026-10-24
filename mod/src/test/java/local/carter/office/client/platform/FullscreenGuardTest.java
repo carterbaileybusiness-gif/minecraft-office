@@ -25,8 +25,12 @@ import org.junit.jupiter.api.Test;
 class FullscreenGuardTest {
 	private static final Path ROOT = findRoot();
 	private static final Pattern FULLSCREEN = Pattern.compile("(?i)full[_ ]?screen");
-	/** Reading the mode for a report (e.g. the self-test's "fullscreen" fact) never changes it. */
-	private static final Pattern READ_ONLY = Pattern.compile("\\bis\\w*Fullscreen\\(\\)");
+	/**
+	 * Reading the mode never changes it: a getter for a report (the self-test's "fullscreen" fact), and the helper reading a
+	 * window's AXFullScreen attribute so it never moves a window that is in its own Space.
+	 */
+	private static final Pattern READ_ONLY = Pattern.compile(
+			"\\bis\\w*Fullscreen\\(\\)|AXUIElementCopyAttributeValue\\(\\w+, \"AXFullScreen\" as CFString");
 	/** Window applies fullscreen; KeyboardHandler/MouseHandler route F11 (handleGlobalKeyPress); the video screens toggle it. */
 	private static final Set<String> FORBIDDEN_MIXIN_TARGETS = Set.of("Window", "KeyboardHandler", "MouseHandler",
 			"MonitorManager", "VideoSettingsScreen", "WindowEventHandler");
@@ -81,6 +85,10 @@ class FullscreenGuardTest {
 		assertTrue(code("String u = \"https://x\";").contains("https://x"), "URLs in strings are not comments");
 		assertFalse(FULLSCREEN.matcher(READ_ONLY.matcher("w.isExclusiveFullscreen() ? 1 : 0").replaceAll("")).find(), "a read is fine");
 		assertTrue(FULLSCREEN.matcher(READ_ONLY.matcher("w.toggleFullscreen()").replaceAll("")).find(), "a change is not");
+		assertFalse(FULLSCREEN.matcher(READ_ONLY.matcher("AXUIElementCopyAttributeValue(window, \"AXFullScreen\" as CFString, &x)")
+				.replaceAll("")).find(), "the helper may read a window's flag");
+		assertTrue(FULLSCREEN.matcher(READ_ONLY.matcher("AXUIElementSetAttributeValue(window, \"AXFullScreen\" as CFString, kCFBooleanTrue)")
+				.replaceAll("")).find(), "but never set it");
 	}
 
 	@Test

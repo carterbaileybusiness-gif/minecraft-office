@@ -38,4 +38,7 @@ public interface PointerPort {
 	default void onTypingExit(final Consumer<String> listener) {}
 
 	default void onDragEnded(final Consumer<String> listener) {}
+
+	/** Bring Minecraft to the front again (the helper that would have done it is gone). */
+	default void activateMinecraft() {}
 }

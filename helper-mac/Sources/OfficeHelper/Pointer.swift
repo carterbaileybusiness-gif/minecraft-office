@@ -15,6 +15,27 @@ enum PointerMapping {
     }
 }
 
+/// Physical mouse motion for DRAG_DELTA: whole points go out, the fraction stays for the next motion, so a slow
+/// trackpad drag (a fraction of a point per event) still turns the player's head. Pure.
+struct DeltaAccumulator: Equatable {
+    private(set) var dx: Double = 0
+    private(set) var dy: Double = 0
+
+    mutating func add(dx: Double, dy: Double) {
+        self.dx += dx
+        self.dy += dy
+    }
+
+    /// The whole points so far (toward zero), or nil when there are none yet.
+    mutating func take() -> (Int, Int)? {
+        let x = Int(dx.rounded(.towardZero)), y = Int(dy.rounded(.towardZero))
+        guard x != 0 || y != 0 else { return nil }
+        dx -= Double(x)
+        dy -= Double(y)
+        return (x, y)
+    }
+}
+
 /// A drag the helper drives for the mod (route "H" in Tools/inputprobe.swift, the one that works): the player holds the
 /// physical button in Minecraft and turns their head. The helper brings the app under the press point forward (so the
 /// press is not swallowed as an activation click), posts a real down there, takes the physical mouse with an event tap

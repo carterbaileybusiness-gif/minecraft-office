@@ -3,12 +3,13 @@ import CoreGraphics
 
 /// Posts real input events into other apps at global coordinates (points, top-left origin). Needs Accessibility.
 ///
-/// Two delivery routes, chosen by what the event must not disturb (evidence: helper-mac/Tools/inputprobe.swift):
-/// - `toPid`: the event goes straight into the target app's event queue, bypassing the window server's routing. The app
-///   under the point handles it, but nothing is activated and the cursor does not move, so Minecraft stays frontmost
-///   and keeps its relative mouse input (and the physical button it is holding). Used for in-world drags and scrolls.
-/// - `hid`: a normal system-wide event, exactly as if the mouse did it: the cursor moves there and a click activates
-///   the app it lands on. Used for a click that enters typing mode.
+/// Everything the helper uses goes the `hid` route: a normal system-wide event, exactly as if the mouse did it (the
+/// cursor moves there, a click activates the app it lands on, the window server routes drags and scrolls). Clicks that
+/// enter typing mode, the helper-driven drags ({@link DragMachine}) and scrolling (by pixels; scrolling never activates
+/// an app) all use it. Every event is marked ({@link injectedMark}) so the helper's own event taps let it through.
+///
+/// `toPid` (straight into one app's event queue, nothing activated, the cursor not moved) is kept only for
+/// helper-mac/Tools/inputprobe.swift, which shows AppKit ignores such clicks, drags and scrolls.
 enum EventInjector {
     /// A window under a point: who gets an event posted there.
     struct Target: Equatable {
@@ -93,10 +94,11 @@ enum EventInjector {
         return true
     }
 
-    /// System-wide scroll-wheel lines at `point` (scrolls the window there; scrolling never activates an app).
+    /// System-wide scroll at `point`, in pixels of content motion (dy > 0 = up), like a trackpad: scrolls the window
+    /// there; scrolling never activates an app.
     @discardableResult
     static func scrollHID(at point: CGPoint, dx: Int32, dy: Int32) -> Bool {
-        guard let event = CGEvent(scrollWheelEvent2Source: hidSource, units: .line, wheelCount: 2,
+        guard let event = CGEvent(scrollWheelEvent2Source: hidSource, units: .pixel, wheelCount: 2,
                                   wheel1: dy, wheel2: dx, wheel3: 0) else { return false }
         event.location = point
         event.setIntegerValueField(.eventSourceUserData, value: injectedMark)
@@ -111,7 +113,7 @@ enum EventInjector {
         postHID(upType(button), at: point, button: button)
     }
 
-    /// Scroll-wheel lines at `point`, delivered to the window there without activating it (or the cursor moving).
+    /// Probe only: scroll lines posted to `target`'s pid (AppKit ignores it).
     @discardableResult
     static func scroll(at point: CGPoint, dx: Int32, dy: Int32, target: Target) -> Bool {
         guard let event = CGEvent(scrollWheelEvent2Source: privateSource, units: .line, wheelCount: 2,

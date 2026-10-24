@@ -49,8 +49,8 @@ import net.fabricmc.fabric.api.event.client.player.ClientHotbarScrollEvents;
  * Without an emitter in the main hand (empty, or any other item: a Wizards staff, food, a shield), right-clicking your
  * OWN hologram is always taken: on a Mac it is a right-click on the app there ({@link PointerClient}, in-world use;
  * left clicks, drags and the wheel go there too); elsewhere it zooms in to work on it ({@link ZoomClient}). Either way the
- * action bar says why when it can't (not live yet, helper not ready, Mirror is view-only). Someone else's hologram is never intercepted (no message; the item keeps its own
- * use), and an emitter in the off hand alone never makes a click a hologram click. Right-clicking an emitter block
+ * action bar says why when it can't (not live yet, helper not ready, Mirror is view-only). Someone else's hologram swallows the click (no
+ * message): nothing is ever placed or used through a hologram ({@link HologramClickRule}), and an emitter in the off hand alone never makes a click a hologram click. Right-clicking an emitter block
  * (empty main hand or an emitter, not sneaking) opens settings, read-only for non-owners. Called from {@code MinecraftUseItemMixin} at the head of
  * {@code Minecraft.startUseItem} (after vanilla's destroying/hands-busy guards; a consumed click gets vanilla's 4-tick
  * repeat delay and its repeats are swallowed until release, see {@link ClickGate}); a consumed click never reaches
@@ -198,14 +198,23 @@ public final class HologramInteractions {
 		boolean holdingEmitter = holdingEmitter(player);
 
 		boolean hologramFirst = picked.isPresent() && picked.get().hit().distance() <= vanillaDistance + 1e-3;
-		if (holdingEmitter && hologramFirst) {
-			return onHologram(mc, player, picked.get());
-		}
-		if (hologramFirst && picked.get().be().isOwner(player.getUUID())) {
-			if (PointerClient.available()) {
+		boolean own = hologramFirst && picked.get().be().isOwner(player.getUUID());
+		switch (HologramClickRule.decide(hologramFirst, own, holdingEmitter, PointerClient.available())) {
+			case EDIT -> {
+				return onHologram(mc, player, picked.get());
+			}
+			case POINTER -> {
 				return PointerClient.onUse(mc, picked.get().be());
 			}
-			return zoom(player, picked.get().be());
+			case ZOOM -> {
+				return zoom(player, picked.get().be());
+			}
+			case SWALLOW -> {
+				return true; // a friend's screen: never place or use anything through it
+			}
+			case NOT_A_HOLOGRAM -> {
+				// below: the emitter block itself, else vanilla
+			}
 		}
 		boolean mainHandFree = holdingEmitter || player.getItemInHand(InteractionHand.MAIN_HAND).isEmpty();
 		if (mainHandFree && mc.hitResult instanceof BlockHitResult block && block.getType() == HitResult.Type.BLOCK && !player.isShiftKeyDown()
@@ -217,8 +226,8 @@ public final class HologramInteractions {
 	}
 
 	/**
-	 * Right-click on your own hologram without an emitter in the main hand: zoom in to work on it. Someone else's
-	 * hologram is never taken here (no message, vanilla gets the click).
+	 * Right-click on your own hologram without an emitter in the main hand where in-world use isn't available: zoom in to
+	 * work on it.
 	 */
 	private static boolean zoom(final LocalPlayer player, final HologramBlockEntity be) {
 		ZoomController.Request r = ZoomClient.request(be);

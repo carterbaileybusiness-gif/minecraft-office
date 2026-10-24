@@ -26,6 +26,23 @@ enum PointerTests {
             expectEqual(PointerMapping.globalPoint(x: 1918, y: 0, width: 1920, height: 1080, bounds: hi), CGPoint(x: -0.75, y: -539.75))
         }
 
+        run("drag deltas: fractions of a point add up instead of being dropped") {
+            var acc = DeltaAccumulator()
+            var sumX = 0, sumY = 0
+            for _ in 0..<10 {
+                acc.add(dx: 0.4, dy: -0.25)
+                if let (x, y) = acc.take() { sumX += x; sumY += y }
+            }
+            expectEqual(sumX, 4, "ten 0.4 pt moves turn the head by 4 pt")
+            expect(abs(acc.dx) < 1e-9, "nothing left over")
+            expectEqual(sumY, -2, "y: -2.5 → -2 out")
+            expect(abs(acc.dy + 0.5) < 1e-9, "the fraction waits: \(acc.dy)")
+            var whole = DeltaAccumulator()
+            whole.add(dx: 7, dy: 0)
+            expect(whole.take()! == (7, 0), "whole points go straight out")
+            expect(whole.take() == nil, "then nothing")
+        }
+
         run("drag: down activates the app first, then a real down, drags and up at the mapped points") {
             var d = DragMachine()
             let p0 = CGPoint(x: 100, y: 100), p1 = CGPoint(x: 120, y: 110), p2 = CGPoint(x: 2000, y: 50)

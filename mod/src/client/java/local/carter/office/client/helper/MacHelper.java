@@ -106,6 +106,15 @@ public final class MacHelper implements HelperConnection.Listener {
 	private volatile boolean moveWindowsOnJoin;
 	/** This connection moved the player's windows (so leaving sends WINDOWS_BACK). */
 	private volatile boolean windowsMoved;
+	/** A window move is scheduled for this connection ({@link #WINDOWS_MOVE_DELAY_MS} after its first display). */
+	private volatile boolean windowsMoveScheduled;
+	/** Bumped by every WELCOME and stop, so a window move scheduled for an earlier connection does nothing. */
+	private final AtomicInteger connection = new AtomicInteger();
+	/**
+	 * Holograms' displays come online as their chunks load, in any order: the windows move this long after the first one,
+	 * onto the lowest slot online by then (slot 1, the player's first hologram, when it is there).
+	 */
+	public static final long WINDOWS_MOVE_DELAY_MS = 1_000;
 
 	/**
 	 * @param channelFactory makes the connection (a {@link HelperConnection} in the game) for this helper's listener
@@ -230,11 +239,13 @@ public final class MacHelper implements HelperConnection.Listener {
 			if (windowsMoved) {
 				ch.send(new WindowsBack()); // before the displays go, so every window lands exactly where it was
 			}
+			connection.incrementAndGet();
 			for (int slot : slots) {
 				ch.send(new RemoveDisplay(slot));
 			}
 		}
 		windowsMoved = false;
+		windowsMoveScheduled = false;
 		ch.close();
 		boolean was = connected;
 		connected = false;
@@ -415,6 +426,19 @@ public final class MacHelper implements HelperConnection.Listener {
 		dragEndedListeners.add(listener);
 	}
 
+	/** The player's windows onto the lowest-slot display online, once per connection. */
+	private void moveWindows(final int conn) {
+		int slot;
+		synchronized (this) {
+			if (conn != connection.get() || !connected || windowsMoved || online.isEmpty()) {
+				return;
+			}
+			slot = online.keySet().stream().mapToInt(Integer::intValue).min().getAsInt();
+			windowsMoved = true;
+		}
+		send(new WindowsToDisplay(slot, null));
+	}
+
 	// ---------------------------------------------------------------- windows and zoom
 
 	/** Asks the helper for the window list (it asks macOS for Screen Recording the first time). */
@@ -471,6 +495,8 @@ public final class MacHelper implements HelperConnection.Listener {
 		welcome = w;
 		permissionDenied = false;
 		windowsMoved = false; // a new helper: windows of an earlier one went back when its displays vanished
+		windowsMoveScheduled = false;
+		connection.incrementAndGet();
 		connected = true;
 		for (Map.Entry<Integer, Size> e : displays) {
 			send(new CreateDisplay(e.getKey(), e.getValue().w(), e.getValue().h()));
@@ -488,9 +514,10 @@ public final class MacHelper implements HelperConnection.Listener {
 				synchronized (this) {
 					online.put(d.slot(), new Size(d.w(), d.h()));
 				}
-				if (moveWindowsOnJoin && !windowsMoved) {
-					windowsMoved = true; // the first display this session: the player's windows move onto it
-					send(new WindowsToDisplay(d.slot(), null));
+				if (moveWindowsOnJoin && !windowsMoved && !windowsMoveScheduled) {
+					windowsMoveScheduled = true;
+					int conn = connection.get();
+					scheduler.schedule(() -> moveWindows(conn), WINDOWS_MOVE_DELAY_MS);
 				}
 				for (MacHelperSource s : attached) {
 					s.displayOnline(d.slot(), d.w(), d.h());
@@ -573,6 +600,13 @@ public final class MacHelper implements HelperConnection.Listener {
 	public void disconnected() {
 		connected = false;
 		drainDragDelta();
+		// The helper died: a drag it was driving or typing mode it was guarding is over; the mod must not wait for it.
+		for (Consumer<String> l : dragEndedListeners) {
+			clientThread.execute(() -> l.accept("cancelled"));
+		}
+		for (Consumer<String> l : typingExitListeners) {
+			clientThread.execute(() -> l.accept("helper"));
+		}
 		synchronized (this) {
 			online.clear();
 		}

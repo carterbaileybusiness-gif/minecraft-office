@@ -19,6 +19,13 @@ import ApplicationServices
 
     var log: (String) -> Void = { _ in }
     private var ledger = WindowLedger<Element>()
+    /// A hung app answers no Accessibility call; give up on it after this instead of stalling join / leave.
+    static let axTimeout: Float = 0.5
+
+    init() {
+        // On the system-wide element this sets the default for every Accessibility call this process makes.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Self.axTimeout)
+    }
 
     var movedCount: Int { ledger.count }
 
@@ -31,7 +38,8 @@ import ApplicationServices
             log("windows: no target display \(display)"); return 0
         }
         let mainBounds = CGDisplayBounds(main)
-        // A window as big as the whole display, menu bar included, is an app in its own Space: leave it alone.
+        // A full-screen window (its own Space) is never moved: macOS's flag says so, and as a backstop a window as big
+        // as the whole display, menu bar included.
         var picked: [(Element, CGRect)] = []
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && !pids.contains(app.processIdentifier) {
             if let onlyApps, !onlyApps.contains(app.bundleIdentifier ?? "") { continue }
@@ -62,7 +70,9 @@ import ApplicationServices
 
     static func windows(of pid: pid_t) -> [AXUIElement] {
         var raw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString, &raw) == .success else { return [] }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, axTimeout)
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw) == .success else { return [] }
         return raw as? [AXUIElement] ?? []
     }
 
@@ -72,6 +82,9 @@ import ApplicationServices
         guard (subrole as? String) == (kAXStandardWindowSubrole as String) else { return false }
         AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized)
         if (minimized as? Bool) == true { return false }
+        var ownSpace: CFTypeRef?
+        AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &ownSpace) // read-only: never changed
+        if (ownSpace as? Bool) == true { return false }
         guard AXUIElementIsAttributeSettable(window, kAXPositionAttribute as CFString, &settable) == .success, settable.boolValue else { return false }
         return true
     }

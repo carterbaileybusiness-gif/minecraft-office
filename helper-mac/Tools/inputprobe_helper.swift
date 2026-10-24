@@ -227,11 +227,13 @@ extension Probe {
         if let sa = axFind(win, role: kAXScrollAreaRole), let saFrame = axFrame(sa), let p = px(CGPoint(x: saFrame.midX, y: saFrame.midY)) {
             await activateProbe()
             let s0 = axScrollValue(sa) ?? 0
-            client.send(.scroll(ScrollPayload(slot: p.slot, x: p.x, y: p.y, dx: 0, dy: -600)))
+            client.send(.scroll(ScrollPayload(slot: p.slot, x: p.x, y: p.y, dx: 0, dy: -48))) // the mod's one wheel notch
             await sleep(0.5)
             let s1 = axScrollValue(sa) ?? 0
-            check("E6 SCROLL scrolls the app under the point, Minecraft stays frontmost", s1 > s0 + 0.001 && probeFrontmost,
-                  String(format: "%.3f → %.3f, frontmost %@", s0, s1, NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"))
+            // 400 lines ≈ 5250 pt of text: one notch (48 px) is about 1 %; lines instead of pixels would be ~50 %+
+            check("E6 SCROLL (one notch = 48 px) scrolls the app a little, Minecraft stays frontmost",
+                  s1 > s0 + 0.001 && s1 - s0 < 0.10 && probeFrontmost,
+                  String(format: "%.4f → %.4f, frontmost %@", s0, s1, NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"))
         } else {
             check("E6 SCROLL target found", false)
         }
@@ -247,6 +249,23 @@ extension Probe {
         await sleep(0.3)
         check("E7 a press already released when POINTER_DOWN arrives still ends (DRAG_ENDED), Minecraft frontmost",
               quick == .dragEnded(ReasonPayload(reason: "released")) && probeFrontmost, quick.map { "\($0)" } ?? "none")
+
+        // A slow trackpad drag: 10 moves of 0.4 pt each (integer deltas 0) still turn the head by about 4 pt.
+        await activateProbe()
+        inbox.removeAll()
+        physical(.leftMouseDown)
+        await sleep(0.1)
+        if let p = px(textPoint) { client.send(.pointerDown(with(p, .left))) }
+        await sleep(0.1)
+        for _ in 0..<10 { physicalFine(.leftMouseDragged, dx: 0.4, dy: 0); await sleep(0.02) }
+        await sleep(0.1)
+        physical(.leftMouseUp)
+        _ = await waitFor(2) { if case .dragEnded = $0 { return true }; return false }
+        let fine = inbox.reduce(0) { sum, m in if case .dragDelta(let d) = m { return sum + d.dx }; return sum }
+        // Events posted by a process lose the fraction (macOS rounds a posted 0.4 to 0; real trackpad events keep it), so
+        // this can only be informational here; DeltaAccumulator's unit test covers the summing.
+        check("E10 [informational] posted fractional motion reaches the mod", fine >= 3 && fine <= 4, "Σdx \(fine) of 4.0")
+        await sleep(0.3)
 
         client.send(.windowsBack)
         await sleep(0.8)

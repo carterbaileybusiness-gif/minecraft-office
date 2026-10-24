@@ -26,8 +26,8 @@ import CoreGraphics
     private var keyTap: CFMachPort?
     private var buttonPoll: Timer?
     private var activationWait = 0
-    private var pendingDX: Int64 = 0
-    private var pendingDY: Int64 = 0
+    /// Physical motion not sent yet (points; fractions kept, so a slow trackpad drag still turns the head).
+    private var pending = DeltaAccumulator()
     private var flushScheduled = false
     private var activationObserver: NSObjectProtocol?
 
@@ -195,7 +195,7 @@ import CoreGraphics
     }
 
     private func startMouseTap() {
-        pendingDX = 0; pendingDY = 0
+        pending = DeltaAccumulator()
         if mouseTap == nil {
             let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp,
                                         .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged]
@@ -270,12 +270,17 @@ import CoreGraphics
             return false
         }
         guard drag.isActive, !EventInjector.isInjected(event) else { return false }
-        pendingDX += event.getIntegerValueField(.mouseEventDeltaX)
-        pendingDY += event.getIntegerValueField(.mouseEventDeltaY)
+        pending.add(dx: Self.delta(event, .mouseEventDeltaX), dy: Self.delta(event, .mouseEventDeltaY))
         scheduleFlush()
         let up: CGEventType = EventInjector.upType(drag.button)
         if type == up { perform(drag.physicalUp()) }
         return true // the physical mouse belongs to the drag: only the helper's own events move the cursor
+    }
+
+    /// A mouse delta with its fraction (trackpads move by fractions of a point); the integer field when that is all.
+    static func delta(_ event: CGEvent, _ field: CGEventField) -> Double {
+        let d = event.getDoubleValueField(field)
+        return d != 0 ? d : Double(event.getIntegerValueField(field))
     }
 
     private func scheduleFlush() {
@@ -290,9 +295,7 @@ import CoreGraphics
     }
 
     private func flushDeltas() {
-        guard pendingDX != 0 || pendingDY != 0 else { return }
-        let dx = Int(clamping: pendingDX), dy = Int(clamping: pendingDY)
-        pendingDX = 0; pendingDY = 0
+        guard let (dx, dy) = pending.take() else { return }
         send(.dragDelta(DeltaPayload(dx: dx, dy: dy)))
     }
 }

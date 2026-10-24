@@ -209,10 +209,20 @@ func stopDragTap() { if let dragTap { CGEvent.tapEnable(tap: dragTap, enable: fa
     }
 
     /// "Physical" mouse events for the probe (HID route, deltas set like a real mouse in relative mode).
+    /// A trackpad-like move by a fraction of a point (the integer delta fields stay 0).
+    func physicalFine(_ type: CGEventType, dx: Double, dy: Double) {
+        guard let e = CGEvent(mouseEventSource: hid, mouseType: type, mouseCursorPosition: probePoint, mouseButton: .left) else { return }
+        e.setDoubleValueField(.mouseEventDeltaX, value: dx)
+        e.setDoubleValueField(.mouseEventDeltaY, value: dy)
+        e.post(tap: .cghidEventTap)
+    }
+
     func physical(_ type: CGEventType, dx: Int64 = 0, dy: Int64 = 0) {
         guard let e = CGEvent(mouseEventSource: hid, mouseType: type, mouseCursorPosition: probePoint, mouseButton: .left) else { return }
         e.setIntegerValueField(.mouseEventDeltaX, value: dx)
         e.setIntegerValueField(.mouseEventDeltaY, value: dy)
+        e.setDoubleValueField(.mouseEventDeltaX, value: Double(dx))
+        e.setDoubleValueField(.mouseEventDeltaY, value: Double(dy))
         e.post(tap: .cghidEventTap)
     }
 
@@ -435,7 +445,7 @@ func stopDragTap() { if let dragTap { CGEvent.tapEnable(tap: dragTap, enable: fa
         // ---- S: scrolling through the window server (scroll goes to the window under the point; never activates)
         await reset()
         if let s0 = axScrollValue(scrollArea) {
-            for _ in 0..<5 { EventInjector.scrollHID(at: textPoint, dx: 0, dy: -5); await sleep(0.03) }
+            for _ in 0..<5 { EventInjector.scrollHID(at: textPoint, dx: 0, dy: -200); await sleep(0.03) }
             await sleep(0.4)
             let s1 = axScrollValue(scrollArea) ?? s0
             check("S1 [informational] HID scroll with only the event location set scrolls TextEdit", s1 > s0 + 0.001, String(format: "%.3f → %.3f", s0, s1))
@@ -446,7 +456,7 @@ func stopDragTap() { if let dragTap { CGEvent.tapEnable(tap: dragTap, enable: fa
             let t0 = axScrollValue(scrollArea) ?? 0
             let saved = CGEvent(source: nil)?.location ?? .zero
             CGWarpMouseCursorPosition(textPoint)
-            for _ in 0..<5 { EventInjector.scrollHID(at: textPoint, dx: 0, dy: -5); await sleep(0.03) }
+            for _ in 0..<5 { EventInjector.scrollHID(at: textPoint, dx: 0, dy: -200); await sleep(0.03) }
             CGWarpMouseCursorPosition(saved)
             await sleep(0.4)
             let t1 = axScrollValue(scrollArea) ?? t0

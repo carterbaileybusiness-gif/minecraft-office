@@ -21,6 +21,10 @@ swiftc -swift-version 5 -O -parse-as-library -target arm64-apple-macos14.0 \
   "$here/Tools/inputprobe_helper.swift" \
   -o "$out/inputprobe"
 app="${1:-$here/build/OfficeHelper.app}"
+if pgrep -x OfficeHelper >/dev/null; then
+  echo "OfficeHelper is running (a game in progress?): not probing; it takes over the mouse and focus for ~45 s" >&2
+  exit 2
+fi
 status=0
 echo "== delivery routes (the probe posts events itself)"
 "$out/inputprobe" || status=1

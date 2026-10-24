@@ -159,10 +159,33 @@ public final class PointerClient {
 		}
 		listening = true;
 		port.onTypingExit(reason -> {
-			LOGGER.info("Typing: back to the game ({})", reason);
+			boolean was = typing.active();
 			typing.helperExited();
+			if (was) {
+				LOGGER.info("Typing: back to the game ({})", reason);
+				if (HELPER_GONE.equals(reason)) {
+					bringBack(); // the helper died while typing: nobody re-activates Minecraft for us
+				}
+			}
 		});
-		port.onDragEnded(reason -> dragEnded());
+		port.onDragEnded(reason -> {
+			boolean was = gesture.state() == PointerGesture.State.DRAGGING;
+			dragEnded();
+			if (was && "cancelled".equals(reason)) {
+				bringBack(); // a drag cancelled (helper gone, or the mod's POINTER_UP): make sure Minecraft has the mouse
+			}
+		});
+	}
+
+	/** TYPING_EXIT reason the mod reports for itself when the helper disconnects mid-typing. */
+	public static final String HELPER_GONE = "helper";
+
+	private void bringBack() {
+		PointerPort port = port();
+		if (port != null && !Minecraft.getInstance().isWindowActive()) {
+			port.activateMinecraft();
+		}
+		regrabWhenFocused = true;
 	}
 
 	static @Nullable PointerPort port() {

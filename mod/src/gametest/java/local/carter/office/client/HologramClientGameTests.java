@@ -598,6 +598,42 @@ public class HologramClientGameTests implements FabricClientGameTest {
 				throw new AssertionError("the wheel on a hologram should scroll the app and keep the hotbar slot, sent " + fake.calls);
 			}
 
+			// 4. a friend's hologram: right-click with a block in hand places nothing through it, left-click breaks nothing
+			UUID friend = UUID.fromString("00000000-0000-0000-0000-0000000f00d5");
+			sp.getServer().runOnServer(server -> {
+				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
+				HologramSpec mine = be.spec();
+				be.setSpec(new HologramSpec(friend, mine.shape(), mine.mode(), mine.privacy(), mine.displaySlot(), mine.windowKey(),
+						mine.width(), mine.offX(), mine.offY(), mine.offZ(), mine.yaw()));
+				player(server).setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.DIRT, 8));
+			});
+			context.waitFor(mc -> clientHologram(mc) != null && friend.equals(clientHologram(mc).spec().owner()), 100);
+			look(context, hologramCenter(spec));
+			context.waitTicks(3);
+			context.getInput().pressMouse(MOUSE_RIGHT);
+			context.waitTicks(3);
+			context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+			context.waitTicks(5);
+			sp.getConnection().waitForServerboundPackets();
+			String placed = sp.getServer().computeOnServer(server -> {
+				for (int dy = 1; dy <= 2; dy++) {
+					if (!player(server).level().getBlockState(emitter.offset(0, dy, 0)).isAir()) {
+						return "a block was placed through a friend's hologram at +" + dy;
+					}
+				}
+				return null;
+			});
+			if (placed != null) {
+				throw new AssertionError(placed);
+			}
+			sp.getServer().runOnServer(server -> {
+				HologramBlockEntity be = (HologramBlockEntity) player(server).level().getBlockEntity(emitter);
+				HologramSpec theirs = be.spec();
+				be.setSpec(new HologramSpec(player(server).getUUID(), theirs.shape(), theirs.mode(), theirs.privacy(),
+						theirs.displaySlot(), theirs.windowKey(), theirs.width(), theirs.offX(), theirs.offY(), theirs.offZ(), theirs.yaw()));
+			});
+			context.waitTicks(3);
+
 			sp.getConnection().waitForServerboundPackets();
 			boolean intact = sp.getServer().computeOnServer(server -> player(server).level().getBlockState(behind0).is(Blocks.STONE)
 					&& player(server).level().getBlockState(behind1).is(Blocks.STONE)

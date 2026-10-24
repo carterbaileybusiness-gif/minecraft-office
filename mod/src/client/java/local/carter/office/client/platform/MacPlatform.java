@@ -224,6 +224,11 @@ public final class MacPlatform implements Platform {
 		public void onDragEnded(final java.util.function.Consumer<String> listener) {
 			helper.onDragEnded(listener);
 		}
+
+		@Override
+		public void activateMinecraft() {
+			MacApp.activate(true);
+		}
 	}
 
 	// ---------------------------------------------------------------- self-test (off the client thread)
