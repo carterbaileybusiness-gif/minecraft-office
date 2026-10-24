@@ -13,8 +13,25 @@ import local.carter.office.client.magic.fx.MagicCircleRenderer;
 import local.carter.office.client.magic.fx.MagicCircleRenderer.Basis;
 import local.carter.office.magic.core.ChargeMath;
 
+import net.minecraft.world.phys.Vec3;
+
 class CircleMathTest {
 	private static final float EPS = 1.0E-5F;
+
+	@Test
+	void heldCircleIsOnTheCrosshairInFirstPersonAndLowerForOthers() {
+		Vec3 eye = new Vec3(10, 65.62, -3);
+		Vec3 look = new Vec3(0.6, -0.2, 0.8).normalize();
+		Vec3 own = ChargeCircles.heldCentre(eye, look, true);
+		// On the look line through the eye (the crosshair), AHEAD out.
+		assertEquals(0, own.subtract(eye).cross(look).length(), 1.0E-9);
+		assertEquals(ChargeCircles.AHEAD, own.distanceTo(eye), 1.0E-9);
+		Vec3 others = ChargeCircles.heldCentre(eye, look, false);
+		assertEquals(own.subtract(0, ChargeCircles.BELOW, 0), others);
+		// Full charge grows it a quarter.
+		assertEquals(1F, ChargeCircles.scale(0F));
+		assertEquals(1.25F, ChargeCircles.scale(1F), 1.0E-6F);
+	}
 
 	@Test
 	void ringRadiusGrowsStrictlyFromBase() {

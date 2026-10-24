@@ -66,7 +66,7 @@ class QuakeGeometryTest {
 	}
 
 	@Test
-	void arcsAreSixtyDegrees() {
+	void arcsAreThirtySixDegrees() {
 		assertEquals(0, QuakeGeometry.arc(1, 0.1));
 		assertEquals(2, QuakeGeometry.arc(0, 1));
 		assertEquals(5, QuakeGeometry.arc(-1, -0.01));

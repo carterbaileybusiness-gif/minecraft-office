@@ -30,11 +30,11 @@ class EarthWallGeometryTest {
 	@Test
 	void sizesFollowCharge() {
 		assertEquals(5, EarthWallGeometry.width(0F));
-		assertEquals(5, EarthWallGeometry.width(0.16F));
-		assertEquals(7, EarthWallGeometry.width(0.17F));
-		assertEquals(9, EarthWallGeometry.width(0.5F));
-		assertEquals(11, EarthWallGeometry.width(0.84F));
-		assertEquals(11, EarthWallGeometry.width(1F)); // a full charge's wall is 2.2× a tap's
+		assertEquals(5, EarthWallGeometry.width(0.24F));
+		assertEquals(7, EarthWallGeometry.width(0.25F));
+		assertEquals(7, EarthWallGeometry.width(0.74F));
+		assertEquals(9, EarthWallGeometry.width(0.75F));
+		assertEquals(9, EarthWallGeometry.width(1F)); // a full charge's wall is 1.8× a tap's, within the cap on a 1-block climb
 		assertEquals(3, EarthWallGeometry.height(0F));
 		assertEquals(3, EarthWallGeometry.height(0.49F));
 		assertEquals(4, EarthWallGeometry.height(0.5F));

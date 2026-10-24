@@ -62,11 +62,12 @@ public final class EarthWallGeometry {
 	}
 
 	/**
-	 * {@code 5 + 2 × round(3 × charge)} columns (always odd): 5 at a tap, 7 from charge 1/6, 9 from 1/2, 11 from 5/6. A full charge's
-	 * wall is 2.2× a tap's; 11 keeps its end columns within the medium radius (6) of the centre cell, 4 high on level ground.
+	 * {@code 5 + 2 × round(2 × charge)} columns (always odd): 5 at a tap, 7 from charge 1/4, 9 from 3/4. A full charge's wall is
+	 * 1.8× a tap's: 9 keeps its end columns' tops within the medium radius (6) of the centre cell, 4 high, even on a 1-block climb
+	 * (√(16 + 16) ≈ 5.66; 11 columns would reach 6.4 there and lose their tops).
 	 */
 	public static int width(float charge) {
-		return 5 + 2 * Math.round(3 * Mth.clamp(charge, 0F, 1F));
+		return 5 + 2 * Math.round(2 * Mth.clamp(charge, 0F, 1F));
 	}
 
 	/** 3 cells high, 4 from half charge. */

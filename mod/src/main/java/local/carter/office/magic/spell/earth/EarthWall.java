@@ -29,6 +29,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
@@ -44,7 +45,7 @@ import net.minecraft.world.phys.Vec3;
  * Earth Wall (Earth, slot 1, medium, lingering): a wall of earth bursts out of the ground ahead and stands for half a minute.
  *
  * <p>The wall ({@link EarthWallGeometry}) stands 3 ahead of the caster's feet, across the look: 5 columns wide at a tap, up to
- * 11 at full charge ({@link EarthWallGeometry#width}), 3 high (4 from half charge). If something solid is in the way at eye height it stands just in front of it instead (never
+ * 9 at full charge ({@link EarthWallGeometry#width}), 3 high (4 from half charge). If something solid is in the way at eye height it stands just in front of it instead (never
  * through a wall). It rises from the centre outward, column by column over 6 ticks. Each column is made of the block under it
  * if that is a full solid block a temporary block may be ({@link #material}); soil becomes packed mud, sand sandstone, anything
  * else cobblestone, with some tuff and mud-brick cells mixed in ({@link #cellMaterial}). One MEDIUM batch, origin = the wall's
@@ -169,9 +170,12 @@ public final class EarthWall implements Spell {
 		return material;
 	}
 
-	/** True for an entity whose cell the wall leaves open: any player (the caster too) and anything spells must spare. */
+	/**
+	 * True for an entity whose cell the wall leaves open: any player (the caster too), anything spells must spare, and any other
+	 * creature that is not fair game (an allay, a mannequin, a modded mob): it is never lifted, so it must never be walled in.
+	 */
 	public static boolean keepsCellOpen(Entity e) {
-		return e instanceof Player || TargetFilter.isProtected(e);
+		return e instanceof Player || TargetFilter.isProtected(e) || e instanceof LivingEntity && !TargetFilter.isFairGame(e);
 	}
 
 	/** A mob or item the wall lifts onto its top ({@code caster} may be null on a client). */

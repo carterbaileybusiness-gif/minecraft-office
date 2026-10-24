@@ -75,6 +75,15 @@ public final class ChargeCircles {
 		return 1F + GROW * Mth.clamp(charge, 0F, 1F);
 	}
 
+	/**
+	 * Where the held circle's middle is for a caster with {@code eye} looking along {@code look}: {@link #AHEAD} out along the
+	 * look, centred on the crosshair in the caster's own first-person view, {@link #BELOW} lower for everyone else (third person,
+	 * other players).
+	 */
+	public static Vec3 heldCentre(Vec3 eye, Vec3 look, boolean ownFirstPerson) {
+		return eye.add(look.scale(AHEAD)).add(0, ownFirstPerson ? 0 : -BELOW, 0);
+	}
+
 	/** Circles showing (the game tests read it). */
 	public static int showing() {
 		SHOWN.values().removeIf(c -> !c.isAlive());
@@ -161,7 +170,7 @@ public final class ChargeCircles {
 			} else {
 				Vec3 look = player.getViewVector(partial);
 				// Its own caster in first person sees it centred on the crosshair; everyone else sees it held at chest height.
-				at = player.getEyePosition(partial).add(look.scale(AHEAD)).add(0, ownFirstPerson() ? 0 : -BELOW, 0);
+				at = heldCentre(player.getEyePosition(partial), look, ownFirstPerson());
 				// Facing the caster, so they read it the right way round.
 				MagicCircleRenderer.orientation(MagicCircleRenderer.basis(-look.x, -look.y, -look.z), f.plane);
 			}

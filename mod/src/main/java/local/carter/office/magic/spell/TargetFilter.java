@@ -5,10 +5,12 @@ import org.jspecify.annotations.Nullable;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.OwnableEntity;
@@ -34,7 +36,8 @@ import net.minecraft.world.item.trading.Merchant;
  * goes through. Spells hurt and move <b>fair game</b> ({@link #isFairGame}): hostile mobs and animals (Carter's play-test ruling,
  * 2026-10-24: cows, pigs, sheep, chickens, bats, fish, squid…). They never touch a protected entity ({@link #isProtected}):
  * players (any), tamed pets and horses (anything with an owner), villagers and wandering traders, golems, anything with a custom
- * name (a name tag), armor stands, display and hanging entities, vehicles, or anything a player rides. Push spells also move
+ * name (a name tag), armor stands, display and hanging entities, vehicles (saddled or harnessed animals too, ridden or not), or
+ * anything a player rides. Push spells also move
  * items and XP orbs.
  *
  * <p>Control effects (pulls, lifts, roots, throws, chain hops; {@link #controllable}) take the same creatures, but never a boss
@@ -77,6 +80,8 @@ public final class TargetFilter {
 		if (e instanceof AbstractGolem && !(e instanceof Enemy)) return true;
 		if (e instanceof LivingEntity && e.hasCustomName()) return true;
 		if (e instanceof Display || e instanceof HangingEntity || e instanceof VehicleEntity) return true;
+		// A saddled or harnessed animal is someone's mount: a vehicle, ridden or not (ruling, Task 25 review).
+		if (e instanceof Animal a && (a.isSaddled() || a.getItemBySlot(EquipmentSlot.BODY).is(ItemTags.HARNESSES))) return true;
 		return e.hasPassenger(p -> p instanceof Player);
 	}
 

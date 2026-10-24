@@ -24,10 +24,6 @@ import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.ExperienceOrb;
-import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -121,10 +117,10 @@ public final class GravityWellFx implements SpellFx {
 	private static void wisps(ClientLevel level, FxKit kit, Vec3 centre, double reach, int n) {
 		int made = 0;
 		int looked = 0;
-		// What the server drags (items, orbs, hostile mobs), and only what the core can see: no wisps through walls.
+		// What the server drags (TargetFilter.controllable: items, orbs, hostile mobs and animals, never a boss), and only what the
+		// core can see: no wisps through walls.
 		for (Entity en : level.getEntities((Entity) null, new AABB(centre, centre).inflate(reach),
-				x -> (x instanceof Enemy && x instanceof LivingEntity || x instanceof ItemEntity || x instanceof ExperienceOrb)
-						&& !TargetFilter.isProtected(x) && x.getBoundingBox().getCenter().distanceToSqr(centre) <= reach * reach)) {
+				x -> TargetFilter.controllable(null, x) && x.getBoundingBox().getCenter().distanceToSqr(centre) <= reach * reach)) {
 			if (made >= n || looked++ >= 2 * n) break;
 			Vec3 at = en.getBoundingBox().getCenter();
 			if (level.clip(new ClipContext(centre, at, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()))

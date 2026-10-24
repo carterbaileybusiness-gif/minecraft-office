@@ -34,6 +34,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -454,9 +455,13 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		}
 	}
 
-	/** A player (not a spectator) or a protected entity ({@link TargetFilter#isProtected}) in {@code pos} or the cell above. */
+	/**
+	 * A player (not a spectator), a protected entity ({@link TargetFilter#isProtected}) or another creature that is not fair game
+	 * (an allay, a mannequin, a modded mob) in {@code pos} or the cell above: debris never lands on them.
+	 */
 	private static boolean occupied(ServerLevel level, BlockPos pos, Entity except) {
 		AABB cells = new AABB(pos).expandTowards(0, 1, 0);
-		return !level.getEntities(except, cells, e -> !e.isSpectator() && TargetFilter.isProtected(e)).isEmpty();
+		return !level.getEntities(except, cells, e -> !e.isSpectator()
+				&& (TargetFilter.isProtected(e) || e instanceof LivingEntity && !TargetFilter.isFairGame(e))).isEmpty();
 	}
 }

@@ -60,12 +60,17 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.animal.cow.Cow;
 import net.minecraft.world.entity.animal.equine.Horse;
+import net.minecraft.world.entity.animal.happyghast.HappyGhast;
+import net.minecraft.world.entity.animal.pig.Pig;
 import net.minecraft.world.entity.animal.wolf.Wolf;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
 
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
@@ -134,7 +139,12 @@ public class FeelGameTests {
 		Horse horse = make(level, EntityTypes.HORSE);
 		horse.setTamed(true);
 		horse.setOwner(friend);
-		List<Entity> never = List.of(friend, named, pet, horse, make(level, EntityTypes.VILLAGER), make(level, EntityTypes.WANDERING_TRADER),
+		// Saddled or harnessed animals are someone's mount (a vehicle), ridden or not.
+		Pig saddled = make(level, EntityTypes.PIG);
+		saddled.setItemSlot(EquipmentSlot.SADDLE, new ItemStack(Items.SADDLE));
+		HappyGhast harnessed = make(level, EntityTypes.HAPPY_GHAST);
+		harnessed.setItemSlot(EquipmentSlot.BODY, new ItemStack(Items.HARNESS.white()));
+		List<Entity> never = List.of(friend, named, pet, horse, saddled, harnessed, make(level, EntityTypes.VILLAGER), make(level, EntityTypes.WANDERING_TRADER),
 				make(level, EntityTypes.IRON_GOLEM), make(level, EntityTypes.SNOW_GOLEM), make(level, EntityTypes.COPPER_GOLEM),
 				make(level, EntityTypes.ALLAY), make(level, EntityTypes.ARMOR_STAND));
 		for (Entity e : never) {
@@ -171,7 +181,8 @@ public class FeelGameTests {
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.GRAVITY_WELL, 0f), Result.CAST, "result");
 		Vec3 c = h.relativeVec(rec.fx(p).getFirst().target());
 		Cow cow = cow(h, BlockPos.containing(c.x - 4, 4, c.z));
-		Cow named = still(h.spawn(EntityTypes.COW, BlockPos.containing(c.x + 4, 4, c.z)));
+		// The named cow stands inside the hurt core (1.15 from the centre, within 2.5): never pulled, and never hurt either.
+		Cow named = still(h.spawn(EntityTypes.COW, new Vec3(c.x, 4, c.z + 1.6)));
 		named.setCustomName(Component.literal("Daisy"));
 		Wolf pet = MagicTestKit.tamedWolf(h, BlockPos.containing(c.x, 4, c.z + 4), p);
 		Villager villager = MagicTestKit.villager(h, BlockPos.containing(c.x, 4, c.z - 4));
