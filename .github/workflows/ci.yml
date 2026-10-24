@@ -63,7 +63,8 @@ jobs:
           echo "::warning::client gametest failed with the opengl backend, retrying with vulkan"
           run_backend vulkan
       - name: store reports
-        if: failure()
+        # always: the client screenshots are how new screens get looked at before a release
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: reports-${{ matrix.os }}
