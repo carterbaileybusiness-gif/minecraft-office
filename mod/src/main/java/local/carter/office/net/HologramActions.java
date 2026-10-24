@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 import java.util.function.UnaryOperator;
 
 import local.carter.office.core.HologramSpec;
@@ -45,7 +47,13 @@ public final class HologramActions {
 	public static final double MAX_OFFSET = 16.0;
 	public static final int MAX_DISPLAY_SLOT = 4;
 
+	/** Toggles closer together than this (per player) are held back; only the latest state is applied once allowed. */
+	public static final long WORKING_MIN_INTERVAL_MS = 250L;
+
 	private static final Set<UUID> WORKING = ConcurrentHashMap.newKeySet();
+	private static final Map<UUID, Long> WORKING_LAST_APPLIED = new ConcurrentHashMap<>();
+	private static final Map<UUID, Boolean> WORKING_PENDING = new ConcurrentHashMap<>();
+	private static volatile LongSupplier clock = () -> System.nanoTime() / 1_000_000L;
 
 	private HologramActions() {}
 
@@ -67,6 +75,11 @@ public final class HologramActions {
 			case RemoveHologram r -> remove(player, r.pos());
 			default -> false;
 		};
+	}
+
+	/** Test seam (milliseconds, monotonic); {@code null} restores the real clock. */
+	public static void setClock(final LongSupplier c) {
+		clock = c == null ? () -> System.nanoTime() / 1_000_000L : c;
 	}
 
 	public static boolean isWorking(final UUID player) {
@@ -108,6 +121,8 @@ public final class HologramActions {
 
 	/** Called on disconnect: no longer working. */
 	public static void clearWorking(final ServerPlayer player) {
+		WORKING_PENDING.remove(player.getUUID());
+		WORKING_LAST_APPLIED.remove(player.getUUID());
 		if (WORKING.remove(player.getUUID())) {
 			changed(player.level().getServer());
 		}
@@ -116,13 +131,50 @@ public final class HologramActions {
 	/** Called when the server starts: nobody is working. */
 	public static void resetWorking(final MinecraftServer server) {
 		WORKING.clear();
+		WORKING_PENDING.clear();
+		WORKING_LAST_APPLIED.clear();
 	}
 
-	/** {@code SetWorking}: the player zoomed into (true) or out of (false) one of their screens. */
+	/**
+	 * {@code SetWorking}: the player zoomed into (true) or out of (false) one of their screens. Toggles closer than
+	 * {@link #WORKING_MIN_INTERVAL_MS} to the last applied one are held back (returns false); the latest held state is
+	 * applied by {@link #flushWorking} once allowed, so the end state stays right.
+	 */
 	private static boolean setWorking(final ServerPlayer player, final boolean working) {
-		boolean changed = working ? WORKING.add(player.getUUID()) : WORKING.remove(player.getUUID());
+		UUID id = player.getUUID();
+		long now = clock.getAsLong();
+		Long last = WORKING_LAST_APPLIED.get(id);
+		if (last != null && now - last < WORKING_MIN_INTERVAL_MS) {
+			WORKING_PENDING.put(id, working);
+			return false;
+		}
+		WORKING_PENDING.remove(id);
+		WORKING_LAST_APPLIED.put(id, now);
+		return applyWorking(player.level().getServer(), id, working);
+	}
+
+	/** Applies held-back toggles whose interval has passed; called every server tick (cheap when nothing is held). */
+	public static void flushWorking(final MinecraftServer server) {
+		if (WORKING_PENDING.isEmpty()) {
+			return;
+		}
+		long now = clock.getAsLong();
+		for (Map.Entry<UUID, Boolean> e : WORKING_PENDING.entrySet()) {
+			UUID id = e.getKey();
+			Long last = WORKING_LAST_APPLIED.get(id);
+			if (last == null || now - last >= WORKING_MIN_INTERVAL_MS) {
+				if (WORKING_PENDING.remove(id, e.getValue())) {
+					WORKING_LAST_APPLIED.put(id, now);
+					applyWorking(server, id, e.getValue());
+				}
+			}
+		}
+	}
+
+	private static boolean applyWorking(final MinecraftServer server, final UUID id, final boolean working) {
+		boolean changed = working ? WORKING.add(id) : WORKING.remove(id);
 		if (changed) {
-			changed(player.level().getServer());
+			changed(server);
 		}
 		return changed;
 	}
