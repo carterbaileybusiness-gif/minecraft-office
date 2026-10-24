@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import local.carter.office.magic.spell.CastContext;
+import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 
 import net.minecraft.world.entity.LivingEntity;
@@ -15,7 +16,7 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * How the Lightning lane's arcs find their targets in the world. The first target is whatever the caster struck; every hop after
- * it goes only to a hostile mob ({@link Enemy}, the lane's ruling: lightning leaps between foes, never to sheep, snow golems or
+ * it goes only to a hostile mob ({@link Enemy}) that is not a boss ({@link TargetFilter#isBoss}; the lane's ruling: lightning leaps between foes, never to sheep, snow golems or
  * other bystanders). Each hop asks {@link Targets#radius} around the last target (so {@code TargetFilter} still spares players, pets,
  * villagers and the rest), and {@link ChainHops#next} picks the nearest one not yet struck that is in the last target's sight, so
  * lightning never leaps through a wall.
@@ -28,9 +29,9 @@ final class Arcs {
 		return e.getBoundingBox().getCenter();
 	}
 
-	/** Whether a hop may land on {@code e} (the lane filter, on top of {@code TargetFilter}). */
+	/** Whether a hop may land on {@code e} (the lane filter, on top of {@code TargetFilter}): a hostile mob, never a boss. */
 	static boolean hoppable(LivingEntity e) {
-		return e instanceof Enemy;
+		return e instanceof Enemy && !TargetFilter.isBoss(e);
 	}
 
 	/**

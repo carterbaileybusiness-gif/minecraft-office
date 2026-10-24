@@ -114,6 +114,13 @@ public final class HandSignScreen extends Screen {
 		return challenge;
 	}
 
+	/** The layout as drawn now (the game tests read it). */
+	public SignLayout.Layout layout() {
+		int titleW = font.width(title);
+		int lineW = Math.max(font.width(spellName), font.width(hint));
+		return SignLayout.layout(width, height, input.length(), titleW, lineW);
+	}
+
 	@Override
 	protected void init() {
 		if (openedIn == null) openedIn = minecraft.level;
@@ -233,9 +240,7 @@ public final class HandSignScreen extends Screen {
 		input.advance(gameTick(), now); // smooth bar between ticks; tick() sends a timeout
 		float k = visibility(now);
 		if (k <= 0.01f) return;
-		int titleW = font.width(title);
-		int lineW = Math.max(font.width(spellName), font.width(hint));
-		SignLayout.Layout l = SignLayout.layout(width, height, input.length(), titleW, lineW);
+		SignLayout.Layout l = layout();
 		HandSignInput.State state = input.state();
 		long sinceEnd = state.finished() ? now - input.endedAt() : 0;
 

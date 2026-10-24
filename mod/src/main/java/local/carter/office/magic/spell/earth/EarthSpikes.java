@@ -23,9 +23,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
@@ -91,9 +89,12 @@ public final class EarthSpikes implements Spell {
 		return !level.getBlockState(p).getCollisionShape(level, p).isEmpty();
 	}
 
-	/** Whether a spike also throws {@code e} up: hostile mobs, items and XP orbs (never players, pets or villagers). */
+	/**
+	 * Whether a spike also throws {@code e} up: hostile mobs, items and XP orbs, never players, pets, villagers or a boss
+	 * ({@link TargetFilter#controllable}; a boss is still hurt).
+	 */
 	public static boolean liftable(ServerPlayer caster, Entity e) {
-		return TargetFilter.pushable(caster, e) && (e instanceof Enemy || e instanceof ItemEntity || e instanceof ExperienceOrb);
+		return TargetFilter.controllable(caster, e);
 	}
 
 	/** The box a spike in {@code cell} strikes. */

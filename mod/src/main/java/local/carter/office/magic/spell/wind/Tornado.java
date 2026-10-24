@@ -13,6 +13,7 @@ import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.HitBudget;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Spell;
@@ -25,10 +26,8 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
@@ -48,7 +47,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * 4, from 1 below the base to 9 above) that the axis can see (no block collider between the axis and its middle: wind never
  * blows through walls) gets {@link TornadoGeometry#push} as its velocity: 0.35 round the axis, 0.15 in, 0.25 up, plus the
  * tornado's travel, scaled by knockback resistance. Things carried over the top are flung out and fall. Every 10 ticks,
- * hostile mobs it holds take 1 damage. At most {@link Targets#MAX_ENTITIES} things and {@link #MAX_CLIPS} sight checks a tick.
+ * hostile mobs it holds take 1 damage; a boss in reach takes that damage too but is never lifted. At most {@link Targets#MAX_ENTITIES} things and {@link #MAX_CLIPS} sight checks a tick.
  * No block changes.
  *
  * <p>Fx: {@code target} = the start (on the ground), {@code dir} = the level travel direction, {@code duration} = the life in
@@ -127,12 +126,16 @@ public final class Tornado implements Spell {
 	}
 
 	/**
-	 * What the tornado lifts: items, XP orbs, and hostile mobs ({@link Enemy}) that {@link TargetFilter#affects} (the lane ruling:
-	 * livestock, golems, allays, pets, villagers and players are never lifted or hurt).
+	 * What the tornado lifts: {@link TargetFilter#controllable}, so items, XP orbs and hostile mobs (the lane ruling: livestock,
+	 * golems, allays, pets, villagers and players are never lifted or hurt), never a boss.
 	 */
 	static boolean lifts(CastContext ctx, Entity e) {
-		if (!TargetFilter.pushable(ctx.caster(), e)) return false;
-		return e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Enemy && TargetFilter.affects(ctx.caster(), e);
+		return TargetFilter.controllable(ctx.caster(), e);
+	}
+
+	/** What the tornado catches: what it {@link #lifts}, plus hostile bosses, which it hurts but never lifts. */
+	static boolean catches(CastContext ctx, Entity e) {
+		return lifts(ctx, e) || e instanceof Enemy && TargetFilter.isBoss(e) && TargetFilter.affects(ctx.caster(), e);
 	}
 
 	/** True when no block collider stands between {@code a} and {@code b}. */
@@ -147,6 +150,8 @@ public final class Tornado implements Spell {
 		private final CastContext ctx;
 		private final TornadoGeometry geo;
 		private double y;
+		/** At most {@code Targets.MAX_ENTITIES} different creatures hurt over its life (the per-cast budget). */
+		private final HitBudget hurtBudget = new HitBudget();
 
 		Twister(CastContext ctx, TornadoGeometry geo) {
 			this.ctx = ctx;
@@ -165,7 +170,7 @@ public final class Tornado implements Spell {
 			double r = TornadoGeometry.RADIUS;
 			AABB reach = new AABB(base.x - r, base.y - TornadoGeometry.BELOW, base.z - r, base.x + r, base.y + TornadoGeometry.HEIGHT, base.z + r);
 			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, reach,
-					e -> lifts(ctx, e) && TornadoGeometry.inReach(base, e.position())));
+					e -> catches(ctx, e) && TornadoGeometry.inReach(base, e.position())));
 			caught.sort(Comparator.comparingDouble(e -> e.position().distanceToSqr(base)));
 			boolean hurt = age % TornadoGeometry.HURT_EVERY == 0;
 			boolean sync = age % SYNC_EVERY == 0;
@@ -177,15 +182,17 @@ public final class Tornado implements Spell {
 				clips++;
 				if (!clear(level, new Vec3(base.x, mid.y, base.z), mid)) continue;
 				n++;
-				double scale = 1;
-				if (e instanceof LivingEntity l) scale = Math.max(0, 1 - l.getAttributeValue(Attributes.KNOCKBACK_RESISTANCE));
-				Vec3 v = e.getDeltaMovement().lerp(geo.push(base, mid), scale);
-				e.setDeltaMovement(v);
-				if (sync) {
-					e.syncVelocity = true;
-					e.needsSync = true;
+				if (lifts(ctx, e)) {
+					double scale = 1;
+					if (e instanceof LivingEntity l) scale = Math.max(0, 1 - l.getAttributeValue(Attributes.KNOCKBACK_RESISTANCE));
+					Vec3 v = e.getDeltaMovement().lerp(geo.push(base, mid), scale);
+					e.setDeltaMovement(v);
+					if (sync) {
+						e.syncVelocity = true;
+						e.needsSync = true;
+					}
 				}
-				if (hurt && e instanceof LivingEntity l && l instanceof Enemy) Hurt.damage(ctx, l, TornadoGeometry.HURT);
+				if (hurt && e instanceof LivingEntity l && l instanceof Enemy && hurtBudget.admit(l)) Hurt.damage(ctx, l, TornadoGeometry.HURT);
 			}
 			return age < geo.life();
 		}

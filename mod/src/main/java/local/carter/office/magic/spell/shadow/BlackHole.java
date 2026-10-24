@@ -16,6 +16,7 @@ import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.HitBudget;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Spell;
@@ -115,6 +116,8 @@ public final class BlackHole implements Spell {
 		/** Changes this cast's batch accepted. */
 		private int used;
 		private @Nullable EditBatch batch;
+		/** At most {@code Targets.MAX_ENTITIES} different creatures hurt over its life and the blast (the per-cast budget). */
+		private final HitBudget hurtBudget = new HitBudget();
 
 		Hole(CastContext ctx, Vec3 centre, double cap) {
 			this.ctx = ctx;
@@ -167,7 +170,7 @@ public final class BlackHole implements Spell {
 			for (LivingEntity l : Targets.radius(ctx, centre, BlackHoleGeometry.HURT_RADIUS)) {
 				if (!(l instanceof Enemy) || clips >= MAX_CLIPS) continue;
 				clips++;
-				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter())) Hurt.damage(ctx, l, BlackHoleGeometry.HURT);
+				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) Hurt.damage(ctx, l, BlackHoleGeometry.HURT);
 			}
 		}
 
@@ -214,7 +217,9 @@ public final class BlackHole implements Spell {
 			}
 
 			for (LivingEntity l : Targets.radius(ctx, centre, BlackHoleGeometry.BLAST_RADIUS)) {
-				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter())) Hurt.damage(ctx, l, BlackHoleGeometry.BLAST * ctx.power());
+				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) {
+					Hurt.damage(ctx, l, BlackHoleGeometry.BLAST * ctx.power());
+				}
 			}
 			double r = BlackHoleGeometry.BLAST_RADIUS;
 			int n = 0;

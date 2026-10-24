@@ -24,6 +24,7 @@ import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.HitBudget;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.ProjectileHit;
@@ -158,6 +159,8 @@ public final class FireballBarrage implements Spell {
 		private final boolean[] done;
 		/** Creature id → damage this volley's blasts have dealt it. */
 		private final Map<Integer, Float> dealt = new HashMap<>();
+		/** At most {@code Targets.MAX_ENTITIES} different creatures over all its blasts (the per-cast budget). */
+		private final HitBudget budget = new HitBudget();
 
 		Volley(CastContext ctx, List<BarrageGeometry.Ball> balls) {
 			this.ctx = ctx;
@@ -190,11 +193,11 @@ public final class FireballBarrage implements Spell {
 			Vec3 dir = to.subtract(from).normalize();
 			Vec3 struck = struck(level, from, end, spec.radius());
 			if (struck != null) {
-				impact(ctx, dir, new ProjectileHit(struck, null, null), dealt);
+				impact(ctx, dir, new ProjectileHit(struck, null, null), dealt, budget);
 				return true;
 			}
 			if (blocked) {
-				impact(ctx, dir, new ProjectileHit(end, null, block), dealt);
+				impact(ctx, dir, new ProjectileHit(end, null, block), dealt, budget);
 				return true;
 			}
 			return k + 1 >= spec.maxTicks();
@@ -223,15 +226,15 @@ public final class FireballBarrage implements Spell {
 		}
 	}
 
-	/** One fireball lands: the blast (capped per creature by {@code dealt}), then its crater. */
-	static void impact(CastContext ctx, Vec3 dir, ProjectileHit hit, Map<Integer, Float> dealt) {
+	/** One fireball lands: the blast (capped per creature by {@code dealt}, and to the volley's {@code budget}), then its crater. */
+	static void impact(CastContext ctx, Vec3 dir, ProjectileHit hit, Map<Integer, Float> dealt, HitBudget budget) {
 		ServerLevel level = ctx.level();
 		Vec3 at = hit.pos();
 		// The blast is judged from just outside what it struck, so a fireball on a wall never hurts what stands behind it.
 		Vec3 blast = at.subtract(dir.scale(0.3));
 		float cap = MAX_DAMAGE * ctx.power();
 		for (LivingEntity e : Targets.radius(ctx, at, BarrageGeometry.BLAST)) {
-			if (!reaches(level, blast, e.getBoundingBox())) continue;
+			if (!reaches(level, blast, e.getBoundingBox()) || !budget.admit(e)) continue;
 			double f = BarrageGeometry.falloff(Math.sqrt(e.getBoundingBox().distanceToSqr(at)));
 			float already = dealt.getOrDefault(e.getId(), 0F);
 			float amount = Math.min((float) (DAMAGE * ctx.power() * f), cap - already);

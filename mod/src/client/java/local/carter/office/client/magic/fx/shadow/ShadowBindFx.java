@@ -59,7 +59,8 @@ public final class ShadowBindFx implements SpellFx {
 
 	/** The tendrils: dark, tapering coils wound round the foe, lit by violet along their edge, over a pool of darkness. */
 	static final class Tendrils extends UmbraParticle {
-		private static final int PIECES = 96;
+		/** Pieces along each coil: 64 (was 96) to cut the per-frame quad count; each piece is a little wider so they still merge. */
+		static final int PIECES = 64;
 		private final @Nullable Entity foe;
 		private Vec3 feet;
 		private Vec3 feetO;
@@ -75,6 +76,15 @@ public final class ShadowBindFx implements SpellFx {
 			this.width = foe != null ? Mth.clamp(foe.getBbWidth() / 2 + 0.15, 0.35, 1.2) : 0.45;
 			this.height = foe != null ? Mth.clamp(foe.getBbHeight(), 0.6, 3.5) : 1.4;
 			this.life = life;
+		}
+
+		/**
+		 * Width of the piece at {@code s} along the coil: thick at the root, a thin tip. Round a zombie-sized foe a coil is about
+		 * 4.3 blocks long, so 64 pieces sit under 0.07 apart, closer than the thinnest piece is wide (0.08 at the tip): their soft
+		 * edges merge into one strand instead of a row of beads.
+		 */
+		static float pieceWidth(double s) {
+			return (float) (0.21 - 0.13 * s);
 		}
 
 		static int cost() {
@@ -114,9 +124,7 @@ public final class ShadowBindFx implements SpellFx {
 					double s = (j + 0.5) / PIECES;
 					if (s > out) break;
 					Vec3 p = BindGeometry.tendril(base, width, height, i, s, t, life);
-					// Thick at the root, a thin tip. The pieces sit well under half their width apart (a coil is about 5 blocks long),
-					// so their soft edges merge into one strand instead of a row of beads.
-					float w = (float) (0.2 - 0.13 * s);
+					float w = pieceWidth(s);
 					umbra.dark(p, w, 0.9F * k);
 					// A thin, continuous vein of violet down the coil (on every piece, faint, so it never beads), a pulse running up it.
 					float glint = 0.18F + 0.26F * Mth.sin((float) (t * 0.9 - s * 9 + i * 1.9));

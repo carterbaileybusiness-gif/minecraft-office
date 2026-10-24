@@ -7,6 +7,7 @@ import local.carter.office.magic.cast.CastService.Result;
 import local.carter.office.magic.command.MagicCommand;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
+import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
@@ -800,6 +801,56 @@ public class ShadowGameTests {
 		h.assertTrue(at.z > z.getZ() + 0.5, "on the far side: " + h.relativeVec(at));
 		h.assertTrue(new Vec3(at.x - z.getX(), 0, at.z - z.getZ()).length() <= 2, "under and behind it");
 		assertStepped(h, p);
+		h.succeed();
+	}
+
+	/** A Shadow Step that fizzled: nothing happened and nothing was spent (no mana, no cooldown, no fx). */
+	private static void assertFizzledFree(GameTestHelper h, ServerPlayer p, Vec3 start, int mana) {
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertTrue(p.position().distanceTo(start) < 1.0E-6, "the caster stays put: " + h.relativeVec(p.position()));
+		h.assertValueEqual(MagicAttachments.mana(p), mana, "no mana spent");
+		h.assertFalse(MagicAttachments.get(p).readyAt().containsKey(SpellIds.SHADOW_STEP), "no cooldown");
+		h.assertTrue(rec.fx(p).isEmpty(), "no fx");
+		h.assertFalse(p.hasEffect(MobEffects.INVISIBILITY), "not made invisible");
+		h.assertTrue(rec.messageKeys(p).contains(ShadowStep.UNSAFE_KEY), "told why: " + rec.messageKeys(p));
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
+	public void shadowStepNeverLandsOnLava(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 3);
+		MagicTestKit.recorder(h);
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 4, 12));
+		// A lava pool right behind it, level with the floor: the spot behind it is over lava.
+		MagicTestKit.fill(h, new BlockPos(14, 3, 13), new BlockPos(18, 3, 16), Blocks.LAVA);
+		MagicTestKit.aim(p, new BlockPos(16, 5, 12));
+		Vec3 start = p.position();
+		int mana = MagicAttachments.mana(p);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.FIZZLED, "result over lava");
+		assertFizzledFree(h, p, start, mana);
+		// Positive control: the same step over stone lands behind it, at once (the fizzle started no cooldown).
+		MagicTestKit.fill(h, new BlockPos(14, 3, 13), new BlockPos(18, 3, 16), Blocks.STONE);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.CAST, "result over stone");
+		h.assertTrue(p.position().z > z.getZ() + 0.5, "lands behind it: " + h.relativeVec(p.position()));
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 30)
+	public void shadowStepNeverLandsInDeepWater(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 3);
+		MagicTestKit.recorder(h);
+		// A pool three deep, and a NoAI zombie hanging over it: the ground snap under it finds deep water.
+		MagicTestKit.fill(h, new BlockPos(13, 1, 9), new BlockPos(19, 3, 16), Blocks.WATER);
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(16, 8, 12));
+		h.assertTrue(!z.onGround(), "positive control: the target is airborne");
+		MagicTestKit.aim(p, new BlockPos(16, 9, 12));
+		Vec3 start = p.position();
+		int mana = MagicAttachments.mana(p);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.FIZZLED, "result over deep water");
+		assertFizzledFree(h, p, start, mana);
+		// Positive control: one block of water over the floor is no danger: the step lands.
+		MagicTestKit.fill(h, new BlockPos(13, 1, 9), new BlockPos(19, 2, 16), Blocks.STONE);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SHADOW_STEP, 0f), Result.CAST, "result over shallow water");
+		h.assertTrue(p.position().z > z.getZ() + 0.5, "lands behind it: " + h.relativeVec(p.position()));
 		h.succeed();
 	}
 }

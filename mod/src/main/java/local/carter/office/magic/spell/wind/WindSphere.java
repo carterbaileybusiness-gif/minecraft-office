@@ -300,6 +300,7 @@ public final class WindSphere implements Spell {
 			Vec3 from = s.at().subtract(look.scale(0.3));
 			List<LivingEntity> near = Targets.radius(ctx, s.at(), DrillGeometry.BLAST);
 			for (LivingEntity e : near) {
+				if (done.size() >= Targets.MAX_ENTITIES) break; // the struck one and the blast share the per-cast budget
 				if (done.contains(e) || !(e instanceof Enemy) || !reaches(level, from, e.getBoundingBox())) continue;
 				done.add(e);
 				hit(e, s.at(), damage);

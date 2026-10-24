@@ -9,6 +9,7 @@ import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.HitBudget;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Spell;
@@ -21,9 +22,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.ai.attributes.Attributes;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
@@ -40,7 +39,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * centre that the centre can see (no block collider between the centre and its middle: the well never pulls through walls)
  * gets the pull {@link WellGeometry#pull} as its velocity, scaled by its knockback resistance (at most
  * {@link Targets#MAX_ENTITIES}, nearest first, and at most {@link #MAX_CLIPS} sight checks a tick). What it drags is
- * {@link #pulls}: items, XP orbs and hostile mobs only. Every {@link WellGeometry#HURT_EVERY} ticks, hostile mobs within
+ * {@link #pulls}: items, XP orbs and hostile mobs only, never a boss. Every {@link WellGeometry#HURT_EVERY} ticks, hostile mobs within
  * {@link WellGeometry#HURT_RADIUS} that it can see take {@link WellGeometry#HURT}. No block changes; players, pets, villagers,
  * livestock, golems and the rest are never moved or hurt.
  *
@@ -105,12 +104,11 @@ public final class GravityWell implements Spell {
 	}
 
 	/**
-	 * What the well drags: items and XP orbs, and hostile mobs ({@link Enemy}) that {@link TargetFilter#affects} (the lane
-	 * ruling, as Lightning's: friends' livestock, golems and allays are never dragged or hurt).
+	 * What the well (and Black Hole) drags: {@link TargetFilter#controllable}, so items, XP orbs and hostile mobs, never a boss (the
+	 * lane ruling, as Lightning's: friends' livestock, golems and allays are never dragged or hurt; bosses are hurt, never dragged).
 	 */
 	static boolean pulls(CastContext ctx, Entity e) {
-		if (!TargetFilter.pushable(ctx.caster(), e)) return false;
-		return e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Enemy && TargetFilter.affects(ctx.caster(), e);
+		return TargetFilter.controllable(ctx.caster(), e);
 	}
 
 	/** True when no block collider stands between {@code a} and {@code b}. */
@@ -125,6 +123,8 @@ public final class GravityWell implements Spell {
 		private final CastContext ctx;
 		private final Vec3 centre;
 		private final int life;
+		/** At most {@code Targets.MAX_ENTITIES} different creatures hurt over its life (the per-cast budget). */
+		private final HitBudget hurtBudget = new HitBudget();
 
 		Well(CastContext ctx, Vec3 centre, int life) {
 			this.ctx = ctx;
@@ -164,7 +164,7 @@ public final class GravityWell implements Spell {
 				for (LivingEntity l : Targets.radius(ctx, centre, WellGeometry.HURT_RADIUS)) {
 					if (!(l instanceof Enemy) || clips >= MAX_CLIPS) continue;
 					clips++;
-					if (clear(level, centre, l.getBoundingBox().getCenter())) Hurt.damage(ctx, l, WellGeometry.HURT);
+					if (clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) Hurt.damage(ctx, l, WellGeometry.HURT);
 				}
 			}
 			return age < life;

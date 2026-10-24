@@ -30,9 +30,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
@@ -103,9 +101,9 @@ public final class Quake implements Spell {
 		return null;
 	}
 
-	/** Whether the ring throws {@code e}: hostile mobs, items and XP orbs. */
+	/** Whether the ring throws {@code e}: hostile mobs, items and XP orbs, never a boss ({@link TargetFilter#controllable}; a boss is still hurt). */
 	public static boolean pushes(ServerPlayer caster, Entity e) {
-		return TargetFilter.pushable(caster, e) && (e instanceof Enemy || e instanceof ItemEntity || e instanceof ExperienceOrb);
+		return TargetFilter.controllable(caster, e);
 	}
 
 	/** The ring: each tick it reaches new columns (cracking the picked ones) and the creatures standing on them. */
