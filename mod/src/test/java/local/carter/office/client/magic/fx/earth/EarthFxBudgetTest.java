@@ -35,7 +35,7 @@ class EarthFxBudgetTest {
 	@Test
 	void mountainFistRocksFitTheGhostBudget() {
 		List<MountainFistFx.Voxel> fist = MountainFistFx.fist();
-		int rocks = fist.size() + MountainFistFx.PLATES + MountainFistFx.FANGS * EarthSpikesFx.TALL_PARTS;
+		int rocks = fist.size() + MountainFistFx.PLATES + MountainFistFx.FANGS * EarthSpikesFx.TALL_PARTS + MountainFistFx.EJECTA;
 		assertTrue(rocks <= FxBudget.GHOST_BLOCKS, "rocks " + rocks);
 		assertTrue(fist.size() >= 50, "a big fist: " + fist.size());
 		// No two rocks of the fist in the same place.

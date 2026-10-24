@@ -750,4 +750,24 @@ public class EarthGameTests {
 			h.succeed();
 		});
 	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
+	public void mountainFistNeverRisesRoundItsCaster(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 7);
+		// Looking at the ground a block ahead of its own feet.
+		lookAt(h, p, Vec3.atBottomCenterOf(MagicTestKit.STAND.south()));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.CAST, "result");
+		Vec3 target = rec.fx(p).get(0).target();
+		double out = Math.sqrt(Math.pow(target.x - p.getX(), 2) + Math.pow(target.z - p.getZ(), 2));
+		double min = MountainFistGeometry.baseRadius(7) + MountainFistGeometry.CLEAR;
+		h.assertTrue(out >= min - 0.75 && out <= min + 1, "moved out along the look: " + out);
+		h.runAfterDelay(MountainFistGeometry.RISE + 4, () -> {
+			// The caster's cells stay open (the cone's edge is a block or more away); the spire stands ahead (the positive control).
+			h.assertBlockPresent(Blocks.AIR, MagicTestKit.STAND);
+			h.assertBlockPresent(Blocks.AIR, MagicTestKit.STAND.above());
+			h.assertTrue(spire(h.getLevel().getBlockState(BlockPos.containing(target))), "the spire stands at the moved target");
+			h.succeed();
+		});
+	}
 }

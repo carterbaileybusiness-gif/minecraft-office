@@ -23,6 +23,8 @@ import net.minecraft.world.phys.Vec3;
 public final class MountainFistGeometry {
 	/** How far the look ray looks for ground. */
 	public static final double RANGE = 32;
+	/** The target is at least the base radius plus this from the caster (horizontally), so the spire never closes round them. */
+	public static final double CLEAR = 2;
 	/** Ticks the spire takes to rise, bottom to top. */
 	public static final int RISE = 20;
 	/** The tick the fist breaks the ground and strikes. */

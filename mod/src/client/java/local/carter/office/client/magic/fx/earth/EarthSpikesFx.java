@@ -150,10 +150,14 @@ public final class EarthSpikesFx implements SpellFx {
 				out.pitch = tilt;
 				out.scale = scale;
 				out.light = cell;
+				out.glow = GLOW;
 				return true;
 			});
 		}
 	}
+
+	/** Least block light of a spike: earth magic, faintly lit at night. */
+	static final int GLOW = 7;
 
 	/** Spike {@code i} gives way: a little crumble and a grind (the crumbs were paid at the cast). */
 	private static void sink(ClientLevel level, BlockPos cell, int i, int n, int crumbs) {

@@ -42,7 +42,8 @@ import net.minecraft.world.phys.Vec3;
  * knuckles. It rises skyward on the spire the server builds under it, layer by layer, shedding grit, punches through the sky
  * seal at the top with a crack, holds, and bursts apart into tumbling rocks, a cloud of dust drifting off the new spire.
  *
- * <p>The fist (about 66 block-sized rocks of stone, andesite, cobblestone and tuff, facing the caster) and every other rock are
+ * <p>The fist (62 rocks of 1.3 blocks: forearm, wrist, back of the hand, four curled fingers, knuckles, a thumb; stone, andesite,
+ * cobblestone and tuff, leaning toward the caster like an uppercut and glowing faintly at night) and every other rock are
  * {@link EarthStones} on one cancellable timer's leash. The 1500 particles are split into phase shares (cast, eruption, rise,
  * shatter, settle), so no phase can starve a later one; the shake reaches everyone near the target ({@link #nearness}: full
  * within 24 blocks, still 0.8 at 32), not just the caster.
@@ -70,6 +71,8 @@ public final class MountainFistFx implements SpellFx {
 	/** Ground plates prying up round the base, and dripstone fangs bursting out in a ring. */
 	static final int PLATES = 16;
 	static final int FANGS = 8;
+	/** Lumps of ground thrown out of the eruption. */
+	static final int EJECTA = 10;
 
 	/** One rock of the fist: its centre in voxels (x across, y up from the wrist, z toward the caster), its look and size. */
 	record Voxel(float x, float y, float z, int kind, float size) {}
@@ -77,31 +80,43 @@ public final class MountainFistFx implements SpellFx {
 	/** The fist, punching up: forearm and wrist, the back of the hand, four curled fingers, the knuckles (turf on top), a thumb across the front. */
 	static List<Voxel> fist() {
 		List<Voxel> v = new ArrayList<>();
-		for (float y : new float[] {-1.5F, -0.5F, 0.5F, 1.5F}) {
-			for (int x = -1; x <= 1; x++) {
-				for (float z : new float[] {-0.5F, 0.5F}) v.add(new Voxel(x, y, z, (x + (int) (y + 2) + (z > 0 ? 1 : 0)) & 1, 1.0F));
+		// The forearm coming out of the spire (2 × 2), then a wrist band (3 × 2).
+		for (float y : new float[] {-1.5F, -0.5F, 0.5F}) {
+			for (float x : new float[] {-0.5F, 0.5F}) {
+				for (float z : new float[] {-0.5F, 0.5F}) v.add(new Voxel(x, y, z, ((int) (y + 2) + (x > 0 ? 1 : 0) + (z > 0 ? 1 : 0)) % 2, 1F));
 			}
 		}
+		for (float x : new float[] {-1F, 0F, 1F}) {
+			for (float z : new float[] {-0.5F, 0.5F}) v.add(new Voxel(x, 1.5F, z, 2, 1F));
+		}
+		// The back of the hand: 4 wide, 2 deep, 3 high.
 		for (float y : new float[] {2.5F, 3.5F, 4.5F}) {
 			for (float x : new float[] {-1.5F, -0.5F, 0.5F, 1.5F}) {
 				for (float z : new float[] {-1F, 0F}) {
 					if (z == 0F && Math.abs(x) < 1 && y == 3.5F) continue; // hidden inside
-					v.add(new Voxel(x, y, z, (int) (x + y + z + 10) % 3 == 0 ? 2 : 0, 1.0F));
+					v.add(new Voxel(x, y, z, (int) (x + y + z + 10) % 4 == 0 ? 1 : 0, 1F));
 				}
 			}
 		}
+		// Four curled fingers down the front, a seam between each, and the knuckles bumping up along the top (turf torn up on
+		// the back row).
 		int finger = 0;
 		for (float x : new float[] {-1.5F, -0.5F, 0.5F, 1.5F}) {
-			int kind = (finger++ & 1) == 0 ? 1 : 0;
-			v.add(new Voxel(x, 3.5F, 1F, kind, 0.94F));
-			v.add(new Voxel(x, 4.5F, 1F, kind, 0.94F));
-			v.add(new Voxel(x, 5.45F, -0.5F, 4, 0.96F));
-			v.add(new Voxel(x, 5.35F, 0.55F, kind == 1 ? 1 : 2, 0.92F));
+			int kind = (finger & 1) == 0 ? 1 : 0;
+			float bump = (finger & 1) == 0 ? 0.08F : -0.04F;
+			v.add(new Voxel(x, 3.5F, 1F, kind, 0.92F));
+			v.add(new Voxel(x, 4.5F, 1F, kind, 0.92F));
+			v.add(new Voxel(x, 5.45F + bump, -0.5F, 4, 0.94F));
+			v.add(new Voxel(x, 5.3F + bump, 0.6F, kind, 0.9F));
+			finger++;
 		}
-		v.add(new Voxel(-1.5F, 2.5F, 1.05F, 3, 0.9F));
-		v.add(new Voxel(-0.5F, 2.55F, 1.15F, 3, 0.9F));
-		v.add(new Voxel(0.5F, 2.7F, 1.2F, 3, 0.86F));
-		v.add(new Voxel(1.25F, 3.05F, 1.35F, 3, 0.7F));
+		// Fingertips tucked under, and the thumb wrapped across the front, standing out, its base on the side.
+		v.add(new Voxel(0.5F, 2.6F, 1F, 2, 0.82F));
+		v.add(new Voxel(1.5F, 2.6F, 1F, 2, 0.82F));
+		v.add(new Voxel(-1.6F, 2.6F, 1.55F, 3, 0.94F));
+		v.add(new Voxel(-0.6F, 2.65F, 1.6F, 3, 0.94F));
+		v.add(new Voxel(0.35F, 2.75F, 1.55F, 3, 0.9F));
+		v.add(new Voxel(-2.15F, 3.0F, 0.5F, 3, 0.85F));
 		return v;
 	}
 
@@ -121,10 +136,15 @@ public final class MountainFistFx implements SpellFx {
 		return (float) Mth.clamp((SHAKE_NONE - d) / (SHAKE_NONE - SHAKE_FULL), 0, 1);
 	}
 
-	/** Voxel size: 1.15 blocks at level 7, a little bigger with each level (the spire's height tells the level). */
+	/** Voxel size: 1.3 blocks at level 7, a little bigger with each level (the spire's height tells the level). */
 	static float voxelScale(int height) {
-		return 1.15F + 0.08F * Math.max(0, (height - 8) / 2F);
+		return 1.3F + 0.08F * Math.max(0, (height - 8) / 2F);
 	}
+
+	/** How far the fist leans toward the caster (degrees): an uppercut, knuckles first. */
+	static final float LEAN = 14F;
+	/** Least block light of the fist and its fangs: they glow faintly at night. */
+	static final int GLOW = 11;
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
@@ -169,6 +189,7 @@ public final class MountainFistFx implements SpellFx {
 				fistRocks(kit, leash, fist, target, height, surface, caster, r);
 				fangs(kit, leash, target, baseRadius, caster, r);
 				plates(kit, leash, level, solid, thrown, target, baseRadius, caster, r);
+				ejecta(kit, leash, level, foot, surface, baseRadius, r);
 				erupt(kit, level, erupt, foot, surface, baseRadius);
 			}
 			if (t >= 1 && t <= 10) shockwave(kit, erupt, foot, surface, baseRadius + 1 + t * 0.9);
@@ -261,11 +282,13 @@ public final class MountainFistFx implements SpellFx {
 				double tt = Math.min(t, SHATTER_AT);
 				float yaw = fist.yaw(tt);
 				float roll = fist.roll(tt);
-				Quaternionf q = new Quaternionf().rotationY(yaw * Mth.DEG_TO_RAD).rotateZ(roll * Mth.DEG_TO_RAD);
+				Quaternionf q = new Quaternionf().rotationY(yaw * Mth.DEG_TO_RAD).rotateX(LEAN * Mth.DEG_TO_RAD).rotateZ(roll * Mth.DEG_TO_RAD);
 				Vector3f o = q.transform(new Vector3f(local));
 				Vec3 at = new Vec3(axis.x + o.x, fist.base(tt) + o.y, axis.z + o.z);
 				out.light = light;
+				out.glow = GLOW;
 				out.yaw = yaw;
+				out.pitch = LEAN;
 				out.roll = roll;
 				out.scale = size;
 				if (t <= SHATTER_AT) {
@@ -278,7 +301,7 @@ public final class MountainFistFx implements SpellFx {
 				if (p.y < fist.ground - 0.4) return false;
 				out.at(p);
 				out.yaw = yaw + spinA * (float) f;
-				out.pitch = spinB * (float) f;
+				out.pitch = LEAN + spinB * (float) f;
 				out.scale = size * Mth.clamp((SHATTER_LIFE - (float) f) / 7F, 0F, 1F);
 				return true;
 			});
@@ -288,16 +311,22 @@ public final class MountainFistFx implements SpellFx {
 	/** The eruption: crumbs, dust and smoke blasting up, a ring of dust pillars, a boom, the big shake and the hit-stop. */
 	private static void erupt(FxKit kit, ClientLevel level, EarthFx.Share share, Vec3 foot, BlockState surface, int baseRadius) {
 		Vec3 at = foot.add(0, 0.3, 0);
-		EarthFx.spray(level, EarthFx.crumbs(surface), at, share.spend(kit, 120), 1.4, 0.55, true);
-		EarthFx.spray(level, EarthFx.crumbs(Blocks.STONE.defaultBlockState()), at, share.spend(kit, 60), 1.0, 0.45, true);
-		EarthFx.spray(level, EarthFx.DUST, at.add(0, 0.5, 0), share.spend(kit, 50), baseRadius * 0.6, 0.12, true);
-		EarthFx.spray(level, ParticleTypes.CAMPFIRE_COSY_SMOKE, at.add(0, 0.6, 0), share.spend(kit, 24), baseRadius * 0.7, 0.05, true);
-		EarthFx.spray(level, ParticleTypes.POOF, at, share.spend(kit, 20), baseRadius * 0.5, 0.12, true);
-		EarthFx.spray(level, ParticleTypes.EXPLOSION, at.add(0, 0.8, 0), share.spend(kit, 3), 1.0, 0, false);
+		EarthFx.spray(level, EarthFx.crumbs(surface), at, share.spend(kit, 100), 1.4, 0.55, true);
+		EarthFx.spray(level, EarthFx.crumbs(Blocks.STONE.defaultBlockState()), at, share.spend(kit, 50), 1.0, 0.45, true);
+		EarthFx.spray(level, EarthFx.DUST, at.add(0, 0.5, 0), share.spend(kit, 40), baseRadius * 0.6, 0.12, true);
+		// A cloud of dust and smoke blown out round the base, big puffs where the ground bursts.
+		EarthFx.spray(level, ParticleTypes.CAMPFIRE_COSY_SMOKE, at.add(0, 0.6, 0), share.spend(kit, 36), baseRadius * 0.9, 0.06, true);
+		EarthFx.spray(level, ParticleTypes.POOF, at, share.spend(kit, 20), baseRadius * 0.6, 0.14, true);
+		int puffs = share.spend(kit, 10);
+		for (int i = 0; i < puffs; i++) {
+			double a = Mth.TWO_PI * i / Math.max(1, puffs);
+			level.addParticle(ParticleTypes.EXPLOSION, foot.x + Math.cos(a) * baseRadius * 0.8, foot.y + 0.8, foot.z + Math.sin(a) * baseRadius * 0.8, 0, 0, 0);
+		}
 		ParticleOptions pillar = new BlockParticleOption(ParticleTypes.DUST_PILLAR, surface);
-		kit.ring(foot.add(0, 0.05, 0), baseRadius, pillar, share.take(40));
-		kit.ring(foot.add(0, 0.05, 0), baseRadius + 1, pillar, share.take(30));
-		kit.motes(foot.add(0, 0.4, 0), EarthFx.CLAY, share.take(30), baseRadius * 0.7, new Vec3(0, 0.08, 0), 0.06, GlowMote.Drift.RISE, 0.3F, 22);
+		kit.ring(foot.add(0, 0.05, 0), baseRadius, pillar, share.take(34));
+		kit.ring(foot.add(0, 0.05, 0), baseRadius + 1, pillar, share.take(26));
+		// Glowing cracks: earth light welling up out of the ground (it reads at night too).
+		kit.motes(foot.add(0, 0.4, 0), EarthFx.CLAY, share.take(50), baseRadius * 0.8, new Vec3(0, 0.08, 0), 0.06, GlowMote.Drift.RISE, 0.34F, 24);
 		play(level, foot, SoundEvents.WARDEN_EMERGE, 2.5F, 1.1F);
 		play(level, foot, SoundEvents.GENERIC_EXPLODE.value(), 3F, 0.55F);
 		play(level, foot, SoundEvents.MACE_SMASH_GROUND_HEAVY, 3F, 0.5F);
@@ -310,7 +339,20 @@ public final class MountainFistFx implements SpellFx {
 
 	/** The shockwave rolling out over the ground. */
 	private static void shockwave(FxKit kit, EarthFx.Share share, Vec3 foot, BlockState surface, double radius) {
-		kit.ring(foot.add(0, 0.05, 0), radius, new BlockParticleOption(ParticleTypes.DUST_PILLAR, surface), share.take(18));
+		kit.ring(foot.add(0, 0.05, 0), radius, new BlockParticleOption(ParticleTypes.DUST_PILLAR, surface), share.take(14));
+		kit.ring(foot.add(0, 0.2, 0), radius, ParticleTypes.POOF, share.take(5));
+	}
+
+	/** Lumps of the ground and stone flung out of the eruption: they tumble, bounce once and settle. */
+	private static void ejecta(FxKit kit, RockLedger.Leash leash, ClientLevel level, Vec3 foot, BlockState surface, int baseRadius, RandomSource r) {
+		for (int i = 0; i < EJECTA; i++) {
+			double a = Mth.TWO_PI * (i + r.nextDouble() * 0.6) / EJECTA;
+			Vec3 out = new Vec3(Math.cos(a), 0, Math.sin(a));
+			Vec3 from = foot.add(out.scale(baseRadius * 0.5)).add(0, 0.6, 0);
+			Vec3 v = out.scale(0.22 + 0.2 * r.nextDouble()).add(0, 0.42 + 0.25 * r.nextDouble(), 0);
+			BlockState s = i % 3 == 0 ? Blocks.STONE.defaultBlockState() : surface;
+			EarthFx.chip(kit, leash, level, s, from, v, 0.45F + 0.3F * r.nextFloat(), 30 + r.nextInt(8));
+		}
 	}
 
 	/** Ground plates round the base pry up on their outer edge and drop back. */

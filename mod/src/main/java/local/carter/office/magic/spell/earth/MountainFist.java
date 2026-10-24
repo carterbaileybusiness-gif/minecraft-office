@@ -90,10 +90,10 @@ public final class MountainFist implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		ServerLevel level = ctx.level();
 		ServerPlayer p = ctx.caster();
-		BlockPos target = target(ctx);
+		int baseRadius = MountainFistGeometry.baseRadius(ctx.grimoireLevel());
+		BlockPos target = target(ctx, baseRadius);
 		Vec3 to = Vec3.atBottomCenterOf(target).subtract(p.position());
 		Vec3 dir = to.x * to.x + to.z * to.z < 1.0E-4 ? EarthSpikes.forward(ctx.look(), p.getYRot()) : EarthWallGeometry.flat(to);
-		int baseRadius = MountainFistGeometry.baseRadius(ctx.grimoireLevel());
 		int height = MountainFistGeometry.height(ctx.grimoireLevel());
 		BlockState surface = surfaceMaterial(level, target.below());
 		if (!ActiveEffects.add(level, new Rise(ctx, target, surface, baseRadius, height))) return CastOutcome.fizzle(CastService.BUSY_KEY);
@@ -103,8 +103,24 @@ public final class MountainFist implements Spell {
 				new float[] {baseRadius, height, MountainFistGeometry.debris(ctx.grimoireLevel())}));
 	}
 
-	/** The open cell on the ground at the look ray's point within range (the ground under its end on a miss). */
-	static BlockPos target(CastContext ctx) {
+	/**
+	 * The open cell on the ground at the look ray's point within range (the ground under its end on a miss). Never closer to the
+	 * caster than {@code baseRadius + }{@link MountainFistGeometry#CLEAR} (looking at their own feet, it moves out along the look),
+	 * so the spire never rises round the caster.
+	 */
+	static BlockPos target(CastContext ctx, int baseRadius) {
+		BlockPos t = rayTarget(ctx);
+		Vec3 feet = ctx.caster().position();
+		double dx = t.getX() + 0.5 - feet.x;
+		double dz = t.getZ() + 0.5 - feet.z;
+		double min = baseRadius + MountainFistGeometry.CLEAR;
+		if (dx * dx + dz * dz >= min * min) return t;
+		Vec3 aim = feet.add(EarthSpikes.forward(ctx.look(), ctx.caster().getYRot()).scale(min)).add(0, 1, 0);
+		Vec3 ground = Targets.ground(ctx.level(), aim);
+		return BlockPos.containing(aim.x, ground.y + 0.01, aim.z);
+	}
+
+	private static BlockPos rayTarget(CastContext ctx) {
 		ServerLevel level = ctx.level();
 		Vec3 eye = ctx.eye();
 		Vec3 look = ctx.look().normalize();
@@ -194,6 +210,9 @@ public final class MountainFist implements Spell {
 				int[] o = MountainFistGeometry.debrisCell(i, n, baseRadius, ctx.seed());
 				BlockPos ground = QuakeGeometry.surface(target.getX() + o[0], target.getZ() + o[1], target.getY() - 1, solid);
 				if (ground == null) continue;
+				// Never pull the ground from under a player or anything spells must spare.
+				AABB above = new AABB(ground.above()).expandTowards(0, 1, 0);
+				if (!level.getEntities((Entity) null, above, e -> !e.isSpectator() && EarthWall.keepsCellOpen(e)).isEmpty()) continue;
 				batch().launch(ground, MountainFistGeometry.debrisVelocity(i, o[0], o[1], ctx.seed()));
 			}
 		}
