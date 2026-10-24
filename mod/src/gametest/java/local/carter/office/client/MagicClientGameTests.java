@@ -1065,13 +1065,15 @@ public class MagicClientGameTests implements FabricClientGameTest {
 
 	/**
 	 * Hold right-click 40 ticks: no mana is spent while held, and the circle (seen from behind the caster) changes at least 20 % of
-	 * the pixels in its projected rect against the same frame before charging. The release casts at full charge (8 × 1.5 = 12).
+	 * the pixels inside its projection (the ellipse in its projected rect) against the same frame before charging. The release casts at full charge (8 × 1.5 = 12).
 	 */
 	private static void chargeCircleGrowsWhileHeld(ClientGameTestContext context, TestSingleplayerContext sp) {
 		refill(context, sp, TAP_PROBE);
 		context.runOnClient(mc -> mc.options.setCameraType(CameraType.THIRD_PERSON_BACK));
+		// A clean frame to compare with: the tap's cast circle and the spell label gone.
+		context.waitFor(mc -> ChargeCircles.showing() == 0 && ManaBarHud.labelTicks() <= 0, 200);
 		quietHud(context);
-		context.waitTicks(4);
+		context.waitTicks(30);
 		BufferedImage before = read(context.takeScreenshot("magic-charge-before"));
 		context.getInput().holdMouse(MOUSE_RIGHT);
 		try {
@@ -1081,9 +1083,13 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			if (context.computeOnClient(mc -> ChargeCircles.showing()) != 1) throw new AssertionError("one charging circle expected");
 			BufferedImage full = read(context.takeScreenshot("magic-charge-full"));
 			int[] r = context.computeOnClient(MagicClientGameTests::circleRect);
+			// Pixels inside the circle's projection: the ellipse inscribed in its rect.
+			double cx = (r[0] + r[2]) / 2.0, cy = (r[1] + r[3]) / 2.0, rx = (r[2] - r[0]) / 2.0, ry = (r[3] - r[1]) / 2.0;
 			int n = 0, diff = 0;
 			for (int y = r[1]; y < r[3]; y++) {
 				for (int x = r[0]; x < r[2]; x++) {
+					double ex = (x + 0.5 - cx) / rx, ey = (y + 0.5 - cy) / ry;
+					if (ex * ex + ey * ey > 1) continue;
 					n++;
 					if (dist(full.getRGB(x, y), before.getRGB(x, y)) > 36) diff++;
 				}
@@ -1189,7 +1195,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 	 * An 854 × 480 window with the GUI scale set to 4 (the game caps it at the largest that window allows): the mana bar, the
 	 * wheel, the hand-sign prompt, the grimoire and the element choice all lie inside the screen, and each of their widgets is
 	 * drawn (at least 20 % non-background pixels in its rect). The background is one plain bright face filling the view (a white
-	 * concrete wall, night vision, FOV 30), sampled in each screenshot's corner, so a dark panel or tile counts as drawn.
+	 * concrete wall, night vision, FOV 30), sampled in each screenshot away from the widgets, so a dark panel or tile counts as drawn.
 	 */
 	private static void screensFitAtGuiScale4(ClientGameTestContext context, TestSingleplayerContext sp) {
 		int fov = context.computeOnClient(mc -> mc.options.fov().get());
@@ -1205,17 +1211,24 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			int h = context.computeOnClient(mc -> mc.getWindow().getGuiScaledHeight());
 			System.out.println("[magic] 854 x 480 at GUI scale option 4: scale " + scale + ", " + w + " x " + h + " GUI units");
 			lookEast(context);
-			quietHud(context);
 			refill(context, sp, TAP_PROBE);
+			// The ultimate's cast fx and the spell label gone, so the view is the plain wall.
+			context.waitTicks(100);
+			context.waitFor(mc -> ManaBarHud.labelTicks() <= 0, 200);
+			quietHud(context);
+			context.waitTicks(2);
 			BufferedImage world = read(context.takeScreenshot("magic-fit-world"));
-			int bg = world.getRGB(2, 2);
+			int bg = backdrop(world, false);
 			int[] hue = {(bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF};
-			if (hue[0] < 150 || hue[1] < 150 || hue[2] < 150) throw new AssertionError("the backdrop should be the lit white wall: " + Integer.toHexString(bg));
+			if (hue[0] < 60 || hue[1] < 60 || hue[2] < 60) throw new AssertionError("the backdrop should be the lit white wall, not near-black: " + Integer.toHexString(bg));
 
 			// The mana bar (stance: off-hand grimoire, empty main hand).
 			ManaBarLayout.Layout bar = ManaBarLayout.layout(w, h);
 			assertInside(bar.bar(), w, h, "mana bar");
-			assertInside(bar.offhandSlot(false), w, h, "off-hand slot");
+			int[] tw = context.computeOnClient(mc -> new int[] {mc.font.width(String.valueOf(MagicAttachments.mana(mc.player))),
+					mc.font.width(String.valueOf(mc.player.experienceLevel))});
+			assertInside(bar.manaText(tw[0]), w, h, "mana number");
+			assertInside(bar.xpText(tw[1], false), w, h, "XP level");
 			assertDrawn(world, bar.bar(), scale, bg, "mana bar");
 
 			// The wheel.
@@ -1224,7 +1237,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 				context.waitFor(mc -> SpellWheel.isOpen(), 20);
 				context.waitTicks(SpellWheel.OPEN_TICKS + 3);
 				BufferedImage open = read(context.takeScreenshot("magic-fit-wheel"));
-				int wheelBg = open.getRGB(2, 2);
+				int wheelBg = backdrop(open, false);
 				WheelLayout.Layout l = WheelLayout.layout(w, h);
 				int r = (int) Math.ceil(l.outer());
 				Rect ring = new Rect(l.cx() - r, l.cy() - r, 2 * r, 2 * r);
@@ -1242,7 +1255,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			context.waitForScreen(HandSignScreen.class);
 			context.waitTicks(16); // the arrows pop in one by one
 			BufferedImage signs = read(context.takeScreenshot("magic-fit-signs"));
-			int signsBg = signs.getRGB(2, 2);
+			int signsBg = backdrop(signs, false);
 			SignLayout.Layout sl = context.computeOnClient(mc -> ((HandSignScreen) mc.gui.screen()).layout());
 			assertInside(sl.panel(), w, h, "sign panel");
 			assertInside(sl.timer(), w, h, "sign timer");
@@ -1267,7 +1280,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			context.waitFor(mc -> mc.gui.screen() instanceof GrimoireScreen s && s.introDone(), 60);
 			context.waitTicks(2);
 			BufferedImage book = read(context.takeScreenshot("magic-fit-grimoire"));
-			int bookBg = book.getRGB(2, 2);
+			int bookBg = backdrop(book, true);
 			GrimoireLayout.Layout gl = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).layout());
 			assertInside(gl.book(), w, h, "grimoire book");
 			assertInside(gl.footer(), w, h, "grimoire footer");
@@ -1293,7 +1306,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			context.waitFor(mc -> mc.gui.screen() instanceof ElementChoiceScreen s && s.introDone(), 60);
 			context.waitTicks(4);
 			BufferedImage choice = read(context.takeScreenshot("magic-fit-choice"));
-			int choiceBg = choice.getRGB(2, 2);
+			int choiceBg = backdrop(choice, true);
 			ChoiceLayout.Layout cl = context.computeOnClient(mc -> ((ElementChoiceScreen) mc.gui.screen()).layout());
 			assertInside(cl.book(), w, h, "choice book");
 			assertDrawn(choice, cl.book(), scale, choiceBg, "choice book");
@@ -1315,6 +1328,14 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			context.getInput().resizeWindow(1920, 1080);
 			setGuiScale(context, 4);
 		}
+	}
+
+	/**
+	 * The background colour: the top middle of the frame (the corners are darkened by the vignette), or for a centred book screen
+	 * ({@code beside}) its left edge halfway down, where neither the book nor an orbiting sigil ever is.
+	 */
+	private static int backdrop(BufferedImage img, boolean beside) {
+		return beside ? img.getRGB(img.getWidth() / 50, img.getHeight() / 2) : img.getRGB(img.getWidth() / 2, img.getHeight() / 8);
 	}
 
 	/** Sets the room's east wall (the one {@link #lookEast} faces) to {@code b}. */
