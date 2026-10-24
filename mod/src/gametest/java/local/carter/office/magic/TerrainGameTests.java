@@ -34,6 +34,7 @@ import local.carter.office.magic.terrain.WorldTerrainEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.gametest.framework.GameTestSequence;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
@@ -50,6 +51,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.storage.LevelData;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -631,6 +633,70 @@ public class TerrainGameTests {
 		h.assertValueEqual(temp.active(), 0, "entries");
 		h.assertValueEqual(temp.waiting(), 0, "waiting");
 		h.succeed();
+	}
+
+	/** Load and unload rounds in {@link #tempBlocksSurviveRepeatedChunkUnloadAndLoad}. */
+	private static final int CHUNK_CYCLES = 5;
+	/** Temporary states for the chunk cycles: each round puts states the reloaded (re-packed) sections don't hold yet. */
+	private static final List<BlockState> CYCLE_STATES = List.of(GLASS, Blocks.PACKED_ICE.defaultBlockState(), Blocks.STONE_BRICKS.defaultBlockState(),
+			Blocks.TUFF.defaultBlockState(), Blocks.CALCITE.defaultBlockState(), Blocks.AMETHYST_BLOCK.defaultBlockState(),
+			Blocks.TERRACOTTA.defaultBlockState(), Blocks.BLUE_ICE.defaultBlockState());
+
+	private static boolean hasEntry(TempBlockData temp, ServerLevel level, BlockPos pos) {
+		for (TempBlockData.Entry e : temp.entries()) if (e.dimension() == level.dimension() && e.pos().equals(pos)) return true;
+		return false;
+	}
+
+	/**
+	 * Stress for the real chunk hooks (not called by hand): temporary blocks in three far chunks, the chunks unload (the
+	 * installed kit's {@code CHUNK_UNLOAD} restores every entry before the save) and load again from disk ({@code CHUNK_LOAD}),
+	 * {@link #CHUNK_CYCLES} times. Each round grows the sections' palettes again next to chunks being lit. After each unload
+	 * no entry is left; after each load every cell holds its original block (no ghost block, nothing left to restore twice).
+	 */
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 2400)
+	public void tempBlocksSurviveRepeatedChunkUnloadAndLoad(GameTestHelper h) {
+		world(h);
+		TempBlockData temp = (TempBlockData) MagicServer.kit().temp();
+		ServerLevel level = h.getLevel();
+		int x0 = 30_000 + 64 * (int) (level.getGameTime() % 64); // never touched this run
+		int z0 = -30_000;
+		List<ChunkPos> chunks = List.of(ChunkPos.containing(new BlockPos(x0, 0, z0)), ChunkPos.containing(new BlockPos(x0 + 16, 0, z0)),
+				ChunkPos.containing(new BlockPos(x0 + 32, 0, z0)));
+		for (ChunkPos c : chunks) h.assertFalse(level.hasChunk(c.x(), c.z()), "far chunk " + c + " not loaded yet");
+		List<BlockPos> cells = new ArrayList<>();
+		List<BlockState> originals = new ArrayList<>();
+		GameTestSequence seq = h.startSequence();
+		for (int i = 0; i <= CHUNK_CYCLES; i++) {
+			int cycle = i;
+			seq.thenExecute(() -> {
+				for (ChunkPos c : chunks) level.setChunkForced(c.x(), c.z(), true); // a load; from disk after the first round
+				if (cycle == 0) {
+					for (ChunkPos c : chunks) {
+						// On the ground (the terrain section's palette grows), above it, high in empty sections, and on the border.
+						int ground = level.getHeight(Heightmap.Types.WORLD_SURFACE, c.getMinBlockX() + 3, c.getMinBlockZ() + 5);
+						for (int y : new int[] {ground, ground + 1, ground + 9, 120, 129}) cells.add(new BlockPos(c.getMinBlockX() + 3, y, c.getMinBlockZ() + 5));
+						cells.add(new BlockPos(c.getMinBlockX() + 15, level.getHeight(Heightmap.Types.WORLD_SURFACE, c.getMinBlockX() + 15, c.getMinBlockZ() + 15),
+								c.getMinBlockZ() + 15));
+					}
+				}
+				for (int k = 0; k < cells.size(); k++) {
+					BlockPos cell = cells.get(k);
+					if (cycle == 0) originals.add(level.getBlockState(cell));
+					h.assertValueEqual(level.getBlockState(cell), originals.get(k), "round " + cycle + ": original at " + cell);
+					h.assertFalse(hasEntry(temp, level, cell), "round " + cycle + ": no entry left at " + cell);
+					if (cycle == CHUNK_CYCLES) continue;
+					BlockState state = CYCLE_STATES.get((cycle + k) % CYCLE_STATES.size());
+					h.assertTrue(temp.place(level, cell, state, 1_000_000), "round " + cycle + ": temporary " + state + " at " + cell);
+				}
+				for (ChunkPos c : chunks) level.setChunkForced(c.x(), c.z(), false);
+			});
+			if (cycle == CHUNK_CYCLES) break;
+			seq.thenWaitUntil(() -> {
+				for (ChunkPos c : chunks) h.assertFalse(level.hasChunk(c.x(), c.z()), "round " + cycle + ": chunk " + c + " unloaded");
+				for (BlockPos cell : cells) h.assertFalse(hasEntry(temp, level, cell), "round " + cycle + ": restored on unload at " + cell);
+			});
+		}
+		seq.thenSucceed();
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV)
