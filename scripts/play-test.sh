@@ -86,7 +86,39 @@ else
   info "NOTE: no local helper at $HELPER_APP (build with: scripts/heavy.sh bash helper-mac/build.sh)"
 fi
 
-/usr/bin/python3 -I - "$INST/instance.cfg" "$JAVA" "$HELPER_ARG" <<'PY'
+# Run the game from a tiny .app bundle around the JDK's java, so macOS (and Claude's computer-use permission prompt) sees
+# a real app with a bundle ID instead of a bare "java" process that can't be granted. The copied binary is re-signed
+# ad hoc: its own signature is bound to the JDK's Info.plist and macOS kills it inside a different bundle.
+GAME_APP="$HOME/.minecraft-office/MinecraftOffice.app"
+GAME_JAVA="$GAME_APP/Contents/MacOS/java"
+GAME_SRC="$HOME/.minecraft-office/MinecraftOffice.java-src"  # copy of the java it was built from (outside the bundle)
+JHOME="$(cd "$(dirname "$JAVA")/.." && pwd)"
+if ! cmp -s "$JAVA" "$GAME_SRC" 2>/dev/null || [ "$(readlink "$GAME_APP/Contents/lib")" != "$JHOME/lib" ]; then
+  rm -rf "$GAME_APP"; mkdir -p "$GAME_APP/Contents/MacOS"
+  cp -p "$JAVA" "$GAME_JAVA"; cp -p "$JAVA" "$GAME_SRC"
+  for d in lib conf legal release NOTICE; do [ -e "$JHOME/$d" ] && ln -s "$JHOME/$d" "$GAME_APP/Contents/$d"; done
+  cat > "$GAME_APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.carterbailey.minecraftoffice.game</string>
+<key>CFBundleName</key><string>Minecraft Office</string>
+<key>CFBundleDisplayName</key><string>Minecraft Office</string>
+<key>CFBundleExecutable</key><string>java</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>1.0</string>
+<key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+PLIST
+  codesign -s - -f "$GAME_APP" >/dev/null 2>&1
+fi
+if "$GAME_JAVA" -version >/dev/null 2>&1; then
+  info "game runs as app: $GAME_APP (bundle id com.carterbailey.minecraftoffice.game)"
+else
+  info "NOTE: app wrapper failed to start java - falling back to plain java"; GAME_JAVA="$JAVA"
+fi
+
+/usr/bin/python3 -I - "$INST/instance.cfg" "$GAME_JAVA" "$HELPER_ARG" <<'PY'
 import sys, os
 path, java, helper_arg = sys.argv[1:4]
 jvm_args = "-XX:+UseZGC"
