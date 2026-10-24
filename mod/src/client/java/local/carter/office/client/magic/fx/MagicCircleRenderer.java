@@ -58,6 +58,35 @@ public final class MagicCircleRenderer {
 	private static final float BAND = 0.75F;
 	private static final int RUNES = 8;
 
+	/**
+	 * The caster's own circle in first person, when it stands in their face: alpha × {@link #FIRST_PERSON_ALPHA}, no flare, and
+	 * nothing within {@link #FIRST_PERSON_CLEAR} × its radius of the middle, so the crosshair and its target stay clear. The charge
+	 * circle always gets it ({@link ChargeCircles}); a kit circle ({@link FxKit#circle}) when {@link #inCastersFace} says so.
+	 */
+	public static final float FIRST_PERSON_ALPHA = 0.3F;
+	public static final float FIRST_PERSON_CLEAR = 0.35F;
+	/** How near the eye (blocks) a kit circle must be for the first-person treatment. */
+	public static final double FIRST_PERSON_REACH = 3.0;
+
+	/**
+	 * Whether a circle at {@code c} facing {@code n} stands in the face of an eye at {@code e} (pure): within
+	 * {@link #FIRST_PERSON_REACH} of it, roughly facing it (either side; the angle between its normal and the line to the eye under
+	 * about 53°), and not lying well below it (a ground circle under the caster stays full, like Recall's feet circle). The circle's
+	 * own size does not matter.
+	 */
+	public static boolean inCastersFace(double cx, double cy, double cz, double nx, double ny, double nz, double ex, double ey, double ez) {
+		double dx = ex - cx;
+		double dy = ey - cy;
+		double dz = ez - cz;
+		double d2 = dx * dx + dy * dy + dz * dz;
+		if (!(d2 <= FIRST_PERSON_REACH * FIRST_PERSON_REACH)) return false; // also NaN
+		if (cy < ey - 1.0) return false;
+		double n2 = nx * nx + ny * ny + nz * nz;
+		if (d2 < 1.0E-8 || !(n2 > 1.0E-12)) return true; // the eye in its middle (or no facing): in the face whatever
+		double dot = (nx * dx + ny * dy + nz * dz) / Math.sqrt(d2 * n2);
+		return Math.abs(dot) >= 0.6;
+	}
+
 	/** Radius of ring {@code ring} (0 = innermost) at scale 1: {@code 0.55 + 0.15 × ring}. */
 	public static float ringRadius(int ring) {
 		return BASE_RADIUS + RING_STEP * ring;
@@ -138,7 +167,7 @@ public final class MagicCircleRenderer {
 		public float flare;
 		/**
 		 * Blocks around the centre kept empty (0 = none): no backdrop, glyph or centre glow, and no line inside it. The caster's own
-		 * first-person charge circle sets it so the crosshair and what it aims at stay clear.
+		 * circles in first person set it so the crosshair and what it aims at stay clear.
 		 */
 		public float clear;
 		/** 0..1: a pulse of the outer frame only (the first-person full-charge cue). */
