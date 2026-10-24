@@ -6,6 +6,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.function.IntConsumer;
 
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +32,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 /**
  * Everything a {@link SpellFx} draws with, made fresh for each fx event ({@link FxClient}): circles, particles, motes, bolts,
  * ghost blocks, lingering client timing, camera shake, hit-stop and FOV kicks. Every call draws from the event's {@link FxBudget}
- * (400 particles, 1500 for an ultimate, 128 ghost blocks) and draws only what it grants, so no spell can flood a client.
+ * (400 particles, 1500 for an ultimate, 128 ghost blocks, water cells included) and draws only what it grants, so no spell can flood a client.
  * Vanilla particles follow the player's Particles setting; on Minimal the kit's own motes are skipped too (circles stay).
  *
  * <p>Lasting things (circles that last, {@link #simulate} timers, ghost blocks) are registered under the caster, so
@@ -45,6 +46,8 @@ public final class FxKit {
 	private final FxBudget budget;
 	private final RandomSource random;
 	private int circles;
+	/** This event's ghost water, one body (made on the first {@link #ghostFluid}). */
+	private GhostBlocks.@Nullable FluidBody water;
 
 	/** Most circles one event may draw. */
 	public static final int MAX_CIRCLES = 6;
@@ -162,6 +165,19 @@ public final class FxKit {
 	public void ghostBlock(BlockPos pos, BlockState state, Vec3 offset, int lifeTicks, GhostBlocks.Motion motion) {
 		if (!budget.ghostBlock()) return;
 		GhostBlocks.add(pos, state, offset, lifeTicks, motion, event.casterId());
+	}
+
+	/**
+	 * A client-only cell of water at {@code pos}, {@code height} (0..1) of a block deep, for {@code lifeTicks}, moving by
+	 * {@code motion}; no world change. Vanilla's water look (still sprite on top, flowing sprite down the sides, animated), the
+	 * biome's water tint, see-through like real water. Every cell of this event is one body of water: faces its cells share are not
+	 * drawn, so a wave reads as water, not glass cubes (place cells side by side, or stacked, to make one body). Another event's
+	 * water never merges with it. A cell this event already has at {@code pos} is replaced. Counts as one ghost block.
+	 */
+	public void ghostFluid(BlockPos pos, float height, int lifeTicks, GhostBlocks.Motion motion) {
+		if (!(height > 0) || !budget.ghostBlock()) return;
+		if (water == null) water = new GhostBlocks.FluidBody();
+		GhostBlocks.addFluid(pos, Math.min(1F, height), lifeTicks, motion, event.casterId(), water);
 	}
 
 	// ---- timing ----------------------------------------------------------------------------------------------------------

@@ -19,7 +19,6 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
@@ -27,18 +26,21 @@ import net.minecraft.world.phys.Vec3;
  * Tidal Push: a circle opens under the caster and another before them, spray is flung across the whole cone, and a wave of
  * water rolls out from the caster's feet along {@link TidalWaveGeometry}, its columns following the ground by the same rule
  * the server uses ({@link TidalWaveGeometry#step}: climbing steps, pouring down drops, breaking on walls in a burst of spray).
- * Its crest is a row of translucent water-glass blocks rising in the air cells it passes; below it a curtain of falling water
+ * Its body is ghost water (one borderless, animated body, the biome's tint) rising in the air cells it passes, tall at the front and low behind; below it a curtain of falling water
  * runs down the front face, spray flies off the crest, glowing water lights it from inside, and drops patter down behind it,
  * until it crashes eight blocks out. Nothing is placed in the world. In the caster's own first-person view the wave shows
  * from {@link #OWN_CLEAR} blocks out, so it never fills their screen.
  */
 public final class TidalPushFx implements SpellFx {
-	/** The wave's crest (client-only ghost blocks: never placed). */
-	static final BlockState CREST = Blocks.STAINED_GLASS.lightBlue().defaultBlockState();
-	/** The crest falls back fast, so the wave is tall at its front and low behind. */
-	static final int CREST_LIFE = 4;
+	/**
+	 * How long each level of the wave's body stands (client-only ghost water, never placed): the foot longest, the crest least, so
+	 * the wave is tall at its front and falls away low behind it.
+	 */
+	static final int[] LEVEL_LIFE = {7, 5, 4};
+	/** How full the topmost cell of a column is: its surface sits a little under the cell's top, like a swell. */
+	static final float CREST_FULL = 0.85F;
 	/** How far from the caster their own first-person view starts showing the wave. */
-	static final double OWN_CLEAR = 2.6;
+	static final double OWN_CLEAR = 4.0;
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
@@ -122,9 +124,13 @@ public final class TidalPushFx implements SpellFx {
 				}
 				if (broken[i] || d < clear) continue;
 				boolean even = (t + i) % 2 == 0;
-				// The crest: a water-glass block rising in its air cell.
-				BlockPos crest = base.above(h - 1);
-				if (shown.add(crest) && air(crest)) kit.ghostBlock(crest, CREST, Vec3.ZERO, CREST_LIFE, GhostBlocks.Motion.RISE);
+				// The body: ghost water filling the column up to the crest (all one body of water, from this event's kit).
+				for (int y = 0; y < h; y++) {
+					BlockPos cell = base.above(y);
+					if (shown.add(cell) && air(cell)) {
+						kit.ghostFluid(cell, y == h - 1 ? CREST_FULL : 1F, LEVEL_LIFE[Math.min(y, LEVEL_LIFE.length - 1)], GhostBlocks.Motion.RISE);
+					}
+				}
 				Vec3 p = wave.frontPoint(t, k);
 				double floor = colY[i];
 				// The front face: a curtain of falling water from the crest down to the ground.
@@ -170,7 +176,7 @@ public final class TidalPushFx implements SpellFx {
 			return level.isLoaded(p) && level.getBlockState(p).getCollisionShape(level, p).isEmpty();
 		}
 
-		/** Air (or a plant the water would wash over, with no fluid in it): a crest block may show here. */
+		/** Air (or a plant the water would wash over, with no fluid in it): a cell of water may show here. */
 		private boolean air(BlockPos p) {
 			BlockState s = level.getBlockState(p);
 			return s.isAir() || (s.canBeReplaced() && s.getFluidState().isEmpty());

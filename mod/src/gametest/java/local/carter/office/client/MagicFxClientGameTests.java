@@ -10,6 +10,7 @@ import javax.imageio.ImageIO;
 import com.mojang.blaze3d.platform.InputConstants;
 
 import local.carter.office.client.magic.fx.ChargeCircles;
+import local.carter.office.client.magic.fx.FxBudget;
 import local.carter.office.client.magic.fx.FxClient;
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GhostBlocks;
@@ -71,6 +72,8 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 			recallCircles(context, sp, stand);
 			boltGhostBlocksAndShake(context, stand);
 			chargeInDaylight(context, sp);
+			firstPersonCastCircle(context);
+			ghostWater(context, sp, stand);
 			if (Boolean.getBoolean("office.measure")) {
 				measureFps(context, stand);
 			}
@@ -363,6 +366,297 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 		context.waitTicks(30);
 		sp.getServer().runOnServer(server -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "time set midnight"));
 		context.waitTicks(5);
+	}
+
+	/**
+	 * A lane's cast circle held out 1.5 blocks in front of the caster, facing them: in first person it takes the charge circle's
+	 * look (dim, no flare, clear middle), so the crosshair box stays as it was; from outside it is the full circle; and someone
+	 * else's circle in the same place keeps its full look (it does cover the middle).
+	 */
+	private static void firstPersonCastCircle(ClientGameTestContext context) {
+		context.runOnClient(mc -> {
+			mc.player.setYRot(0F);
+			mc.player.setXRot(0F);
+		});
+		BufferedImage idleFront = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-cast-circle-idle-third-front");
+		BufferedImage idle = view(context, CameraType.FIRST_PERSON, "magic-fx-cast-circle-idle");
+		context.runOnClient(mc -> castCircleAhead(mc, mc.player.getId()));
+		context.waitTicks(12); // every ring in
+		BufferedImage own = read(context.takeScreenshot("magic-fx-cast-circle-first-person"));
+		double rings = changedShare(idle, own, 0.15, 0.05, 0.85, 0.95);
+		double crosshair = changedShare(idle, own, 0.46, 0.46, 0.54, 0.54);
+		BufferedImage front = view(context, CameraType.THIRD_PERSON_FRONT, "magic-fx-cast-circle-third-front");
+		double outside = changedShare(idleFront, front, 0.3, 0.2, 0.7, 0.8);
+		double outsideMiddle = changedShare(idleFront, front, 0.46, 0.46, 0.54, 0.54); // glyph and centre glow, drawn at once
+		context.runOnClient(mc -> {
+			FxKit.cancel(mc.player.getId());
+			mc.options.setCameraType(CameraType.FIRST_PERSON);
+		});
+		context.waitTicks(10);
+		context.runOnClient(mc -> castCircleAhead(mc, OTHER_CASTER));
+		context.waitTicks(12);
+		BufferedImage other = read(context.takeScreenshot("magic-fx-cast-circle-first-person-other-caster"));
+		double otherCrosshair = changedShare(idle, other, 0.46, 0.46, 0.54, 0.54);
+		context.runOnClient(mc -> FxKit.cancel(OTHER_CASTER));
+		context.waitTicks(10);
+		System.out.println(String.format(java.util.Locale.ROOT,
+				"[fx] first-person cast circle: rings changed %.3f, crosshair box %.4f; third person front %.3f (middle %.3f); other caster's crosshair box %.4f",
+				rings, crosshair, outside, outsideMiddle, otherCrosshair));
+		if (rings < 0.03) throw new AssertionError("the first-person cast circle barely shows: " + rings);
+		if (crosshair > 0.01) throw new AssertionError("the crosshair box must stay clear in first person, changed " + crosshair);
+		if (outside < 0.08) throw new AssertionError("from outside the cast circle should show in full: " + outside);
+		if (outsideMiddle < 0.05) throw new AssertionError("in third person the cast circle's middle should be drawn: " + outsideMiddle);
+		if (otherCrosshair < 0.05) throw new AssertionError("someone else's circle should keep its full look over the middle: " + otherCrosshair);
+	}
+
+	private static final int OTHER_CASTER = -7;
+	private static final int WATER_CASTER = -11;
+
+	/** A cast circle like a lane's: five rings, radius 1, 1.5 blocks ahead of the eye on the look line, facing the eye. */
+	private static void castCircleAhead(Minecraft mc, int casterId) {
+		Vec3 eye = mc.player.getEyePosition();
+		Vec3 look = mc.player.getViewVector(1F);
+		Vec3 at = eye.add(look.scale(1.5));
+		FxKit kit = new FxKit(new FxEvent(PROBE, casterId, eye, look, at, 1F, 1F, 11L, 0, new int[0], new float[0]), mc.level);
+		kit.circle(at, look.reverse(), Element.FIRE.argb(), 1.0F, 5, 60);
+	}
+
+	/**
+	 * Ghost water: a 5 x 3 slab, one block deep, seen from straight above at noon. It must read blue, and as one body: the band
+	 * where an inner side would show (between the slab's second and outer columns) looks like the water beside it. The same slab
+	 * made of 15 separate events (each its own body, so every inner side is drawn) is the control: there the band stands out. Then
+	 * the shader-pack path and Improved Transparency, a view from the side, a popping wave, and the ghost-block budget.
+	 */
+	private static void ghostWater(ClientGameTestContext context, TestSingleplayerContext sp, BlockPos stand) {
+		BlockPos mid = stand.offset(0, 0, 6); // the slab's middle cell, on the grass
+		double fovEffect = context.computeOnClient(mc -> mc.options.fovEffectScale().get());
+		sp.getServer().runOnServer(server -> {
+			server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "time set noon");
+			ServerPlayer p = player(server);
+			p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY); // its tier-3 motes would drift through the measured pixels
+			p.setGameMode(GameType.CREATIVE);
+			p.getAbilities().flying = true;
+			p.onUpdateAbilities();
+			p.teleportTo(mid.getX() + 0.5, mid.getY() + 4, mid.getZ() + 0.5);
+		});
+		context.waitFor(mc -> Math.abs(mc.player.getY() - (mid.getY() + 4)) < 0.01 && mc.player.getAbilities().flying, 200);
+		context.runOnClient(mc -> {
+			mc.options.fovEffectScale().set(0.0); // flying widens the view; the projection below needs the plain FOV
+			mc.options.setCameraType(CameraType.FIRST_PERSON);
+			mc.player.setYRot(0F);
+			mc.player.setXRot(90F);
+		});
+		context.waitTicks(10);
+		try {
+			double[] view = context.computeOnClient(mc -> {
+				Vec3 eye = mc.gameRenderer.mainCamera().position();
+				return new double[] {mc.options.fov().get(), eye.y - (mid.getY() + 1), eye.x - (mid.getX() + 0.5), eye.z - (mid.getZ() + 0.5)};
+			});
+			System.out.println(String.format(java.util.Locale.ROOT, "[fx] ghost water view: fov %.0f, %.3f above the surface, off by %.3f, %.3f",
+					view[0], view[1], view[2], view[3]));
+			BufferedImage idle = read(context.takeScreenshot("magic-fx-ghost-water-idle-top"));
+
+			// One event: one body of water.
+			context.runOnClient(mc -> slab(mc, mid, true));
+			context.waitTicks(4);
+			int cells = context.computeOnClient(mc -> GhostBlocks.liveFluids());
+			if (cells != 15) throw new AssertionError("15 cells of ghost water expected, got " + cells);
+			BufferedImage body = read(context.takeScreenshot("magic-fx-ghost-water-slab-top"));
+			double[] tint = blueness(idle, body, view);
+			double seam = seam(body, view);
+			// The control: every cell its own event.
+			context.runOnClient(mc -> FxKit.cancel(WATER_CASTER));
+			context.waitTicks(2);
+			context.runOnClient(mc -> slab(mc, mid, false));
+			context.waitTicks(4);
+			BufferedImage cubes = read(context.takeScreenshot("magic-fx-ghost-water-cubes-top"));
+			double cubeSeam = seam(cubes, view);
+			context.runOnClient(mc -> FxKit.cancel(WATER_CASTER));
+			context.waitTicks(2);
+			System.out.println(String.format(java.util.Locale.ROOT,
+					"[fx] ghost water: rgb %.0f %.0f %.0f (idle %.0f %.0f %.0f); seam band vs water beside it: one body %.1f, separate cubes %.1f",
+					tint[0], tint[1], tint[2], tint[3], tint[4], tint[5], seam, cubeSeam));
+			assertBlue("one body", tint);
+			if (seam > 8) throw new AssertionError("the slab shows an inner side (a grid line): band differs by " + seam);
+			if (cubeSeam < 2 * seam + 10) {
+				throw new AssertionError("the control (separate cubes) should show its inner sides: " + cubeSeam + " vs " + seam);
+			}
+
+			// The shader-pack path (forced: no Iris here) draws it on vanilla's entity-translucent layer.
+			context.runOnClient(mc -> ShaderCompat.setOverrideForTesting(ShaderCompat.Path.PLAIN));
+			try {
+				context.runOnClient(mc -> slab(mc, mid, true));
+				context.waitTicks(4);
+				BufferedImage plain = read(context.takeScreenshot("magic-fx-ghost-water-plain-top"));
+				double[] plainTint = blueness(idle, plain, view);
+				double plainSeam = seam(plain, view);
+				System.out.println(String.format(java.util.Locale.ROOT, "[fx] ghost water, shader-pack path: rgb %.0f %.0f %.0f, seam %.1f",
+						plainTint[0], plainTint[1], plainTint[2], plainSeam));
+				assertBlue("shader-pack path", plainTint);
+				if (plainSeam > 8) throw new AssertionError("on the shader-pack path the slab shows a grid line: " + plainSeam);
+			} finally {
+				context.runOnClient(mc -> {
+					ShaderCompat.setOverrideForTesting(null);
+					FxKit.cancel(WATER_CASTER);
+				});
+			}
+
+			// Improved Transparency.
+			boolean was = context.computeOnClient(mc -> mc.options.improvedTransparency().get());
+			context.runOnClient(mc -> mc.options.improvedTransparency().set(true));
+			context.waitTicks(20);
+			try {
+				BufferedImage oitIdle = read(context.takeScreenshot("magic-fx-ghost-water-oit-idle-top"));
+				context.runOnClient(mc -> slab(mc, mid, true));
+				context.waitTicks(4);
+				BufferedImage oit = read(context.takeScreenshot("magic-fx-ghost-water-oit-top"));
+				double[] oitTint = blueness(oitIdle, oit, view);
+				System.out.println(String.format(java.util.Locale.ROOT, "[fx] ghost water, improved transparency: rgb %.0f %.0f %.0f, seam %.1f",
+						oitTint[0], oitTint[1], oitTint[2], seam(oit, view)));
+				assertBlue("improved transparency", oitTint);
+			} finally {
+				context.runOnClient(mc -> {
+					mc.options.improvedTransparency().set(was);
+					FxKit.cancel(WATER_CASTER);
+				});
+				context.waitTicks(20);
+			}
+
+			// From the side, standing on the grass a few blocks back: the look lanes get.
+			sp.getServer().runOnServer(server -> player(server).teleportTo(mid.getX() + 0.5, mid.getY() + 1.2, mid.getZ() - 3.5));
+			context.waitFor(mc -> mc.player.getZ() < mid.getZ() - 3, 200);
+			context.runOnClient(mc -> {
+				mc.player.setYRot(0F);
+				mc.player.setXRot(25F);
+				slab(mc, mid, true);
+			});
+			context.waitTicks(4);
+			context.takeScreenshot("magic-fx-ghost-water-slab-side");
+			context.runOnClient(mc -> FxKit.cancel(WATER_CASTER));
+			// A wave: columns popping one after another, as a lane would lay one with simulate.
+			context.runOnClient(mc -> {
+				FxKit kit = waterKit(mc);
+				kit.simulate(2, 10, t -> {
+					for (int z = -1; z <= 1; z++) {
+						kit.ghostFluid(mid.offset(t / 2 - 2, 0, z), 1F, 20, GhostBlocks.Motion.POP);
+					}
+				});
+			});
+			context.waitTicks(7);
+			context.takeScreenshot("magic-fx-ghost-water-wave");
+			context.waitTicks(30);
+			int left = context.computeOnClient(mc -> GhostBlocks.liveFluids());
+			if (left != 0) throw new AssertionError("the wave's water should be gone, " + left + " left");
+			// Water counts against the event's ghost-block budget.
+			context.runOnClient(mc -> {
+				FxKit kit = waterKit(mc);
+				for (int i = 0; i < 140; i++) kit.ghostFluid(mid.offset(i % 14 - 7, 6, i / 14), 0.5F, 40, GhostBlocks.Motion.STATIC);
+			});
+			int granted = context.computeOnClient(mc -> GhostBlocks.liveFluids());
+			context.runOnClient(mc -> FxKit.cancel(WATER_CASTER));
+			if (granted != FxBudget.GHOST_BLOCKS) throw new AssertionError("one event's water should stop at " + FxBudget.GHOST_BLOCKS + ", got " + granted);
+		} finally {
+			context.runOnClient(mc -> {
+				FxKit.cancel(WATER_CASTER);
+				mc.options.fovEffectScale().set(fovEffect);
+				mc.player.setXRot(0F);
+			});
+			sp.getServer().runOnServer(server -> {
+				ServerPlayer p = player(server);
+				p.getAbilities().flying = false;
+				p.setGameMode(GameType.SURVIVAL);
+				p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
+				p.onUpdateAbilities();
+				p.teleportTo(stand.getX() + 0.5, stand.getY(), stand.getZ() + 0.5);
+				server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "time set midnight");
+			});
+			context.waitTicks(20);
+		}
+	}
+
+	private static FxKit waterKit(Minecraft mc) {
+		Vec3 o = mc.player.position();
+		return new FxKit(new FxEvent(PROBE, WATER_CASTER, o, new Vec3(0, 0, 1), o, 1F, 1F, 13L, 0, new int[0], new float[0]), mc.level);
+	}
+
+	/** The 5 x 3 slab about {@code mid}: one event ({@code oneBody}) or one event per cell. */
+	private static void slab(Minecraft mc, BlockPos mid, boolean oneBody) {
+		FxKit kit = waterKit(mc);
+		for (int x = -2; x <= 2; x++) {
+			for (int z = -1; z <= 1; z++) {
+				(oneBody ? kit : waterKit(mc)).ghostFluid(mid.offset(x, 0, z), 1F, 400, GhostBlocks.Motion.STATIC);
+			}
+		}
+	}
+
+	private static void assertBlue(String what, double[] rgbIdle) {
+		double r = rgbIdle[0];
+		double g = rgbIdle[1];
+		double b = rgbIdle[2];
+		double idleBlue = rgbIdle[5] - Math.max(rgbIdle[3], rgbIdle[4]);
+		if (!(b > r + 25 && b > g + 5 && b - Math.max(r, g) > idleBlue + 30)) {
+			throw new AssertionError(what + ": ghost water should be blue-tinted, rgb " + r + " " + g + " " + b);
+		}
+	}
+
+	/**
+	 * Mean colour of the middle cell's water seen from straight above (and the same pixels idle), from the view {fov, height above
+	 * the surface, ...}: {r, g, b, idle r, idle g, idle b}.
+	 */
+	private static double[] blueness(BufferedImage idle, BufferedImage img, double[] view) {
+		double h = view[1];
+		double[] water = mean(img, view, -0.3 / h, 0.3 / h, -0.3 / h, 0.3 / h);
+		double[] grass = mean(idle, view, -0.3 / h, 0.3 / h, -0.3 / h, 0.3 / h);
+		return new double[] {water[0], water[1], water[2], grass[0], grass[1], grass[2]};
+	}
+
+	/**
+	 * How much the band where an inner side would show differs from water with the same texture under it (sum of the channel
+	 * differences of their means; the larger of the slab's two sides). Looking straight down from {@code h} above the surface, the
+	 * side 1.5 blocks out (between the second and outer columns) would show through the surface from 1.5 - w to 1.5 blocks out,
+	 * w = 1.5 / (h + 1): the last w of the second column. The reference is the last w of the second column on the other side (the
+	 * water sprite repeats every cell, so the same texels), where no inner side shows in either case. Rows stay within a quarter
+	 * block of the middle row's centre, clear of the row boundaries. Every cell's surface: a row across a cell boundary.
+	 */
+	private static double seam(BufferedImage img, double[] view) {
+		double h = view[1];
+		double y = 0.25 / h;
+		double w = 1.5 / (h + 1);
+		double gap = 0.04;
+		double worst = 0;
+		for (int side = -1; side <= 1; side += 2) {
+			double[] band = mean(img, view, side * (1.5 - w + gap) / h, side * (1.5 - gap) / h, -y, y);
+			double[] same = mean(img, view, -side * (0.5 + gap) / h, -side * (0.5 + w - gap) / h, -y, y);
+			double d = Math.abs(band[0] - same[0]) + Math.abs(band[1] - same[1]) + Math.abs(band[2] - same[2]);
+			worst = Math.max(worst, d);
+		}
+		return worst;
+	}
+
+	/** Mean rgb of the pixels between the view tangents {@code x0..x1} (right of the middle) and {@code y0..y1} (up). */
+	private static double[] mean(BufferedImage img, double[] view, double x0, double x1, double y0, double y1) {
+		int w = img.getWidth();
+		int h = img.getHeight();
+		double t = Math.tan(Math.toRadians(view[0]) / 2);
+		double aspect = w / (double) h;
+		int px0 = (int) Math.round(w / 2.0 * (1 + Math.min(x0, x1) / (t * aspect)));
+		int px1 = (int) Math.round(w / 2.0 * (1 + Math.max(x0, x1) / (t * aspect)));
+		int py0 = (int) Math.round(h / 2.0 * (1 - Math.max(y0, y1) / t));
+		int py1 = (int) Math.round(h / 2.0 * (1 - Math.min(y0, y1) / t));
+		double r = 0;
+		double g = 0;
+		double b = 0;
+		int n = 0;
+		for (int y = py0; y < py1; y++) {
+			for (int x = px0; x < px1; x++) {
+				int p = img.getRGB(x, y);
+				r += (p >> 16) & 0xFF;
+				g += (p >> 8) & 0xFF;
+				b += p & 0xFF;
+				n++;
+			}
+		}
+		return n == 0 ? new double[3] : new double[] {r / n, g / n, b / n};
 	}
 
 	/** Rendered fps: idle, then five held circles (as five players charging) plus a cast burst every 10 ticks. */
