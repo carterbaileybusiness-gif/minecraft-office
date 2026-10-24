@@ -481,7 +481,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			p.getInventory().clearContent();
 			p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
 			long now = p.level().getGameTime();
-			MagicAttachments.set(p, MagicData.EMPTY.withElement(Optional.of(Element.FIRE)).withLevel(3)
+			MagicAttachments.set(p, MagicData.EMPTY.withElement(Optional.of(Element.FIRE)).withLevel(2) // only slots 0-1 (probes) + Recall unlocked
 					.withSelected(Optional.of(PROBE_0)).withReadyAt(Map.of(SpellIds.RECALL, now + 600L)));
 			MagicAttachments.setMana(p, FULL_MANA); // full: no regen, so any spend shows
 			BlockPos stand = p.blockPosition();
