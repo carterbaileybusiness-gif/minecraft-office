@@ -7,12 +7,17 @@ import local.carter.office.magic.item.MagicItems;
 import local.carter.office.magic.net.MagicPayloads;
 import local.carter.office.magic.net.MagicServer;
 import local.carter.office.magic.spell.Motion;
+import local.carter.office.magic.spell.SpellKit;
 import local.carter.office.magic.spell.earth.EarthSpells;
 import local.carter.office.magic.spell.fire.FireSpells;
 import local.carter.office.magic.spell.lightning.LightningSpells;
 import local.carter.office.magic.spell.shadow.ShadowSpells;
 import local.carter.office.magic.spell.water.WaterSpells;
 import local.carter.office.magic.spell.wind.WindSpells;
+import local.carter.office.magic.terrain.ClaimCheck;
+import local.carter.office.magic.terrain.EditLog;
+import local.carter.office.magic.terrain.TempBlockData;
+import local.carter.office.magic.terrain.WorldTerrainEdits;
 
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
@@ -21,6 +26,7 @@ import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.CreativeModeTabs;
 
@@ -41,6 +47,7 @@ public final class MagicMod {
 		ShadowSpells.register();
 		CommandRegistrationCallback.EVENT.register((dispatcher, context, selection) -> MagicCommand.register(dispatcher));
 		registerCastHooks();
+		registerTerrainHooks();
 		CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES).register(output -> {
 			output.accept(MagicItems.GRIMOIRE);
 			output.accept(MagicItems.REBINDING_SEAL);
@@ -60,6 +67,31 @@ public final class MagicMod {
 			discardCharge(handler.player);
 			CastService.forget(handler.player);
 		});
+	}
+
+	/**
+	 * The world kit: installed on {@code SERVER_STARTED} (after restoring temporary blocks that expired while the server was
+	 * down), ticked at the end of every server tick, and on {@code SERVER_STOPPING} the queue is applied, the logs written and
+	 * every temporary block restored (after {@code CastService.stop} ended the lingering effects).
+	 */
+	private static void registerTerrainHooks() {
+		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+			TempBlockData temp = TempBlockData.get(server);
+			temp.tick(server);
+			MagicServer.setKit(new SpellKit(new WorldTerrainEdits(server, ClaimCheck.forServer(server), temp, EditLog.forServer(server)), temp));
+		});
+		ServerTickEvents.END_SERVER_TICK.register(server -> {
+			if (MagicServer.kit().terrain() instanceof WorldTerrainEdits edits) edits.tick();
+			if (MagicServer.kit().temp() instanceof TempBlockData temp) temp.tick(server);
+		});
+		ServerLifecycleEvents.SERVER_STOPPING.register(MagicMod::stopTerrain);
+	}
+
+	private static void stopTerrain(MinecraftServer server) {
+		SpellKit kit = MagicServer.kit();
+		MagicServer.setKit(SpellKit.NONE);
+		if (kit.terrain() instanceof WorldTerrainEdits edits) edits.stop();
+		kit.temp().restoreAll(server);
 	}
 
 	private static void discardCharge(ServerPlayer p) {

@@ -5,6 +5,18 @@ plugins {
 
 repositories {
 	// Loom adds the essential Minecraft/Fabric maven repositories automatically.
+	// Modrinth maven, only for Modrinth artifacts (Open Parties and Claims API, compile only).
+	exclusiveContent {
+		forRepository {
+			maven {
+				name = "Modrinth"
+				url = "https://api.modrinth.com/maven"
+			}
+		}
+		filter {
+			includeGroup "maven.modrinth"
+		}
+	}
 }
 
 // Single Gradle build at the repo root; all mod sources live under mod/.
@@ -70,6 +82,10 @@ dependencies {
 	// Let unit tests see client classes (later tasks test client code from mod/src/test).
 	testImplementation sourceSets.client.output
 	testRuntimeOnly sourceSets.client.output
+
+	// Open Parties and Claims 0.33.0 for Fabric 26.3 (Modrinth version KBCCg0os). Compile only: the pack ships the mod, and
+	// magic terrain reads its claims through the API when it is installed (magic/terrain/OpacClaims), else FallbackClaims.
+	compileOnly("maven.modrinth:open-parties-and-claims:KBCCg0os") { transitive = false }
 
 	// Windows capture (Task 11): webrtc-java's window capturer + its 64-bit Windows natives, nested in the mod jar
 	// (jar-in-jar). The natives are only ever loaded on Windows (client/capture/WebRtcNatives). transitive = false: the

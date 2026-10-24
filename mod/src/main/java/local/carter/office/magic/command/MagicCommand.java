@@ -1,5 +1,8 @@
 package local.carter.office.magic.command;
 
+import java.util.Collection;
+import java.util.UUID;
+
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 
@@ -7,14 +10,21 @@ import local.carter.office.magic.core.LevelCurve;
 import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.net.MagicServer;
+import local.carter.office.magic.terrain.EditLog;
+import local.carter.office.magic.terrain.EditLog.UndoReport;
+import local.carter.office.magic.terrain.WorldTerrainEdits;
 
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.commands.arguments.GameProfileArgument;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.players.NameAndId;
 
-/** {@code /magic level|mana|reset} (op 2). Task 5 adds {@code /magic undo}. */
+/** {@code /magic level|mana|reset|undo} (op 2). */
 public final class MagicCommand {
 	private MagicCommand() {}
 
@@ -42,7 +52,34 @@ public final class MagicCommand {
 					reset(p);
 					ctx.getSource().sendSuccess(() -> Component.literal("Magic of " + p.getName().getString() + " reset"), true);
 					return 1;
-				}))));
+				})))
+				.then(Commands.literal("undo")
+						.executes(ctx -> {
+							ctx.getSource().sendSuccess(() -> Component.translatable("magic.office.undo_help"), false);
+							return 1;
+						})
+						.then(Commands.argument("player", GameProfileArgument.gameProfile())
+								.executes(ctx -> undo(ctx.getSource(), GameProfileArgument.getGameProfiles(ctx, "player"), 1))
+								.then(Commands.argument("n", IntegerArgumentType.integer(1, EditLog.KEEP))
+										.executes(ctx -> undo(ctx.getSource(), GameProfileArgument.getGameProfiles(ctx, "player"),
+												IntegerArgumentType.getInteger(ctx, "n")))))));
+	}
+
+	private static int undo(CommandSourceStack source, Collection<NameAndId> players, int n) {
+		UndoReport total = new UndoReport(0, 0, 0);
+		for (NameAndId p : players) total = total.plus(undo(source.getServer(), p.id(), n));
+		UndoReport r = total;
+		source.sendSuccess(() -> Component.translatable("magic.office.undo_done", r.restored(), r.casts(), r.skipped()), true);
+		return r.casts();
+	}
+
+	/**
+	 * Undoes {@code player}'s last {@code n} terrain casts (newest first; blocks changed since are left alone). Through the
+	 * world kit when installed (its queued changes for the player are dropped and pending logs written first), else from disk.
+	 */
+	public static UndoReport undo(MinecraftServer server, UUID player, int n) {
+		if (MagicServer.kit().terrain() instanceof WorldTerrainEdits edits) return edits.undo(player, n);
+		return EditLog.forServer(server).undo(server, player, n);
 	}
 
 	/** Sets the grimoire level (xp toward the next level cleared). */

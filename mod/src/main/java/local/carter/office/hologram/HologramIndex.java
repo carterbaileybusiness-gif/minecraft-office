@@ -125,6 +125,25 @@ public class HologramIndex extends SavedData {
 		return out;
 	}
 
+	/** Live entries in {@code dimension} (any owner); stale entries are pruned as in {@link #entriesOwnedBy}. */
+	public List<Entry> entriesIn(final ResourceKey<Level> dimension) {
+		List<Entry> out = new ArrayList<>();
+		for (var it = holograms.entrySet().iterator(); it.hasNext();) {
+			Map.Entry<UUID, Entry> me = it.next();
+			Entry e = me.getValue();
+			if (!e.dimension().equals(dimension)) {
+				continue;
+			}
+			if (isStale(me.getKey(), e)) {
+				it.remove();
+				setDirty();
+				continue;
+			}
+			out.add(e);
+		}
+		return out;
+	}
+
 	public int countOwnedBy(final UUID owner) {
 		return entriesOwnedBy(owner).size();
 	}
