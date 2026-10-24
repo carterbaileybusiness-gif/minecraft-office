@@ -1,9 +1,13 @@
 package local.carter.office.magic.spell.fire;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
+
+import org.jspecify.annotations.Nullable;
+import org.slf4j.LoggerFactory;
 
 import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
@@ -25,9 +29,12 @@ import local.carter.office.magic.terrain.EditTier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.projectile.FireworkRocketEntity;
 import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.projectile.arrow.ThrownTrident;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.IceBlock;
@@ -39,8 +46,10 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Fire Wall (fire, slot 1, medium, lingering): a curtain of fire on the ground {@link FireWallGeometry#AHEAD} ahead of the caster,
  * across the aim, {@link FireWallGeometry#width} wide (5, or 7 at charge ≥ 0.5), 3 tall, for {@code 100 + 60 × charge} ticks.
- * Every {@link #PULSE_TICKS} ticks every creature in it takes {@link #DAMAGE} and burns for {@link #FIRE_TICKS} ticks; every tick
- * projectiles about to enter it burn up (discarded; thrown tridents are spared, they are a player's weapon, not ammunition).
+ * A creature that touches it (or is thrown through it between two ticks) takes {@link #DAMAGE} and burns for {@link #FIRE_TICKS}
+ * ticks at once, then again every {@link #PULSE_TICKS} ticks while it stays in. Every tick, projectiles about to enter it burn up
+ * (discarded), except thrown tridents (a player's weapon, not ammunition), arrows already stuck in the ground and rockets boosting
+ * an elytra. Cast on water (its foot cell or the cell under it) it fails before doing anything.
  * Its one minor permanent change, in one MEDIUM batch at the wall's foot: snow layers in the footprint melt to air and ice to
  * water (to air where water evaporates). It never places fire blocks.
  *
@@ -52,10 +61,14 @@ public final class FireWall implements Spell {
 	public static final int PULSE_TICKS = 10;
 	public static final float DAMAGE = 2;
 	public static final int FIRE_TICKS = 80;
-	/** How far below the wall's foot the melt reaches (snow on a frozen lake, the ice under it). */
-	public static final int MELT_BELOW = 2;
+	/** How far below the wall's foot the melt reaches (the ice a snow layer lies on, a frozen pond's surface). */
+	public static final int MELT_BELOW = 1;
 	/** Where the ground search starts above the aim point (so a step up still counts as ground). */
 	private static final double GROUND_LIFT = 1.5;
+
+	/** {@code AbstractArrow.isInGround} and {@code FireworkRocketEntity.isAttachedToEntity} are not public; 26.x runs unobfuscated. */
+	private static final @Nullable Method IN_GROUND = method(AbstractArrow.class, "isInGround");
+	private static final @Nullable Method ATTACHED = method(FireworkRocketEntity.class, "isAttachedToEntity");
 
 	@Override
 	public Identifier id() {
@@ -78,6 +91,11 @@ public final class FireWall implements Spell {
 		Vec3 forward = FireWallGeometry.forward(ctx.caster().getYRot());
 		Vec3 aim = FireWallGeometry.aimPoint(ctx.caster().position(), forward);
 		Vec3 base = Targets.ground(level, aim.add(0, GROUND_LIFT, 0));
+		BlockPos foot = BlockPos.containing(base);
+		// Fire on water fails, before any side effect (so nothing is spent).
+		if (level.getFluidState(foot).is(FluidTags.WATER) || level.getFluidState(foot.below()).is(FluidTags.WATER)) {
+			return CastOutcome.fizzle(CastService.SPELL_FAILED_KEY);
+		}
 		FireWallGeometry g = FireWallGeometry.of(base, forward, ctx.charge());
 		Burning effect = new Burning(ctx, g);
 		if (!ActiveEffects.add(level, effect)) return CastOutcome.fizzle(CastService.BUSY_KEY);
@@ -111,17 +129,52 @@ public final class FireWall implements Spell {
 		}
 	}
 
-	/** The burning zone: pulses on creatures inside, burns up projectiles crossing it. */
+	/**
+	 * Whether the wall burns up {@code p}: not a thrown trident, not an arrow already stuck in the ground, not a firework rocket
+	 * boosting someone's elytra. The client fx uses it too, for the puffs.
+	 */
+	public static boolean burns(Projectile p) {
+		if (p instanceof ThrownTrident) return false;
+		if (p instanceof AbstractArrow a && flag(IN_GROUND, a)) return false;
+		return !(p instanceof FireworkRocketEntity r && flag(ATTACHED, r));
+	}
+
+	private static @Nullable Method method(Class<?> owner, String name) {
+		try {
+			Method m = owner.getDeclaredMethod(name);
+			m.setAccessible(true);
+			return m;
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			LoggerFactory.getLogger("office").warn("[office] {}.{} not found; Fire Wall may burn up stuck arrows or elytra rockets",
+					owner.getSimpleName(), name, e);
+			return null;
+		}
+	}
+
+	private static boolean flag(@Nullable Method m, Object target) {
+		try {
+			return m != null && (boolean) m.invoke(target);
+		} catch (ReflectiveOperationException | RuntimeException e) {
+			return false;
+		}
+	}
+
+	/**
+	 * The burning zone. Every tick it looks for creatures in it, or that passed through it since the last tick (so one thrown
+	 * through at speed is still caught): each burns on first contact, then again every {@link #PULSE_TICKS} ticks while it stays
+	 * in. Every tick it burns up projectiles about to fly into it.
+	 */
 	private static final class Burning implements LingeringEffect {
 		private final CastContext ctx;
 		private final FireWallGeometry g;
 		private final AABB near;
-		private final Set<Integer> struck = new HashSet<>();
+		/** Creature id → the age from which it may burn again; its keys are the creatures this cast touched. */
+		private final Map<Integer, Integer> nextHit = new HashMap<>();
 
 		Burning(CastContext ctx, FireWallGeometry g) {
 			this.ctx = ctx;
 			this.g = g;
-			// Fast projectiles are checked a tick ahead, so look a little beyond the wall.
+			// Fast creatures and projectiles are swept along their motion, so look a little beyond the wall.
 			this.near = g.bounds().inflate(4);
 		}
 
@@ -129,27 +182,36 @@ public final class FireWall implements Spell {
 		public boolean tick(ServerLevel level, int age) {
 			if (age > g.duration()) return false;
 			burnProjectiles(level);
-			if ((age - 1) % PULSE_TICKS == 0) burnCreatures(level);
+			burnCreatures(level, age);
 			return age < g.duration();
 		}
 
-		private void burnCreatures(ServerLevel level) {
-			List<LivingEntity> inside = level.getEntitiesOfClass(LivingEntity.class, g.bounds(),
-					e -> TargetFilter.affects(ctx.caster(), e) && g.touches(e.getBoundingBox()));
-			for (LivingEntity e : inside) {
-				// At most MAX_ENTITIES different creatures over the wall's whole life (the per-cast entity budget).
-				if (!struck.contains(e.getId())) {
-					if (struck.size() >= Targets.MAX_ENTITIES) continue;
-					struck.add(e.getId());
+		private void burnCreatures(ServerLevel level, int age) {
+			for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, near, e -> TargetFilter.affects(ctx.caster(), e) && inWall(e))) {
+				Integer next = nextHit.get(e.getId());
+				if (next == null) {
+					// At most MAX_ENTITIES different creatures over the wall's whole life (the per-cast entity budget).
+					if (nextHit.size() >= Targets.MAX_ENTITIES) continue;
+				} else if (age < next) {
+					continue;
 				}
+				nextHit.put(e.getId(), age + PULSE_TICKS);
 				Hurt.damage(ctx, e, DAMAGE);
 				if (e.isAlive()) e.igniteForTicks(FIRE_TICKS);
 			}
 		}
 
+		/** In the slab now, or crossed it on the way here this tick. */
+		private boolean inWall(LivingEntity e) {
+			AABB box = e.getBoundingBox();
+			if (g.touches(box)) return true;
+			Vec3 back = new Vec3(e.xo - e.getX(), e.yo - e.getY(), e.zo - e.getZ());
+			return back.lengthSqr() > 1.0E-6 && g.crosses(box, back);
+		}
+
 		private void burnProjectiles(ServerLevel level) {
 			for (Projectile p : level.getEntitiesOfClass(Projectile.class, near,
-					p -> !(p instanceof ThrownTrident) && !p.isRemoved() && g.crosses(p.getBoundingBox(), p.getDeltaMovement()))) {
+					p -> !p.isRemoved() && burns(p) && g.crosses(p.getBoundingBox(), p.getDeltaMovement()))) {
 				p.discard();
 			}
 		}

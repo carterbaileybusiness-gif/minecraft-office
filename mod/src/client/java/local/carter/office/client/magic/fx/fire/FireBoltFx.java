@@ -17,6 +17,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ParticleStatus;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
@@ -43,7 +44,7 @@ public final class FireBoltFx implements SpellFx {
 	/** A dim fire glow for wide halos (additive: the colour is the brightness). */
 	static final int HALO = 0x8A300C;
 	/** Glows laid along each tick's step for the comet head. */
-	private static final int HEAD = 7;
+	private static final int HEAD = 11;
 	/** The bolt is drawn from this far out, so it leaves from the circle and never fills a first-person view. */
 	private static final double CLEAR = 1.2;
 
@@ -105,30 +106,33 @@ public final class FireBoltFx implements SpellFx {
 			float k = i / (float) (HEAD - 1); // 0 at the head, 1 at the tail
 			Vec3 at = end.lerp(from, k);
 			int rgb = k < 0.3F ? CORE : k < 0.65F ? HOT : FIRE;
-			kit.motes(at, rgb, 1, 0, Vec3.ZERO, 0, GlowMote.Drift.COAST, (0.34F - 0.2F * k) * size, 2);
+			// Living 3–4 ticks, each tick's glows overlap the last two ticks': one continuous streak.
+			glow(kit, level, at, Vec3.ZERO, rgb, (0.36F - 0.14F * k) * size, 3 + (i & 1), GlowMote.Drift.COAST);
 		}
-		kit.motes(end, HALO, 1, 0, Vec3.ZERO, 0, GlowMote.Drift.COAST, 0.6F * size, 3);
-		// Flames shed behind it, drifting back and up.
-		for (int i = 0; i < 4; i++) {
+		glow(kit, level, end, Vec3.ZERO, HALO, 0.6F * size, 3, GlowMote.Drift.COAST);
+		// A few flames shed behind it, drifting back and up.
+		for (int i = 0; i < 2; i++) {
 			Vec3 at = from.lerp(end, r.nextDouble());
 			Vec3 v = dir.scale(-0.03).add(jitter(r, 0.025), 0.01 + jitter(r, 0.02), jitter(r, 0.025));
-			add(kit, level, i % 3 == 0 ? ParticleTypes.SMALL_FLAME : ParticleTypes.FLAME, at, v);
+			add(kit, level, i == 0 ? ParticleTypes.SMALL_FLAME : ParticleTypes.FLAME, at, v);
 		}
-		// Two embers spiralling round the path.
-		for (int k = 0; k < 2; k++) {
-			double a = t * 1.9 + k * Math.PI;
-			Vec3 off = basis[0].scale(Math.cos(a) * 0.24).add(basis[1].scale(Math.sin(a) * 0.24));
-			kit.motes(from.lerp(end, 0.5).add(off), k == 0 ? HOT : EMBER, 1, 0.02, off.scale(0.08), 0.01, GlowMote.Drift.RISE, 0.07F, 14);
-		}
+		// An ember spiralling round the path (alternating sides tick by tick).
+		double a = t * 1.9 + (t & 1) * Math.PI;
+		Vec3 off = basis[0].scale(Math.cos(a) * 0.24).add(basis[1].scale(Math.sin(a) * 0.24));
+		kit.motes(from.lerp(end, 0.5).add(off), (t & 1) == 0 ? HOT : EMBER, 1, 0.02, off.scale(0.08), 0.01, GlowMote.Drift.RISE, 0.07F, 14);
 		// Smoke only once it is well away, so none hangs in the caster's face.
-		if (d0 > 3) add(kit, level, ParticleTypes.SMOKE, from, new Vec3(jitter(r, 0.01), 0.02, jitter(r, 0.01)));
+		if (d0 > 3 && (t & 1) == 0) add(kit, level, ParticleTypes.SMOKE, from, new Vec3(jitter(r, 0.01), 0.02, jitter(r, 0.01)));
 	}
 
 	/** Where it stopped: a flash, a burst of flame and sparks, a puff of smoke, a crackling thump. */
 	private static void pop(ClientLevel level, FxKit kit, Vec3 at, Vec3 normal, float size) {
 		// Glows stay small and the wide one dim: additive light saturates to a white disc otherwise, in daylight most of all.
-		kit.motes(at, CORE, 1, 0, Vec3.ZERO, 0, GlowMote.Drift.COAST, 0.7F * size, 4);
-		kit.motes(at, HALO, 3, 0.18, Vec3.ZERO, 0, GlowMote.Drift.COAST, 0.9F * size, 6);
+		glow(kit, level, at, Vec3.ZERO, CORE, 0.7F * size, 4, GlowMote.Drift.COAST);
+		RandomSource r = kit.random();
+		for (int i = 0; i < 3; i++) {
+			Vec3 p = at.add(jitter(r, 0.18), jitter(r, 0.18), jitter(r, 0.18));
+			glow(kit, level, p, Vec3.ZERO, HALO, 0.9F * size, 6, GlowMote.Drift.COAST);
+		}
 		kit.motes(at, HOT, 18, 0.12, normal.scale(0.06), 0.24, GlowMote.Drift.COAST, 0.12F, 11);
 		kit.motes(at, EMBER, 10, 0.25, new Vec3(0, 0.04, 0), 0.08, GlowMote.Drift.RISE, 0.08F, 24);
 		kit.burst(at, ParticleTypes.FLAME, 30, 0.19);
@@ -170,6 +174,16 @@ public final class FireBoltFx implements SpellFx {
 		Vec3 u = dir.cross(up).normalize();
 		Vec3 v = u.cross(dir).normalize();
 		return new Vec3[] {u, v};
+	}
+
+	/**
+	 * One round glow (never the kit's star-shaped spark sprite, which at this size draws as a pale cross), if the budget grants
+	 * it and particles are not on Minimal.
+	 */
+	static void glow(FxKit kit, ClientLevel level, Vec3 at, Vec3 v, int rgb, float size, int life, GlowMote.Drift drift) {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.options.particles().get() == ParticleStatus.MINIMAL || kit.budget().particles(1) == 0) return;
+		mc.particleEngine.add(new GlowMote(level, at, v, rgb, size, life, drift, false));
 	}
 
 	/** One vanilla particle with its own velocity, if the event's budget grants it. */
