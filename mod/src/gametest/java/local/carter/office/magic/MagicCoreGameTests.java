@@ -5,12 +5,28 @@ import java.util.List;
 import java.util.Optional;
 
 import local.carter.office.OfficeMod;
+import local.carter.office.magic.cast.ElementChoice;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.ManaMath;
+import local.carter.office.magic.data.MagicAttachments;
+import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.item.GrimoireLook;
 import local.carter.office.magic.item.MagicItems;
+import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
+import local.carter.office.magic.net.MagicServer;
+import local.carter.office.magic.spell.SpellIds;
 
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.GlobalPos;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.resources.Identifier;
@@ -99,6 +115,140 @@ public class MagicCoreGameTests {
 	public void grimoireChargeSlowsAndBlocksSprint(GameTestHelper h) {
 		ItemStack g = new ItemStack(MagicItems.GRIMOIRE);
 		h.assertValueEqual(g.get(DataComponents.USE_EFFECTS), new UseEffects(false, false, 0.6f), "use effects");
+		h.succeed();
+	}
+
+	// ---- Task 3: data, payload receivers, element choice, seal, kit ----
+
+	private static InteractionResult use(GameTestHelper h, ServerPlayer p, InteractionHand hand) {
+		return p.getItemInHand(hand).use(h.getLevel(), p, hand);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void firstUseOpensChoice(GameTestHelper h) {
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ServerPlayer p = MagicTestKit.otherPlayer(h, MagicTestKit.STAND);
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.GRIMOIRE));
+		h.assertTrue(use(h, p, InteractionHand.MAIN_HAND).consumesAction(), "main hand, unbound: handled");
+		h.assertValueEqual(rec.opens(), List.of(OpenGrimoire.Mode.CHOOSE), "main hand opens the choice");
+
+		p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+		p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
+		h.assertTrue(use(h, p, InteractionHand.OFF_HAND).consumesAction(), "off hand + empty main hand, unbound: handled");
+		h.assertValueEqual(rec.opens(), List.of(OpenGrimoire.Mode.CHOOSE, OpenGrimoire.Mode.CHOOSE), "off hand opens the choice");
+
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.IRON_SWORD));
+		h.assertValueEqual(use(h, p, InteractionHand.OFF_HAND), InteractionResult.PASS, "a sword in the main hand: pass");
+		h.assertValueEqual(rec.opens().size(), 2, "nothing more opened");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void chooseElementBindsOnce(GameTestHelper h) {
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ServerPlayer p = MagicTestKit.otherPlayer(h, MagicTestKit.STAND);
+		h.assertTrue(ElementChoice.choose(p, Element.FIRE), "first choice binds");
+		h.assertFalse(ElementChoice.choose(p, Element.WATER), "second choice refused");
+		MagicData d = MagicAttachments.get(p);
+		h.assertValueEqual(d.element(), Optional.of(Element.FIRE), "still fire");
+		h.assertValueEqual(d.selected(), Optional.of(SpellIds.FIRE_BOLT), "first spell selected");
+		h.assertValueEqual(rec.titleKeys(), List.of("magic.office.bound"), "one bound title");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void mainHandUseOpensInfo(GameTestHelper h) {
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 3);
+		p.setItemInHand(InteractionHand.MAIN_HAND, p.getOffhandItem());
+		p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+		h.assertTrue(use(h, p, InteractionHand.MAIN_HAND).consumesAction(), "handled");
+		h.assertValueEqual(rec.opens(), List.of(OpenGrimoire.Mode.INFO), "bound main hand opens the info screen");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void rebindingSealClearsElementKeepsLevel(GameTestHelper h) {
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 5);
+		p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL));
+		h.assertTrue(use(h, p, InteractionHand.MAIN_HAND).consumesAction(), "seal used");
+		MagicData d = MagicAttachments.get(p);
+		h.assertValueEqual(d.element(), Optional.<Element>empty(), "element cleared");
+		h.assertValueEqual(d.level(), 5, "level kept");
+		h.assertTrue(p.getMainHandItem().isEmpty(), "seal used up");
+		h.assertValueEqual(rec.opens(), List.of(OpenGrimoire.Mode.CHOOSE), "choice opened");
+		h.assertValueEqual(GrimoireLook.element(p.getOffhandItem()), Optional.<Element>empty(), "held grimoire re-stamped unbound");
+		h.assertTrue(ElementChoice.choose(p, Element.EARTH), "can choose again");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void magicDataSurvivesDeath(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WATER, 4);
+		GlobalPos home = GlobalPos.of(h.getLevel().dimension(), h.absolutePos(new BlockPos(3, 4, 3)));
+		MagicData d = MagicAttachments.get(p).withHome(Optional.of(home)).withReady(SpellIds.WATER_BULLET, 500L);
+		MagicAttachments.set(p, d);
+		MagicAttachments.setMana(p, 37);
+		ServerPlayer respawned = MagicTestKit.respawn(h, p);
+		h.assertTrue(respawned != p, "a new player object");
+		h.assertValueEqual(MagicAttachments.get(respawned), d, "magic data copied on death");
+		h.assertValueEqual(MagicAttachments.mana(respawned), 37, "mana copied on death");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void heldGrimoireRestampedOnLevelChange(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 1);
+		h.assertValueEqual(p.getOffhandItem().get(DataComponents.CUSTOM_MODEL_DATA).strings(), List.of("t0"), "level 1 look");
+		CommandSourceStack src = h.getLevel().getServer().createCommandSourceStack().withEntity(p).withSuppressedOutput();
+		h.getLevel().getServer().getCommands().performPrefixedCommand(src, "magic level @s 7");
+		h.assertValueEqual(MagicAttachments.get(p).level(), 7, "level set by the command");
+		h.assertValueEqual(p.getOffhandItem().get(DataComponents.CUSTOM_MODEL_DATA).strings(), List.of("t3"), "held grimoire re-stamped");
+		h.getLevel().getServer().getCommands().performPrefixedCommand(src, "magic mana @s 55");
+		h.assertValueEqual(MagicAttachments.mana(p), 55, "mana set by the command");
+		h.getLevel().getServer().getCommands().performPrefixedCommand(src, "magic reset @s");
+		h.assertValueEqual(MagicAttachments.get(p), MagicData.EMPTY, "reset");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void selectSpellRejectsLocked(GameTestHelper h) {
+		MagicTestKit.Probe locked = MagicTestKit.probe("probe_select_locked", Element.FIRE, 1);
+		MagicTestKit.Probe open = MagicTestKit.probe("probe_select_open", Element.FIRE, 0);
+		MagicTestKit.override(h, locked);
+		MagicTestKit.override(h, open);
+		ServerPlayer p = MagicTestKit.caster(h, Element.FIRE, 1);
+		h.assertFalse(MagicServer.select(p, locked.id()), "slot 1 is locked at level 1");
+		h.assertValueEqual(MagicAttachments.get(p).selected(), Optional.of(SpellIds.FIRE_BOLT), "selection unchanged");
+		h.assertFalse(MagicServer.select(p, SpellIds.WATER_BULLET), "another element's spell refused");
+		h.assertTrue(MagicServer.select(p, open.id()), "an unlocked spell is selectable");
+		h.assertValueEqual(MagicAttachments.get(p).selected(), Optional.of(open.id()), "selected");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void kitArenaIsReady(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 7);
+		h.assertValueEqual(p.blockPosition(), h.absolutePos(MagicTestKit.STAND), "stands at STAND");
+		h.assertBlockPresent(Blocks.STONE, MagicTestKit.STAND.below());
+		Vec3 facing = Vec3.atLowerCornerOf(h.getTestRotation().rotate(Direction.SOUTH).getUnitVec3i());
+		h.assertTrue(p.getLookAngle().dot(facing) > 0.999, "faces +Z, got " + p.getLookAngle());
+		h.assertValueEqual(p.experienceLevel, MagicTestKit.XP_LEVELS, "30 XP levels");
+		h.assertTrue(p.getMainHandItem().isEmpty(), "empty main hand");
+		h.assertTrue(GrimoireItem.isGrimoire(p.getOffhandItem()), "grimoire in the off hand");
+		h.assertValueEqual(MagicAttachments.mana(p), ManaMath.max(7), "full mana");
+		h.assertTrue(p.getRespawnConfig() == null, "respawn config cleared");
+		h.assertValueEqual(MagicAttachments.get(p).element(), Optional.of(Element.SHADOW), "bound");
+		long hash = MagicTestKit.blockHash(h);
+		h.assertValueEqual(MagicTestKit.blockHash(h), hash, "block hash is stable");
+		h.assertValueEqual(MagicTestKit.waterCount(h), 0, "no water");
+		h.assertValueEqual(MagicTestKit.count(h, Blocks.STONE), MagicTestKit.SIZE_X * MagicTestKit.SIZE_Z * (MagicTestKit.FLOOR_TOP + 1), "stone floor");
+		MagicTestKit.fill(h, new BlockPos(2, 4, 2), new BlockPos(3, 5, 3), Blocks.WATER);
+		h.assertValueEqual(MagicTestKit.waterCount(h), 8, "water counted");
+		h.assertTrue(MagicTestKit.blockHash(h) != hash, "hash sees the change");
+		MagicTestKit.aim(p, new BlockPos(16, 1, 20));
+		h.assertTrue(p.getLookAngle().y < 0 && p.getLookAngle().dot(facing) > 0, "aim turns the eyes");
 		h.succeed();
 	}
 }

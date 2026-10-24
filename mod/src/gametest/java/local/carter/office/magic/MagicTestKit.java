@@ -1,0 +1,519 @@
+package local.carter.office.magic;
+
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.function.Function;
+
+import org.jspecify.annotations.Nullable;
+
+import local.carter.office.hologram.HologramBlockEntity;
+import local.carter.office.hologram.OfficeBlocks;
+import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.cast.CastService.Result;
+import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.HandSigns;
+import local.carter.office.magic.core.ManaMath;
+import local.carter.office.magic.data.MagicAttachments;
+import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.item.GrimoireLook;
+import local.carter.office.magic.item.MagicItems;
+import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
+import local.carter.office.magic.net.MagicPayloads.SignChallenge;
+import local.carter.office.magic.net.MagicSender;
+import local.carter.office.magic.net.MagicServer;
+import local.carter.office.magic.spell.CastContext;
+import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.Spell;
+import local.carter.office.magic.spell.SpellCost;
+import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.SpellRegistry;
+
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.gametest.framework.GameTestInfo;
+import net.minecraft.gametest.framework.GameTestListener;
+import net.minecraft.gametest.framework.GameTestRunner;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.animal.wolf.Wolf;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.zombie.Zombie;
+import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
+import net.minecraft.world.entity.projectile.arrow.Arrow;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.Fluids;
+import net.minecraft.world.phys.Vec3;
+
+import net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents;
+
+/**
+ * Everything the magic GameTests share (complete in Task 3: element lanes never edit it). Positions are relative to the test
+ * unless named {@code abs}. Use {@code @GameTest(structure = MagicTestKit.ARENA)}: a 32 × 24 × 32 arena, stone at y 0–3,
+ * air above; the caster stands at {@link #STAND} facing +Z.
+ *
+ * <p>GameTests in one batch run at the same time on one server, so the kit keeps per-test state: the {@link Recorder} only
+ * sees events of its own test's players (or, failing that, events inside its test's bounds), and {@link #override} probes are
+ * removed when the test ends. Give concurrent probes distinct ids. GameTest servers have no spawn protection and the kit clears
+ * respawn configs, so the fallback claim rule only reacts to what a test sets up.
+ */
+public final class MagicTestKit {
+	public static final String ARENA = "office-test:magic_arena";
+	public static final int SIZE_X = 32;
+	public static final int SIZE_Y = 24;
+	public static final int SIZE_Z = 32;
+	/** Top stone layer; the floor surface is y = 4. */
+	public static final int FLOOR_TOP = 3;
+	public static final BlockPos STAND = new BlockPos(16, 4, 4);
+	/** XP levels every {@link #caster} starts with. */
+	public static final int XP_LEVELS = 30;
+
+	private static final Map<Entity, GameTestHelper> OWNERS = new WeakHashMap<>();
+	private static final Map<GameTestHelper, TestState> TESTS = new IdentityHashMap<>();
+	private static final Router ROUTER = new Router();
+
+	private MagicTestKit() {}
+
+	// ---- Players ----
+
+	/** A bound survival mock at {@link #STAND} facing +Z: full mana, grimoire in the off hand, empty main hand, 30 XP levels, slot 0 selected. */
+	public static ServerPlayer caster(GameTestHelper h, Element e, int level) {
+		ServerPlayer p = mock(h, STAND);
+		ItemStack grimoire = new ItemStack(MagicItems.GRIMOIRE);
+		GrimoireLook.stamp(grimoire, Optional.of(e), level);
+		p.setItemInHand(InteractionHand.OFF_HAND, grimoire);
+		MagicAttachments.set(p, MagicData.EMPTY.withElement(Optional.of(e)).withLevel(level).withSelected(Optional.of(SpellIds.at(e, 0))));
+		MagicAttachments.setMana(p, ManaMath.max(level));
+		p.setExperienceLevels(XP_LEVELS);
+		return p;
+	}
+
+	/** Another survival mock at {@code rel} facing +Z: unbound, empty hands, no XP. */
+	public static ServerPlayer otherPlayer(GameTestHelper h, BlockPos rel) {
+		return mock(h, rel);
+	}
+
+	/**
+	 * The player {@code dead} respawns as, the way {@code PlayerList.respawn} makes it: a new mock at the same spot,
+	 * {@code restoreFrom(dead, false)}, then {@code AFTER_RESPAWN} (where Fabric copies {@code copyOnDeath} attachments).
+	 */
+	public static ServerPlayer respawn(GameTestHelper h, ServerPlayer dead) {
+		ServerPlayer p = (ServerPlayer) h.makeMockServerPlayer(GameType.SURVIVAL);
+		p.setPos(dead.getX(), dead.getY(), dead.getZ());
+		face(p, dead.getYRot(), dead.getXRot());
+		p.restoreFrom(dead, false);
+		ServerPlayerEvents.AFTER_RESPAWN.invoker().afterRespawn(dead, p, false);
+		own(h, p);
+		state(h).players.add(p.getId());
+		return p;
+	}
+
+	private static ServerPlayer mock(GameTestHelper h, BlockPos rel) {
+		ServerPlayer p = (ServerPlayer) h.makeMockServerPlayer(GameType.SURVIVAL);
+		Vec3 at = h.absoluteVec(Vec3.atBottomCenterOf(rel));
+		p.setPos(at.x, at.y, at.z);
+		float yaw = h.getTestRotation().rotate(Direction.SOUTH).toYRot();
+		face(p, yaw, 0);
+		p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+		p.setRespawnPosition(null, false);
+		own(h, p);
+		state(h).players.add(p.getId());
+		return p;
+	}
+
+	private static void face(Entity e, float yaw, float pitch) {
+		e.setYRot(yaw);
+		e.setXRot(pitch);
+		e.yRotO = yaw;
+		e.xRotO = pitch;
+		e.setYHeadRot(yaw);
+		if (e instanceof net.minecraft.world.entity.LivingEntity l) l.setYBodyRot(yaw);
+	}
+
+	/** Turns {@code p}'s eyes to the centre of block {@code rel} (no packet, safe for mocks). */
+	public static void aim(ServerPlayer p, BlockPos rel) {
+		Vec3 target = helperOf(p).absoluteVec(Vec3.atCenterOf(rel));
+		Vec3 d = target.subtract(p.getEyePosition());
+		double horizontal = Math.sqrt(d.x * d.x + d.z * d.z);
+		float yaw = (float) (Mth.atan2(d.z, d.x) * Mth.RAD_TO_DEG) - 90f;
+		float pitch = (float) -(Mth.atan2(d.y, horizontal) * Mth.RAD_TO_DEG);
+		face(p, Mth.wrapDegrees(yaw), pitch);
+	}
+
+	// ---- Casting ----
+
+	/** {@code CastService.cast} for the registered (or overridden) spell {@code spell}. */
+	public static Result cast(ServerPlayer p, Identifier spell, float charge) {
+		Spell s = SpellRegistry.get(spell).orElseThrow(() -> new IllegalArgumentException("no spell " + spell));
+		return CastService.cast(p, s, charge);
+	}
+
+	/** Casts an ultimate, reads the challenge it issued and answers it correctly; returns the answer's result (or the cast's). */
+	public static Result castUltimate(ServerPlayer p, Identifier spell) {
+		Recorder rec = recorder(helperOf(p));
+		int before = rec.challenges.size();
+		Result r = cast(p, spell, 1f);
+		if (r != Result.CHALLENGED) return r;
+		SignChallenge c = rec.lastChallenge(p);
+		if (c == null || rec.challenges.size() == before) throw new IllegalStateException("CHALLENGED but no challenge was sent");
+		return CastService.answer(p, c.id(), HandSigns.sequence(c.seed(), c.length()));
+	}
+
+	/** Lays {@code s} over the registry until this test ends. */
+	public static void override(GameTestHelper h, Spell s) {
+		state(h).cleanups.add(SpellRegistry.overrideForTesting(s));
+	}
+
+	/** A test spell at {@code office-test:<path>} that casts {@code ctx.fx()}. Tweak it with {@code with…}, install with {@link #override}. */
+	public static Probe probe(String path, @Nullable Element element, int slot) {
+		return new Probe(Identifier.fromNamespaceAndPath("office-test", path), element, slot, SpellCost.forSlot(slot), false,
+				ctx -> CastOutcome.cast(ctx.fx()));
+	}
+
+	public record Probe(Identifier id, @Nullable Element element, int slot, SpellCost cost, boolean managesOwnCooldown,
+			Function<CastContext, CastOutcome> body) implements Spell {
+		public Probe withCost(SpellCost c) { return new Probe(id, element, slot, c, managesOwnCooldown, body); }
+
+		public Probe withOwnCooldown(boolean own) { return new Probe(id, element, slot, cost, own, body); }
+
+		public Probe withBody(Function<CastContext, CastOutcome> b) { return new Probe(id, element, slot, cost, managesOwnCooldown, b); }
+
+		@Override
+		public CastOutcome cast(CastContext ctx) { return body.apply(ctx); }
+	}
+
+	// ---- Entities ----
+
+	/** A zombie target: no AI, 20 hp, persistent, a carved pumpkin on its head so daylight never burns it (no armour). */
+	public static Zombie dummy(GameTestHelper h, BlockPos rel) {
+		Zombie z = h.spawn(EntityTypes.ZOMBIE, rel);
+		z.setNoAi(true);
+		z.getAttribute(Attributes.MAX_HEALTH).setBaseValue(20);
+		z.setHealth(20);
+		z.setPersistenceRequired();
+		z.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.CARVED_PUMPKIN));
+		own(h, z);
+		return z;
+	}
+
+	/** A villager (no AI, persistent): spells must spare it. */
+	public static Villager villager(GameTestHelper h, BlockPos rel) {
+		Villager v = h.spawn(EntityTypes.VILLAGER, rel);
+		v.setNoAi(true);
+		v.setPersistenceRequired();
+		own(h, v);
+		return v;
+	}
+
+	/** A wolf tamed by {@code owner} (no AI, persistent): spells must spare pets. */
+	public static Wolf tamedWolf(GameTestHelper h, BlockPos rel, ServerPlayer owner) {
+		Wolf w = h.spawn(EntityTypes.WOLF, rel);
+		w.setTame(true, true);
+		w.setOwner(owner);
+		w.setNoAi(true);
+		w.setPersistenceRequired();
+		own(h, w);
+		return w;
+	}
+
+	/** A cobblestone item entity (push spells move items). */
+	public static ItemEntity item(GameTestHelper h, BlockPos rel) {
+		ItemEntity i = h.spawnItem(Items.COBBLESTONE, rel);
+		own(h, i);
+		return i;
+	}
+
+	/** An arrow at the centre of {@code rel} flying with {@code velocity} (blocks/tick; no owner, not pick-up-able). */
+	public static Arrow arrow(GameTestHelper h, BlockPos rel, Vec3 velocity) {
+		Vec3 at = h.absoluteVec(Vec3.atCenterOf(rel));
+		Arrow a = new Arrow(h.getLevel(), at.x, at.y, at.z, new ItemStack(Items.ARROW), null);
+		a.pickup = AbstractArrow.Pickup.DISALLOWED;
+		a.setDeltaMovement(velocity);
+		h.getLevel().addFreshEntity(a);
+		own(h, a);
+		return a;
+	}
+
+	// ---- Blocks ----
+
+	/** Fills the box {@code fromRel}..{@code toRel} (inclusive) with {@code b}. */
+	public static void fill(GameTestHelper h, BlockPos fromRel, BlockPos toRel, Block b) {
+		for (BlockPos p : BlockPos.betweenClosed(fromRel, toRel)) h.setBlock(p, b);
+	}
+
+	/** A chest (a block entity: terrain edits must refuse it). */
+	public static void chest(GameTestHelper h, BlockPos rel) {
+		h.setBlock(rel, Blocks.CHEST);
+	}
+
+	/** A hologram emitter owned by {@code owner} at {@code rel}, placed the normal way (the block below must be solid). */
+	public static HologramBlockEntity emitter(GameTestHelper h, BlockPos rel, ServerPlayer owner) {
+		ItemStack held = owner.getMainHandItem();
+		owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(OfficeBlocks.HOLOGRAM_EMITTER_ITEM));
+		h.placeAt(owner, owner.getMainHandItem(), rel.below(), Direction.UP);
+		owner.setItemInHand(InteractionHand.MAIN_HAND, held);
+		h.assertBlockPresent(OfficeBlocks.HOLOGRAM_EMITTER, rel);
+		return h.getBlockEntity(rel, HologramBlockEntity.class);
+	}
+
+	/** A hash of every block state in the arena (equal hashes = no block changed). */
+	public static long blockHash(GameTestHelper h) {
+		long hash = 0xcbf29ce484222325L;
+		for (int y = 0; y < SIZE_Y; y++) {
+			for (int z = 0; z < SIZE_Z; z++) {
+				for (int x = 0; x < SIZE_X; x++) {
+					hash = (hash ^ Block.getId(h.getBlockState(new BlockPos(x, y, z)))) * 0x100000001b3L;
+				}
+			}
+		}
+		return hash;
+	}
+
+	/** Blocks of {@code b} in the arena. */
+	public static int count(GameTestHelper h, Block b) {
+		int n = 0;
+		for (int y = 0; y < SIZE_Y; y++) {
+			for (int z = 0; z < SIZE_Z; z++) {
+				for (int x = 0; x < SIZE_X; x++) if (h.getBlockState(new BlockPos(x, y, z)).is(b)) n++;
+			}
+		}
+		return n;
+	}
+
+	/** Water in the arena: sources, flows and waterlogged blocks. */
+	public static int waterCount(GameTestHelper h) {
+		int n = 0;
+		for (int y = 0; y < SIZE_Y; y++) {
+			for (int z = 0; z < SIZE_Z; z++) {
+				for (int x = 0; x < SIZE_X; x++) {
+					BlockState s = h.getBlockState(new BlockPos(x, y, z));
+					if (s.getFluidState().getType().isSame(Fluids.WATER)) n++;
+				}
+			}
+		}
+		return n;
+	}
+
+	/** Distance from {@code a} (feet) to the test-relative point {@code relPoint}. */
+	public static double dist(GameTestHelper h, Entity a, Vec3 relPoint) {
+		return a.position().distanceTo(h.absoluteVec(relPoint));
+	}
+
+	/** As {@link #dist(GameTestHelper, Entity, Vec3)} for an entity the kit made. */
+	public static double dist(Entity a, Vec3 relPoint) {
+		return dist(helperOf(a), a, relPoint);
+	}
+
+	// ---- Recorder ----
+
+	/** This test's recorder (the same one on every call): installs the recording sender until the test ends. */
+	public static Recorder recorder(GameTestHelper h) {
+		TestState s = state(h);
+		if (s.recorder == null) {
+			s.recorder = new Recorder();
+			MagicServer.setSenderForTesting(ROUTER);
+		}
+		return s.recorder;
+	}
+
+	/** What the server would have sent during this test. */
+	public static final class Recorder {
+		public record Sent<T>(ServerPlayer player, T value) {}
+
+		public record Title(ServerPlayer player, Component title, Component subtitle) {}
+
+		private final List<FxEvent> fx = new ArrayList<>();
+		private final List<Sent<SignChallenge>> challenges = new ArrayList<>();
+		private final List<Sent<Component>> messages = new ArrayList<>();
+		private final List<Title> titles = new ArrayList<>();
+		private final List<Integer> cancels = new ArrayList<>();
+		private final List<Sent<OpenGrimoire.Mode>> opens = new ArrayList<>();
+
+		private Recorder() {}
+
+		public List<FxEvent> fx() { return List.copyOf(fx); }
+
+		public List<FxEvent> fx(Entity caster) {
+			return fx.stream().filter(e -> e.casterId() == caster.getId()).toList();
+		}
+
+		public List<SignChallenge> challenges() { return challenges.stream().map(Sent::value).toList(); }
+
+		public @Nullable SignChallenge lastChallenge(ServerPlayer p) {
+			for (int i = challenges.size() - 1; i >= 0; i--) if (challenges.get(i).player() == p) return challenges.get(i).value();
+			return null;
+		}
+
+		/** Action-bar messages. */
+		public List<Component> messages() { return messages.stream().map(Sent::value).toList(); }
+
+		/** Translation keys of the action-bar messages (literal ones as their text). */
+		public List<String> messageKeys() { return messages.stream().map(m -> key(m.value())).toList(); }
+
+		public List<Title> titles() { return List.copyOf(titles); }
+
+		public List<String> titleKeys() { return titles.stream().map(t -> key(t.title())).toList(); }
+
+		/** Entity ids of casters whose fx were cancelled. */
+		public List<Integer> cancels() { return List.copyOf(cancels); }
+
+		public List<OpenGrimoire.Mode> opens() { return opens.stream().map(Sent::value).toList(); }
+
+		public void clear() {
+			fx.clear();
+			challenges.clear();
+			messages.clear();
+			titles.clear();
+			cancels.clear();
+			opens.clear();
+		}
+
+		private static String key(Component c) {
+			return c.getContents() instanceof TranslatableContents t ? t.getKey() : c.getString();
+		}
+	}
+
+	/** The one installed sender: hands each event to the recorder of the test it belongs to, else to the network. */
+	private static final class Router implements MagicSender {
+		private static @Nullable Recorder route(int entityId, Vec3 abs) {
+			for (TestState s : TESTS.values()) if (s.recorder != null && s.players.contains(entityId)) return s.recorder;
+			for (TestState s : TESTS.values()) if (s.recorder != null && s.helper.getBounds().contains(abs)) return s.recorder;
+			return null;
+		}
+
+		private static @Nullable Recorder route(ServerPlayer p) {
+			return route(p.getId(), p.position());
+		}
+
+		@Override
+		public void fx(ServerLevel level, FxEvent e, double range) {
+			Recorder r = route(e.casterId(), e.origin());
+			if (r != null) r.fx.add(e);
+			else MagicServer.network().fx(level, e, range);
+		}
+
+		@Override
+		public void cancelFx(ServerPlayer caster) {
+			Recorder r = route(caster);
+			if (r != null) r.cancels.add(caster.getId());
+			else MagicServer.network().cancelFx(caster);
+		}
+
+		@Override
+		public void challenge(ServerPlayer p, SignChallenge c) {
+			Recorder r = route(p);
+			if (r != null) r.challenges.add(new Recorder.Sent<>(p, c));
+			else MagicServer.network().challenge(p, c);
+		}
+
+		@Override
+		public void open(ServerPlayer p, OpenGrimoire.Mode m) {
+			Recorder r = route(p);
+			if (r != null) r.opens.add(new Recorder.Sent<>(p, m));
+			else MagicServer.network().open(p, m);
+		}
+
+		@Override
+		public void actionBar(ServerPlayer p, Component c) {
+			Recorder r = route(p);
+			if (r != null) r.messages.add(new Recorder.Sent<>(p, c));
+			else MagicServer.network().actionBar(p, c);
+		}
+
+		@Override
+		public void title(ServerPlayer p, Component title, Component subtitle) {
+			Recorder r = route(p);
+			if (r != null) r.titles.add(new Recorder.Title(p, title, subtitle));
+			else MagicServer.network().title(p, title, subtitle);
+		}
+	}
+
+	// ---- Per-test state ----
+
+	private static final class TestState {
+		final GameTestHelper helper;
+		final Set<Integer> players = new HashSet<>();
+		final List<AutoCloseable> cleanups = new ArrayList<>();
+		@Nullable Recorder recorder;
+
+		TestState(GameTestHelper helper) {
+			this.helper = helper;
+		}
+
+		void finish() {
+			for (AutoCloseable c : cleanups) {
+				try {
+					c.close();
+				} catch (Exception e) {
+					throw new IllegalStateException(e);
+				}
+			}
+			cleanups.clear();
+			TESTS.remove(helper);
+			boolean anyRecorder = TESTS.values().stream().anyMatch(s -> s.recorder != null);
+			if (!anyRecorder) MagicServer.setSenderForTesting(null);
+		}
+	}
+
+	private static TestState state(GameTestHelper h) {
+		TestState s = TESTS.get(h);
+		if (s == null) {
+			s = new TestState(h);
+			TESTS.put(h, s);
+			TestState created = s;
+			info(h).addListener(new GameTestListener() {
+				@Override public void testStructureLoaded(GameTestInfo info) {}
+
+				@Override public void testPassed(GameTestInfo info, GameTestRunner runner) { created.finish(); }
+
+				@Override public void testFailed(GameTestInfo info, GameTestRunner runner) { created.finish(); }
+
+				@Override public void testAddedForRerun(GameTestInfo original, GameTestInfo rerun, GameTestRunner runner) {}
+			});
+		}
+		return s;
+	}
+
+	private static GameTestInfo info(GameTestHelper h) {
+		try {
+			Field f = GameTestHelper.class.getDeclaredField("testInfo");
+			f.setAccessible(true);
+			return (GameTestInfo) f.get(h);
+		} catch (ReflectiveOperationException e) {
+			throw new IllegalStateException("GameTestHelper.testInfo not found", e);
+		}
+	}
+
+	private static void own(GameTestHelper h, Entity e) {
+		OWNERS.put(e, h);
+	}
+
+	private static GameTestHelper helperOf(Entity e) {
+		GameTestHelper h = OWNERS.get(e);
+		if (h == null) throw new IllegalArgumentException(e + " was not made by MagicTestKit");
+		return h;
+	}
+}
