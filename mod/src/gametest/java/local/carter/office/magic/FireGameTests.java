@@ -262,10 +262,9 @@ public class FireGameTests {
 		MagicTestKit.fill(h, MagicTestKit.STAND.offset(-3, -1, 3), MagicTestKit.STAND.offset(3, -1, 5), Blocks.WATER);
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		int mana = MagicAttachments.mana(p);
-		int effects = ActiveEffects.count();
 		h.assertValueEqual(cast(p, WALL, 0f), Result.FIZZLED, "result");
 		h.assertValueEqual(MagicAttachments.mana(p), mana, "mana unchanged");
-		h.assertValueEqual(ActiveEffects.count(), effects, "no wall started");
+		h.assertValueEqual(ActiveEffects.count(p.getUUID()), 0, "no wall started");
 		h.assertValueEqual(rec.fx(p).size(), 0, "no fx");
 		h.assertValueEqual(rec.messageKeys(p), List.of(CastService.SPELL_FAILED_KEY), "message");
 		h.succeed();
@@ -308,7 +307,7 @@ public class FireGameTests {
 		Zombie hopper = MagicTestKit.movableDummy(h, MagicTestKit.STAND.offset(-2, 0, 6));
 		// Moves them inside the server tick after the creatures have ticked, as a teleport does: their last positions stay put.
 		// (Effects tick in the order they started, so this one runs just before the wall's.)
-		ActiveEffects.add(h.getLevel(), new LingeringEffect() {
+		ActiveEffects.add(h.getLevel(), p.getUUID(), new LingeringEffect() {
 			@Override
 			public boolean tick(ServerLevel level, int age) {
 				if (age < 4) return true;

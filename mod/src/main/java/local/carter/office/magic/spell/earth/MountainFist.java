@@ -99,7 +99,7 @@ public final class MountainFist implements Spell {
 		Vec3 dir = to.x * to.x + to.z * to.z < 1.0E-4 ? EarthSpikes.forward(ctx.look(), p.getYRot()) : EarthWallGeometry.flat(to);
 		int height = MountainFistGeometry.height(ctx.grimoireLevel());
 		BlockState surface = surfaceMaterial(level, target.below());
-		if (!ActiveEffects.add(level, new Rise(ctx, target, surface, baseRadius, height))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, new Rise(ctx, target, surface, baseRadius, height))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		FxEvent fx = ctx.fx();
 		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), dir, Vec3.atBottomCenterOf(target), fx.charge(),
 				fx.power(), fx.seed(), MountainFistGeometry.RISE, new int[0],

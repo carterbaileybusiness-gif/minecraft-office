@@ -117,14 +117,14 @@ public final class WindSphere implements Spell {
 
 	@Override
 	public CastOutcome cast(CastContext ctx) {
-		if (ActiveEffects.count() >= ActiveEffects.MAX) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (ActiveEffects.full(ctx.caster().getUUID())) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		ServerPlayer p = ctx.caster();
 		Vec3 eye = ctx.eye();
 		Vec3 look = DrillGeometry.unit(ctx.look());
 		int length = DrillGeometry.length(ctx.grimoireLevel());
 		Predicate<Entity> touches = e -> TargetFilter.affects(p, e);
 		Strike predicted = predict(ctx.level(), eye, look, touches);
-		if (!ActiveEffects.add(ctx.level(), new Dash(ctx, eye, look, length))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, new Dash(ctx, eye, look, length))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Motion.dash(p, Vec3.ZERO, NO_FALL_TICKS);
 		int[] ids = predicted.entity() == null ? new int[0] : new int[] {predicted.entity().getId()};
 		return CastOutcome.cast(ctx.fx().withTarget(predicted.at()).withDuration(DrillGeometry.WINDUP + (int) Math.ceil(predicted.t()))

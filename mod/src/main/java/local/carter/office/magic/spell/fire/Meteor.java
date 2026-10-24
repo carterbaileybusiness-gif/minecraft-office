@@ -88,7 +88,7 @@ public final class Meteor implements Spell {
 		double lift = lift(level, impact, MeteorGeometry.drop(dir));
 		int radius = MeteorGeometry.radius(ctx.grimoireLevel());
 		MeteorGeometry g = MeteorGeometry.of(impact, dir, lift, radius);
-		if (!ActiveEffects.add(level, new Fall(ctx, g))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, new Fall(ctx, g))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		FxEvent fx = ctx.fx();
 		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), dir, impact, fx.charge(), fx.power(), fx.seed(),
 				MeteorGeometry.FALL_TICKS, new int[0], new float[] {radius, (float) lift}));

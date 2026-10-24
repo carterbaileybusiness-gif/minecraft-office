@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import local.carter.office.magic.cast.CastService;
@@ -214,20 +215,20 @@ public class CastGameTests {
 		ServerLevel level = h.getLevel();
 		LingeringEffect idle = (l, age) -> true;
 		MagicTestKit.override(h, MagicTestKit.probe("probe_lingering", Element.FIRE, 0).withBody(ctx -> {
-			if (!ActiveEffects.add(ctx.level(), (l, age) -> age < 20)) return CastOutcome.fizzle("magic.office.busy");
+			if (!ActiveEffects.add(ctx, (l, age) -> age < 20)) return CastOutcome.fizzle("magic.office.busy");
 			return CastOutcome.cast(ctx.fx());
 		}));
 		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
 		List<LingeringEffect> fillers = new ArrayList<>();
-		// Fill and empty within this one server tick so concurrent tests never see a full list.
+		// Fill the caster's own cap and empty it within this one server tick (concurrent tests have casters of their own).
 		try {
 			while (true) {
 				int n = fillers.size();
 				LingeringEffect f = (l, age) -> n >= 0;
-				if (!ActiveEffects.add(level, f)) break;
+				if (!ActiveEffects.add(level, p.getUUID(), f)) break;
 				fillers.add(f);
 			}
-			h.assertValueEqual(ActiveEffects.count(), ActiveEffects.MAX, "effects full");
+			h.assertValueEqual(ActiveEffects.count(p.getUUID()), ActiveEffects.MAX_PER_CASTER, "caster's effects full");
 			h.assertValueEqual(MagicTestKit.cast(p, sid, 0f), Result.BUSY, "result");
 		} finally {
 			for (LingeringEffect f : fillers) ActiveEffects.remove(f);
@@ -237,6 +238,53 @@ public class CastGameTests {
 		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.busy"), "message");
 		h.assertValueEqual(MagicAttachments.get(p).cooldownLeft(sid, now(h)), 0L, "cooldown");
 		h.assertTrue(!ActiveEffects.remove(idle), "removing an unknown effect");
+		h.succeed();
+	}
+
+	/** A fresh never-ending effect (a non-capturing lambda would be one shared instance, and an instance runs at most once). */
+	static LingeringEffect idleEffect() {
+		return new LingeringEffect() {
+			@Override
+			public boolean tick(ServerLevel level, int age) {
+				return true;
+			}
+		};
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void effectCapIsPerCaster(GameTestHelper h) {
+		ServerLevel level = h.getLevel();
+		UUID a = UUID.randomUUID();
+		UUID b = UUID.randomUUID();
+		List<LingeringEffect> started = new ArrayList<>();
+		// All within this one server tick: nothing ticks, and concurrent tests never see A's effects.
+		try {
+			for (int i = 0; i < ActiveEffects.MAX_PER_CASTER; i++) {
+				LingeringEffect f = idleEffect();
+				h.assertTrue(ActiveEffects.add(level, a, f), "A's effect " + i + " refused below the cap");
+				started.add(f);
+			}
+			h.assertValueEqual(ActiveEffects.count(a), ActiveEffects.MAX_PER_CASTER, "A at its cap");
+			h.assertTrue(ActiveEffects.full(a), "A full");
+			LingeringEffect over = idleEffect();
+			h.assertFalse(ActiveEffects.add(level, a, over), "A's effect over the cap accepted");
+			h.assertFalse(ActiveEffects.running(over), "refused effect running");
+			h.assertFalse(ActiveEffects.full(b), "B full because of A");
+			LingeringEffect fromB = idleEffect();
+			h.assertTrue(ActiveEffects.add(level, b, fromB), "B refused because of A");
+			started.add(fromB);
+			h.assertValueEqual(ActiveEffects.count(b), 1, "B's count");
+			// Removing one of A's frees exactly one slot for A.
+			ActiveEffects.remove(started.remove(0));
+			h.assertFalse(ActiveEffects.full(a), "A full after a removal");
+			h.assertTrue(ActiveEffects.add(level, a, over), "A refused after a removal");
+			started.add(over);
+			h.assertTrue(ActiveEffects.full(a), "A full again");
+		} finally {
+			for (LingeringEffect f : started) ActiveEffects.remove(f);
+		}
+		h.assertValueEqual(ActiveEffects.count(a), 0, "A's count after cleanup");
+		h.assertValueEqual(ActiveEffects.count(b), 0, "B's count after cleanup");
 		h.succeed();
 	}
 

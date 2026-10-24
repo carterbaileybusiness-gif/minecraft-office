@@ -89,7 +89,7 @@ public final class EarthWall implements Spell {
 		double ahead = clearAhead(ctx, forward);
 		EarthWallGeometry g = EarthWallGeometry.of(ctx.caster().position(), forward, ahead, ctx.charge());
 		Rise rise = new Rise(ctx, g);
-		if (!ActiveEffects.add(ctx.level(), rise)) return CastOutcome.fizzle("magic.office.busy");
+		if (!ActiveEffects.add(ctx, rise)) return CastOutcome.fizzle("magic.office.busy");
 		return CastOutcome.cast(ctx.fx().withTarget(Vec3.atBottomCenterOf(g.origin())).withDuration(EarthWallGeometry.DURATION)
 				.withData(g.ax(), g.az(), g.width(), g.height()));
 	}

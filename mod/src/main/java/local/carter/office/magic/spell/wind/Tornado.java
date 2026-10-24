@@ -79,11 +79,11 @@ public final class Tornado implements Spell {
 
 	@Override
 	public CastOutcome cast(CastContext ctx) {
-		if (ActiveEffects.count() >= ActiveEffects.MAX) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (ActiveEffects.full(ctx.caster().getUUID())) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Vec3 start = start(ctx);
 		Vec3 dir = AirStep.lookH(ctx.look(), ctx.caster().getYRot());
 		TornadoGeometry geo = new TornadoGeometry(start, dir, TornadoGeometry.life(ctx.charge()));
-		if (!ActiveEffects.add(ctx.level(), new Twister(ctx, geo))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (!ActiveEffects.add(ctx, new Twister(ctx, geo))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		FxEvent fx = ctx.fx();
 		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), geo.dir(), start, fx.charge(), fx.power(), fx.seed(),
 				geo.life(), new int[0], new float[0]));
