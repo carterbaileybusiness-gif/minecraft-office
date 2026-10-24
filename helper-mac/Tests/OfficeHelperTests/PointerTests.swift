@@ -143,6 +143,29 @@ enum PointerTests {
             expectEqual(PointerTarget.globalPoint(slot: 0, x: 1, y: 1, w: 10, h: 10, main: .zero, display: none), .failure(.noDisplay))
         }
 
+        run("Mirror of another monitor (slot 0 + display): pixels land on that monitor; unknown id → main") {
+            let main = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            let lg = CGRect(x: -1920, y: -180, width: 1920, height: 1080)
+            let none: (Int) -> (bounds: CGRect, width: Int, height: Int)? = { _ in nil }
+            let monitor: (String) -> CGRect? = { $0 == "LG" ? lg : nil }
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 960, y: 540, w: 1920, h: 1080, monitorId: "LG", main: main, monitor: monitor, display: none),
+                        .success(CGPoint(x: -959.5, y: 360.5)), "pixel centre on the LG")
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 960, y: 540, w: 1920, h: 1080, monitorId: "GONE", main: main, monitor: monitor, display: none),
+                        .success(CGPoint(x: 720.375, y: 450.4166666666667)), "unknown id: the main display")
+            expectEqual(PointerTarget.globalPoint(slot: 0, x: 960, y: 540, w: 1920, h: 1080, monitorId: nil, main: main, monitor: monitor, display: none),
+                        .success(CGPoint(x: 720.375, y: 450.4166666666667)), "no id: the main display")
+        }
+
+        run("work mode cursor on a mirrored monitor: slot 0 with its id, in its points") {
+            let main = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            let lg = CGRect(x: -1920, y: -180, width: 1920, height: 1080)
+            expectEqual(CursorLocator.locate(CGPoint(x: -1000, y: 0), main: main, displays: [], monitors: [(id: "LG", bounds: lg)]),
+                        CursorPayload(slot: 0, x: 920, y: 180, w: 1920, h: 1080, display: "LG"))
+            expectEqual(CursorLocator.locate(CGPoint(x: -1000, y: 0), main: main, displays: []).slot, -1, "LG not listed: another monitor")
+            expectEqual(CursorLocator.locate(CGPoint(x: 10, y: 10), main: main, displays: [], monitors: [(id: "MAIN", bounds: main), (id: "LG", bounds: lg)]),
+                        CursorPayload(slot: 0, x: 10, y: 10, w: 1440, h: 900), "the main display still wins (no display key)")
+        }
+
         run("Extend slots still map onto their virtual display; an unknown slot fails") {
             let office = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
             let one: (Int) -> (bounds: CGRect, width: Int, height: Int)? = { $0 == 1 ? (office, 1920, 1080) : nil }

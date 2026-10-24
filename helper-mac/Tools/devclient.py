@@ -7,6 +7,7 @@ Steps (run in order; incoming messages are printed as they arrive):
   remove SLOT                REMOVE_DISPLAY
   list                       LIST_WINDOWS, wait for WINDOWS
   capture SURFACE display SLOT MAXW FPS | capture SURFACE window KEY MAXW FPS | capture SURFACE main MAXW FPS
+  capturemon SURFACE UUID    CAPTURE main + display: Mirror that monitor (a UUID from `displays`), 1920 wide, 5 fps
   ready SURFACE              READY (one more frame)
   stop SURFACE               STOP
   zoomin SURFACE X Y W H     ZOOM_IN with mcWindowFrame
@@ -25,6 +26,7 @@ Steps (run in order; incoming messages are printed as they arrive):
   open SLOT BUNDLE|URL       OPEN_APP: the app (bundle id) or https page onto that slot's display; waits for APP_RESULT
   work SLOT X Y [BUTTON]     WORK_BEGIN: work mode there (real cursor + real mouse until Esc; CURSOR reports print as
                              they come, at most one line per 0.25 s)
+  workmon UUID X Y [BUTTON]  WORK_BEGIN slot 0 + display: work mode at pixel X Y of a 1920 x 1080 picture of that monitor
   sleep SECONDS              wait (still printing incoming messages)
   displays                   LIST_DISPLAYS, wait for DISPLAYS (every screen: UUID, slot, main, name, bounds); also print
                              the online display ids (CoreGraphics)
@@ -54,7 +56,8 @@ NAMES = {1: "HELLO", 2: "LIST_WINDOWS", 3: "CREATE_DISPLAY", 4: "REMOVE_DISPLAY"
          22: "WORK_BEGIN", 23: "RATE", 75: "APPS", 76: "ICONS", 77: "APP_RESULT", 78: "SECURE_INPUT", 79: "CURSOR", 80: "WALK",
          24: "LIST_DISPLAYS", 25: "SET_ORIGINS", 26: "IDENTIFY", 81: "DISPLAYS"}
 STEPS = {"create", "remove", "list", "capture", "ready", "stop", "zoomin", "zoomout", "permissions", "down", "move", "up",
-         "click", "scroll", "exittyping", "apps", "icons", "open", "work", "sleep", "uuid", "displays", "origins", "waitgone", "badtoken"}
+         "click", "scroll", "exittyping", "apps", "icons", "open", "work", "workmon", "capturemon", "sleep",
+         "uuid", "displays", "origins", "waitgone", "badtoken"}
 MAIN_PICTURE = {"w": 1920, "h": 1080}  # slot 0 (Mirror): the picture size x / y belong to
 CODES = {v: k for k, v in NAMES.items()}
 
@@ -212,6 +215,15 @@ def main(argv):
             payload = {"surface": surface, "kind": kind, "maxW": int(argv[i + 4]), "fps": int(argv[i + 5])}
             payload["slot" if kind == "display" else "windowKey"] = int(argv[i + 3]) if kind == "display" else argv[i + 3]
             c.send("CAPTURE", payload); i += 6
+        elif step == "capturemon":
+            c.send("CAPTURE", {"surface": int(argv[i + 1]), "kind": "main", "maxW": 1920, "fps": 5, "display": argv[i + 2]})
+            i += 3
+        elif step == "workmon":
+            uuid, x, y = argv[i + 1], int(argv[i + 2]), int(argv[i + 3]); i += 4
+            button = "left"
+            if i < len(argv) and argv[i] in ("left", "right", "middle"):
+                button = argv[i]; i += 1
+            c.send("WORK_BEGIN", {"slot": 0, "x": x, "y": y, "button": button, "display": uuid, **MAIN_PICTURE})
         elif step in ("ready", "stop"):
             c.send(step.upper(), {"surface": int(argv[i + 1])}); i += 2
         elif step == "zoomin":

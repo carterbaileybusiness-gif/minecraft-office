@@ -13,6 +13,9 @@ import ScreenCaptureKit
     /// The mini Dock: installed apps, icons, opening an app onto a hologram's display (spec 5.10).
     let launcher = AppLauncher()
     private var captures: [Int: SurfaceCapture] = [:]
+    /// Mirrors of a chosen monitor (CAPTURE main + display), by surface: while that monitor is unplugged the Mirror shows
+    /// the main display, and it switches back when the monitor returns (checked once a second).
+    private var mirrorRequests: [Int: CapturePayload] = [:]
     private var minecraftPid: pid_t?
     private var zoomedSurface: Int?
     private var nextGeneration: UInt64 = 0
@@ -46,6 +49,14 @@ import ScreenCaptureKit
             return bounds.isEmpty ? nil : (bounds, live.spec.width, live.spec.height)
         }
         input.mainBounds = { CGDisplayBounds(CGMainDisplayID()) }
+        input.monitorBounds = { uuid in ScreenCatalog.displayID(uuid: uuid).map { CGDisplayBounds($0) } }
+        input.cursorMonitors = { [weak self] in
+            guard let self, self.screensMod else { return [] } // an older mod knows only slot -1 off its screens
+            return self.captures.compactMap { surface, capture in
+                guard case .main(_, let monitor?) = capture.source, let id = self.mirrorRequests[surface]?.display else { return nil }
+                return (id: id, bounds: CGDisplayBounds(monitor))
+            }
+        }
         CursorVeil.log = Log.write
         input.cursorDisplays = { [weak self] in
             guard let self else { return [] }
@@ -287,7 +298,12 @@ import ScreenCaptureKit
             }
             source = .window(key)
         case .main:
-            source = .main(excluding: minecraftPid)
+            let monitor = Self.mirroredMonitor(p)
+            if let wanted = p.display, monitor == nil, ScreenCatalog.displayID(uuid: wanted) == nil {
+                Log.write("mirror surface \(p.surface): monitor \(wanted) is not connected; mirroring the main display")
+            }
+            source = .main(excluding: minecraftPid, display: monitor)
+            if p.display != nil { mirrorRequests[p.surface] = p }
         }
         let capture = SurfaceCapture(surface: p.surface, source: source, maxWidth: p.maxW, fps: p.fps)
         captures[p.surface] = capture
@@ -309,6 +325,7 @@ import ScreenCaptureKit
                 Log.write("capture surface \(surface) \(capture.source) generation \(generation)")
             } catch {
                 guard self.captures[surface] === capture else { return }
+                if self.monitorWentAway(capture) { return } // restarted on the main display
                 Log.write("capture surface \(surface) failed: \(error)")
                 if case .window(let key) = capture.source, WindowCatalog.window(key.windowID) == nil {
                     self.end(surface: surface, reason: "window closed")
@@ -319,8 +336,25 @@ import ScreenCaptureKit
         }
     }
 
+    /// The monitor a CAPTURE main + display mirrors: nil = the main display (no display, it is the main one, or it is
+    /// not connected now).
+    private static func mirroredMonitor(_ p: CapturePayload) -> CGDirectDisplayID? {
+        guard let id = p.display.flatMap(ScreenCatalog.displayID(uuid:)), id != CGMainDisplayID() else { return nil }
+        return id
+    }
+
+    /// A Mirror's chosen monitor is gone (its stream stopped or never started): it carries on with the main display.
+    private func monitorWentAway(_ capture: SurfaceCapture) -> Bool {
+        guard case .main(_, let monitor?) = capture.source, let request = mirrorRequests[capture.surface],
+              Self.mirroredMonitor(request) != monitor else { return false }
+        Log.write("mirror surface \(capture.surface): monitor \(monitor) went away; mirroring the main display")
+        self.capture(request)
+        return true
+    }
+
     private func captureFailed(surface: Int, message: String) {
         guard let capture = captures[surface] else { return }
+        if monitorWentAway(capture) { return }
         if case .window(let key) = capture.source, WindowCatalog.window(key.windowID) == nil {
             end(surface: surface, reason: "window closed")
         } else if case .display(let id) = capture.source, !VirtualDisplays.isOnline(id) {
@@ -341,13 +375,15 @@ import ScreenCaptureKit
     }
 
     private func stopCapture(surface: Int) {
+        mirrorRequests[surface] = nil
         guard let capture = captures.removeValue(forKey: surface) else { return }
         capture.stop()
         server.forget(surface: surface)
         if zoomedSurface == surface { endZoom(notifyMod: false) }
     }
 
-    /// Once a second: closed windows end their surface; resized windows restart capture at the new size.
+    /// Once a second: closed windows end their surface; resized windows restart capture at the new size; a Mirror of a
+    /// chosen monitor follows it (main display while it is unplugged, back to it when it returns).
     private func poll() {
         for (surface, capture) in captures {
             switch capture.source {
@@ -359,8 +395,13 @@ import ScreenCaptureKit
                 }
             case .display(let id):
                 if !VirtualDisplays.isOnline(id) { end(surface: surface, reason: "display removed") }
-            case .main:
-                break
+            case .main(_, let monitor):
+                guard let request = mirrorRequests[surface] else { continue }
+                let now = Self.mirroredMonitor(request)
+                if now != monitor {
+                    Log.write("mirror surface \(surface): monitor \(now.map { "\($0) is back" } ?? "\(monitor ?? 0) went away")")
+                    self.capture(request)
+                }
             }
         }
     }

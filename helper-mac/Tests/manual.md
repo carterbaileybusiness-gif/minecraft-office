@@ -138,6 +138,20 @@ devclient's HELLO lists `"screens"`, so the helper also pushes DISPLAYS after ev
    create 1 → automatic placement (right of the main display, or left when a monitor is on the right).
 6. Finally `helper; dev create 1 1920 1080 origins 1 1440 0` to put it back next to the main display's right edge.
 
+## 6e. Mirror a chosen monitor, used in world (needs an external monitor)
+
+1. `helper; dev displays` → note the external monitor's `id` (UUID), e.g. `9B2F…`.
+2. `helper; dev capturemon 3 <uuid> sleep 3` → FRAMEs of **that** monitor (its aspect), never the built-in display.
+   (devclient's own process has no windows, so nothing is left out here.) With the mod and Minecraft's window on that
+   monitor: the Mirror shows the monitor without the Minecraft window.
+3. `helper; dev capturemon 3 <uuid> workmon <uuid> 960 540 sleep 8`
+   - Expected: the real cursor jumps to the middle of that monitor and clicks there; while you move it on that
+     monitor the system cursor stays hidden and CURSOR lines read `{"display": "<uuid>", "h": …, "slot": 0, …}` in
+     that monitor's points; on the built-in display slot 0 without `display`; elsewhere slot -1 and the cursor shows.
+4. Unplug the monitor during `capturemon 3 <uuid> sleep 20`: within about 1 s a new FRAME generation of the main
+   display follows (no ENDED); plug it back → frames of the monitor again. An unknown UUID mirrors the main display
+   (`helper.log`: "is not connected; mirroring the main display").
+
 ## 7. With the mod (after Task 9)
 
 Place an Extend hologram → "Office Display 1" appears in System Settings › Displays; quit Minecraft → it disappears
