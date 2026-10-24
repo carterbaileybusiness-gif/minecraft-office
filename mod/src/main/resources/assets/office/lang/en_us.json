@@ -90,6 +90,7 @@
   "magic.office.plus_levels": "+%d lvl",
   "magic.office.hint": "Off hand + empty hand: tap right-click to cast · hold to charge · R wheel · Shift+scroll",
   "magic.office.signs": "Make the signs!",
+  "magic.office.signs_hint": "Arrow keys or WASD · Esc gives up",
   "magic.office.bound": "You are bound to %s",
   "magic.office.no_mana": "Not enough mana (%d/%d)",
   "magic.office.cooldown": "%s is recharging (%.1f s)",
