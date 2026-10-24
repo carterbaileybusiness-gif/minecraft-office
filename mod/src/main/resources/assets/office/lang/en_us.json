@@ -159,7 +159,7 @@
   "magic.office.why_waiting": "waiting · %s s",
   "magic.office.why_travelling": "travelling…",
   "magic.office.travel_title": "Travel",
-  "magic.office.travel_blurb": "Ask a friend; when they accept, you channel 3 s and land beside them.",
+  "magic.office.travel_blurb": "Once they accept, you appear beside them.",
   "magic.office.panel_ready": "Ready to travel",
   "magic.office.panel_cooldown": "Ready in %s s",
   "magic.office.panel_waiting": "Waiting for %s…",

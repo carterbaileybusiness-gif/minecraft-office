@@ -19,8 +19,8 @@ public final class GrimoireLayout {
 	/** Index tabs: Spells, Friends. */
 	public static final int TABS = 2;
 	/** How far a tab sticks out of the book, and its height, per text unit. */
-	private static final int TAB_OUT = 16;
-	private static final int TAB_H = 24;
+	private static final int TAB_OUT = 20;
+	private static final int TAB_H = 28;
 	/** Font line height. */
 	public static final int LINE = 9;
 	private static final float MAX_SCALE = 8f;

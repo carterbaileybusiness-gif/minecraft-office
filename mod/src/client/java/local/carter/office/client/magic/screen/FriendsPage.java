@@ -428,7 +428,7 @@ public final class FriendsPage {
 				UiKit.text(g, font, why, right - ww, rr.y() + (rr.h() - 9 * ws) / 2f, ws, UiKit.alpha(wc, a), false);
 			} else {
 				float gs = Math.min(rr.h() - 2f * u, 12f * u);
-				float gk = 0.35f + 0.65f * glow[row];
+				float gk = 0.6f + 0.4f * glow[row];
 				UiKit.centredTexture(g, UiKit.spellIcon(SpellIds.RECALL), 32, right - gs / 2f, rr.y() + rr.h() / 2f, gs * (1f + 0.08f * glow[row]), 0f,
 						UiKit.alpha(UiKit.WHITE, gk * a));
 				ww = gs;
@@ -462,11 +462,12 @@ public final class FriendsPage {
 		int cx = r.cx(), cy = r.cy();
 		int thick = Math.max(1, Math.round(u));
 		for (int i = 0; i < half; i++) {
-			int x = dir < 0 ? cx - half / 2 + i : cx + half / 2 - i;
+			// "<" starts at the right at the top and bottom and meets on the left in the middle; ">" the other way round.
+			int x = dir < 0 ? cx + half / 2 - i : cx - half / 2 + i;
 			g.fill(x, cy - half + i, x + thick, cy - half + i + 1, UiKit.alpha(col, k));
 			g.fill(x, cy + half - i - 1, x + thick, cy + half - i, UiKit.alpha(col, k));
 		}
-		int tip = dir < 0 ? cx - half / 2 + half : cx + half / 2 - half;
+		int tip = dir < 0 ? cx + half / 2 - half : cx - half / 2 + half;
 		g.fill(tip, cy - 1, tip + thick, cy + 1, UiKit.alpha(col, k));
 	}
 

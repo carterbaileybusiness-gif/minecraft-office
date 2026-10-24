@@ -234,8 +234,8 @@ public final class GrimoireScreen extends Screen {
 		Rect book = l.book();
 		UiKit.glow(g, book.cx(), book.cy(), Math.max(book.w(), book.h()) * (1.9f + 0.06f * (float) Math.sin(now / 900.0)),
 				UiKit.alpha(e.argb(), 0.26f * open));
-		tabs(g, l, e, mouseX, mouseY, now, dt, open);
 		ElementChoiceScreen.book(g, book, open, 1f);
+		tabs(g, l, e, mouseX, mouseY, now, dt, open);
 		float content = UiKit.clamp01((now - openedAt - OPEN_MS * 0.55f) / 220f) * UiKit.easeOut((now - tabAt) / 200f);
 		if (content > 0f) {
 			if (tab == TAB_FRIENDS) {
@@ -346,20 +346,24 @@ public final class GrimoireScreen extends Screen {
 			boolean active = i == tab;
 			tabHover[i] = UiKit.approach(tabHover[i], i == hovered && !active ? 1f : 0f, 16f, dt);
 			int out = active ? 0 : Math.round((3 - 2 * tabHover[i]) * u);
-			int x0 = r.x() + out, x1 = r.right(), y0 = r.y(), y1 = r.bottom();
+			// Drawn over the book up to its cover edge (the texture's transparent rim), so the tab comes out from under the cover.
+			int x0 = r.x() + out, x1 = l.book().x() + (int) Math.ceil(3 * l.book().w() / 192f), y0 = r.y(), y1 = r.bottom();
 			int body = active ? FriendsPage.paper() : UiKit.mix(0xFF6E4E33, 0xFF8E6A47, tabHover[i]);
 			UiKit.rounded(g, x0, y0 + 1, x1, y1 + 1, UiKit.alpha(0xFF000000, 0.4f * k));
 			UiKit.rounded(g, x0, y0, x1, y1, UiKit.alpha(body, k));
-			UiKit.roundedOutline(g, x0, y0, x1 + 1, y1, UiKit.alpha(active ? 0xFF7A6248 : 0xFF3E2A1A, k));
+			int edge = UiKit.alpha(active ? 0xFF7A6248 : 0xFF3E2A1A, k);
+			g.fill(x0 + 1, y0, x1, y0 + 1, edge);
+			g.fill(x0 + 1, y1 - 1, x1, y1, edge);
+			g.fill(x0, y0 + 1, x0 + 1, y1 - 1, edge);
 			if (active) g.fill(x0 + 1, y0 + 1, x0 + Math.max(1, Math.round(u)) + 1, y1 - 1, UiKit.alpha(e.argb(), 0.9f * k));
-			float visible = r.right() - Math.round(6 * u) - x0;
+			float visible = l.book().x() - x0;
 			float cx = x0 + visible / 2f + Math.max(1, Math.round(u)) / 2f, cy = (y0 + y1) / 2f;
-			float icon = Math.min(visible - 4 * u, r.h() - 8 * u);
+			float icon = Math.min(visible - 3 * u, r.h() - 8 * u);
 			float ik = (active ? 1f : 0.75f + 0.25f * tabHover[i]) * k;
 			if (i == TAB_SPELLS) {
 				UiKit.centredTexture(g, UiKit.sigil(e), 64, cx, cy, icon, 0f, UiKit.alpha(UiKit.WHITE, ik));
 			} else {
-				float fs = Math.round(icon * 0.72f);
+				float fs = Math.round(icon * 0.78f);
 				java.util.UUID a = others.size() > 0 ? others.get(0) : null, b = others.size() > 1 ? others.get(1) : null;
 				var skinA = a != null ? FriendsPage.skin(a) : net.minecraft.client.resources.DefaultPlayerSkin.getDefaultSkin();
 				if (b != null) FriendsPage.face(g, FriendsPage.skin(b), cx - fs / 2f + icon * 0.16f, cy - fs / 2f - icon * 0.14f, fs, 0xFFC8C8C8, ik);
@@ -367,7 +371,7 @@ public final class GrimoireScreen extends Screen {
 						a == null ? 0x90FFFFFF : UiKit.WHITE, ik);
 				if (!others.isEmpty()) {
 					Component n = Component.literal(Integer.toString(others.size()));
-					float bs = UiKit.crisp(Math.max(1f, u * 0.75f));
+					float bs = UiKit.crisp(u * 0.75f);
 					float bw = Math.max(9 * bs, font.width(n) * bs + 4 * bs);
 					float bx = x0 + 1, by = y0 + 1;
 					UiKit.rounded(g, Math.round(bx), Math.round(by), Math.round(bx + bw), Math.round(by + 9 * bs), UiKit.alpha(0xFFB33A2A, k));
