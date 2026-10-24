@@ -9,5 +9,8 @@ public final class WindSpells {
 	public static void register() {
 		SpellRegistry.register(new Gust());
 		SpellRegistry.register(new BladeWind());
+		SpellRegistry.register(new AirStep());
+		SpellRegistry.register(new Tornado());
+		SpellRegistry.register(new WindSphere());
 	}
 }

@@ -10,5 +10,8 @@ public final class WindFx {
 	public static void register() {
 		SpellFxRegistry.register(SpellIds.GUST, new GustFx());
 		SpellFxRegistry.register(SpellIds.BLADE_WIND, new BladeWindFx());
+		SpellFxRegistry.register(SpellIds.AIR_STEP, new AirStepFx());
+		SpellFxRegistry.register(SpellIds.TORNADO, new TornadoFx());
+		SpellFxRegistry.register(SpellIds.WIND_SPHERE, new WindSphereFx());
 	}
 }
