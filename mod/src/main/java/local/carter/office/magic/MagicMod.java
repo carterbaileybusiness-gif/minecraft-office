@@ -4,6 +4,8 @@ import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.cast.ElementChoice;
 import local.carter.office.magic.cast.RecallSpell;
 import local.carter.office.magic.cast.SignChallenges;
+import local.carter.office.magic.cast.TeleportChannel;
+import local.carter.office.magic.cast.Travel;
 import local.carter.office.magic.command.MagicCommand;
 import local.carter.office.magic.core.Dir;
 import local.carter.office.magic.data.MagicAttachments;
@@ -48,7 +50,7 @@ public final class MagicMod {
 		MagicPayloads.register();
 		MagicServer.registerReceivers();
 		SpellRegistry.register(new RecallSpell());
-		CastService.setChannelCheck(RecallSpell::channeling);
+		CastService.setChannelCheck(TeleportChannel::channeling);
 		FireSpells.register();
 		WaterSpells.register();
 		WindSpells.register();
@@ -66,30 +68,38 @@ public final class MagicMod {
 	}
 
 	/**
-	 * Cast pipeline ticking and the hooks that discard a charge, an open hand-sign challenge or a Recall channel with no cast
-	 * and no cost (death, disconnect, dimension change; any damage also interrupts a Recall channel).
+	 * Cast pipeline ticking and the hooks that discard a charge, an open hand-sign challenge, a Recall or Travel channel or an
+	 * open travel request with no cast and no cost (death, disconnect, dimension change; any damage also interrupts a channel).
+	 * A player who leaves also closes the travel requests addressed to them and stops channels heading to them.
 	 */
 	private static void registerCastHooks() {
 		ServerTickEvents.END_SERVER_TICK.register(CastService::tick);
-		ServerLifecycleEvents.SERVER_STOPPING.register(server -> CastService.stop());
+		ServerTickEvents.END_SERVER_TICK.register(Travel::tick);
+		ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+			CastService.stop();
+			Travel.clear();
+		});
 		ServerLivingEntityEvents.ALLOW_DAMAGE.register(Motion::allowDamage);
 		ServerLivingEntityEvents.AFTER_DAMAGE.register((entity, source, baseDamage, damage, blocked) -> {
-			if (entity instanceof ServerPlayer p) RecallSpell.interrupt(p, true);
+			if (entity instanceof ServerPlayer p) TeleportChannel.interrupt(p, true);
 		});
 		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
 			if (entity instanceof ServerPlayer p) {
 				discardPending(p);
-				RecallSpell.interrupt(p, true);
+				TeleportChannel.interrupt(p, true);
+				Travel.withdraw(p);
 				ElementChoice.forget(p);
 			}
 		});
 		ServerEntityLevelChangeEvents.AFTER_PLAYER_CHANGE_LEVEL.register((player, from, to) -> {
 			discardPending(player);
-			RecallSpell.interrupt(player, true);
+			TeleportChannel.interrupt(player, true);
+			Travel.withdraw(player);
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
 			discardPending(handler.player);
-			RecallSpell.interrupt(handler.player, false);
+			TeleportChannel.interrupt(handler.player, false);
+			Travel.left(handler.player);
 			CastService.forget(handler.player);
 			ElementChoice.forget(handler.player);
 		});

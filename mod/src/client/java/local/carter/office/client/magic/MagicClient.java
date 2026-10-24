@@ -31,6 +31,7 @@ public final class MagicClient {
 		ClientPlayNetworking.registerGlobalReceiver(SignChallenge.TYPE, (payload, ctx) -> onChallenge(ctx.client(), payload));
 		ClientPlayNetworking.registerGlobalReceiver(OpenGrimoire.TYPE, (payload, ctx) -> onOpenGrimoire(ctx.client(), payload));
 		ManaBarHud.register();
+		TravelClient.register();
 		// Task 8: R spell wheel and Shift + scroll selection (input precedence: MagicInputGate).
 		MagicKeys.register();
 		SpellWheelHud.register();

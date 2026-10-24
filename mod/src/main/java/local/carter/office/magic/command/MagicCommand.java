@@ -6,6 +6,7 @@ import java.util.UUID;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 
+import local.carter.office.magic.cast.Travel;
 import local.carter.office.magic.core.LevelCurve;
 import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.data.MagicAttachments;
@@ -24,14 +25,14 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
 
-/** {@code /magic level|mana|reset|undo} (op 2). */
+/** {@code /magic level|mana|reset|undo} (op 2) and {@code /magic travel …} (any player). */
 public final class MagicCommand {
 	private MagicCommand() {}
 
 	public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
 		dispatcher.register(Commands.literal("magic")
-				.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
-				.then(Commands.literal("level").then(Commands.argument("player", EntityArgument.player())
+				.then(travel())
+				.then(Commands.literal("level").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)).then(Commands.argument("player", EntityArgument.player())
 						.then(Commands.argument("level", IntegerArgumentType.integer(1, LevelCurve.MAX_LEVEL)).executes(ctx -> {
 							ServerPlayer p = EntityArgument.getPlayer(ctx, "player");
 							int level = IntegerArgumentType.getInteger(ctx, "level");
@@ -39,7 +40,7 @@ public final class MagicCommand {
 							ctx.getSource().sendSuccess(() -> Component.literal("Grimoire level of " + p.getName().getString() + " set to " + level), true);
 							return 1;
 						}))))
-				.then(Commands.literal("mana").then(Commands.argument("player", EntityArgument.player())
+				.then(Commands.literal("mana").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)).then(Commands.argument("player", EntityArgument.player())
 						.then(Commands.argument("mana", IntegerArgumentType.integer(0)).executes(ctx -> {
 							ServerPlayer p = EntityArgument.getPlayer(ctx, "player");
 							MagicAttachments.setMana(p, IntegerArgumentType.getInteger(ctx, "mana"));
@@ -47,13 +48,13 @@ public final class MagicCommand {
 							ctx.getSource().sendSuccess(() -> Component.literal("Mana of " + p.getName().getString() + " set to " + now), true);
 							return 1;
 						}))))
-				.then(Commands.literal("reset").then(Commands.argument("player", EntityArgument.player()).executes(ctx -> {
+				.then(Commands.literal("reset").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)).then(Commands.argument("player", EntityArgument.player()).executes(ctx -> {
 					ServerPlayer p = EntityArgument.getPlayer(ctx, "player");
 					reset(p);
 					ctx.getSource().sendSuccess(() -> Component.literal("Magic of " + p.getName().getString() + " reset"), true);
 					return 1;
 				})))
-				.then(Commands.literal("undo")
+				.then(Commands.literal("undo").requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
 						.executes(ctx -> {
 							ctx.getSource().sendSuccess(() -> Component.translatable("magic.office.undo_help"), false);
 							return 1;
@@ -63,6 +64,32 @@ public final class MagicCommand {
 								.then(Commands.argument("n", IntegerArgumentType.integer(1, EditLog.KEEP))
 										.executes(ctx -> undo(ctx.getSource(), GameProfileArgument.getGameProfiles(ctx, "player"),
 												IntegerArgumentType.getInteger(ctx, "n")))))));
+	}
+
+	/**
+	 * {@code /magic travel on|off} (any player: whether friends may ask to travel to you) and {@code /magic travel accept|deny <id>}
+	 * (the buttons of a travel request line).
+	 */
+	private static com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> travel() {
+		return Commands.literal("travel")
+				.executes(ctx -> {
+					ServerPlayer p = ctx.getSource().getPlayerOrException();
+					ctx.getSource().sendSuccess(() -> Component.translatable(MagicAttachments.get(p).travel()
+							? "magic.office.travel_state_on" : "magic.office.travel_state_off"), false);
+					return 1;
+				})
+				.then(Commands.literal("on").executes(ctx -> {
+					Travel.setAccepting(ctx.getSource().getPlayerOrException(), true);
+					return 1;
+				}))
+				.then(Commands.literal("off").executes(ctx -> {
+					Travel.setAccepting(ctx.getSource().getPlayerOrException(), false);
+					return 1;
+				}))
+				.then(Commands.literal("accept").then(Commands.argument("id", IntegerArgumentType.integer(1)).executes(ctx ->
+						Travel.accept(ctx.getSource().getPlayerOrException(), IntegerArgumentType.getInteger(ctx, "id")) == Travel.Answer.STARTED ? 1 : 0)))
+				.then(Commands.literal("deny").then(Commands.argument("id", IntegerArgumentType.integer(1)).executes(ctx ->
+						Travel.deny(ctx.getSource().getPlayerOrException(), IntegerArgumentType.getInteger(ctx, "id")) == Travel.Answer.DENIED ? 1 : 0)));
 	}
 
 	private static int undo(CommandSourceStack source, Collection<NameAndId> players, int n) {

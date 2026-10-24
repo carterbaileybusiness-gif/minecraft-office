@@ -26,7 +26,16 @@ class LangCoverageTest {
 			"bound", "no_mana", "cooldown", "locked", "no_levels", "fizzle", "level_up", "unlocked", "stronger", "no_home", "home_marked",
 			"recalling", "recall_interrupted", "protected", "busy", "undo_done", "undo_help", "wrong_element", "spell_failed",
 			"signs_hint", "fizzle_reason", "home_blocked", "choose_hint", "mana", "binding", "bind_failed", "current", "dim.overworld",
-			"dim.the_nether", "dim.the_end");
+			"dim.the_nether", "dim.the_end",
+			// Task 7b: Travel to a friend.
+			"travel_sent", "travel_need_grimoire", "travel_busy", "travel_cooldown", "travel_offline", "travel_refuses", "travel_pending",
+			"travel_ask", "travel_accept", "travel_deny", "travel_accept_hover", "travel_deny_hover", "travel_gone", "travel_blocked",
+			"travel_cannot", "travel_accepted", "travel_coming", "travel_denied", "travel_you_denied", "travel_expired", "travel_left",
+			"travel_interrupted", "travel_arrived", "travel_now_on", "travel_now_off", "travel_state_on", "travel_state_off", "tab_spells",
+			"tab_friends", "friends_title", "friends_none", "friends_page", "friend_ask", "why_off", "why_cooldown", "why_busy",
+			"why_waiting", "why_travelling", "travel_title", "travel_blurb", "panel_ready", "panel_cooldown", "panel_waiting",
+			"panel_travelling", "panel_busy", "panel_requests_on", "panel_requests_off", "toggle_off", "toggle_on", "friends_hint",
+			"travel_too_soon", "travel_friend_full", "why_one");
 
 	private static JsonObject lang() throws Exception {
 		try (InputStream in = LangCoverageTest.class.getResourceAsStream("/assets/office/lang/en_us.json")) {
@@ -70,6 +79,21 @@ class LangCoverageTest {
 		for (String k : List.of("item.office.grimoire", "item.office.rebinding_seal", "key.office.spell_wheel", "key.category.office.magic")) {
 			assertText(lang, k);
 		}
+	}
+
+	/**
+	 * Vanilla lang strings support only {@code %s} (and {@code %n$s}); it rewrites {@code %d} / {@code %.1f} to {@code %s} on load, so
+	 * a float argument would print raw ("2.0500000000000003"). No key may use a float format: format numbers in code.
+	 */
+	@Test
+	void noKeyUsesAFloatFormat() throws Exception {
+		JsonObject lang = lang();
+		java.util.regex.Pattern floatFormat = java.util.regex.Pattern.compile("%(\\d+\\$)?[-+ 0#,(]*\\d*(\\.\\d+)?[fFeEgG]");
+		for (String k : lang.keySet()) {
+			String v = lang.get(k).getAsString();
+			assertFalse(floatFormat.matcher(v).find(), k + " uses a float format: " + v);
+		}
+		assertTrue(floatFormat.matcher("%.1f").find() && floatFormat.matcher("%2$f").find() && !floatFormat.matcher("%s").find(), "the check works");
 	}
 
 	@Test

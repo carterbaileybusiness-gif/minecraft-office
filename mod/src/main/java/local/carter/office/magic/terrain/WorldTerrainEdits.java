@@ -130,6 +130,11 @@ public final class WorldTerrainEdits implements TerrainEdits {
 		this.spawn = spawn;
 	}
 
+	/** The claim rule edits are checked against (Travel also uses it to pick a landing). */
+	public ClaimCheck claims() {
+		return claims;
+	}
+
 	public EditLog log() {
 		return log;
 	}

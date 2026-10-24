@@ -19,15 +19,16 @@ import net.minecraft.resources.Identifier;
 
 /**
  * A player's magic: bound element (empty = unbound), grimoire level (1–10) and xp toward the next level, the selected spell,
- * the Recall home (the only home store) and per-spell cooldowns as absolute game times ({@code readyAt}).
+ * the Recall home (the only home store), per-spell cooldowns as absolute game times ({@code readyAt}) and whether friends may
+ * ask to travel to this player ({@code travel}, default on; {@code /magic travel off|on}).
  * Immutable; change it with the {@code with…} copies and {@code MagicAttachments.set}.
  */
 public record MagicData(Optional<Element> element, int level, int xp, Optional<Identifier> selected, Optional<GlobalPos> home,
-		Map<Identifier, Long> readyAt) {
+		Map<Identifier, Long> readyAt, boolean travel) {
 	/** Cap on cooldown entries carried over the network (there are 31 spells). */
 	public static final int MAX_COOLDOWNS = 64;
 
-	public static final MagicData EMPTY = new MagicData(Optional.empty(), 1, 0, Optional.empty(), Optional.empty(), Map.of());
+	public static final MagicData EMPTY = new MagicData(Optional.empty(), 1, 0, Optional.empty(), Optional.empty(), Map.of(), true);
 
 	private static final Codec<Element> ELEMENT_CODEC = Codec.STRING.comapFlatMap(
 			k -> Element.byKey(k).map(DataResult::success).orElseGet(() -> DataResult.error(() -> "unknown element " + k)),
@@ -56,7 +57,8 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 			Codec.INT.lenientOptionalFieldOf("xp", 0).forGetter(MagicData::xp),
 			Identifier.CODEC.lenientOptionalFieldOf("selected").forGetter(MagicData::selected),
 			GlobalPos.CODEC.lenientOptionalFieldOf("home").forGetter(MagicData::home),
-			READY_AT_CODEC.lenientOptionalFieldOf("ready_at", Map.of()).forGetter(MagicData::readyAt)
+			READY_AT_CODEC.lenientOptionalFieldOf("ready_at", Map.of()).forGetter(MagicData::readyAt),
+			Codec.BOOL.lenientOptionalFieldOf("travel", true).forGetter(MagicData::travel)
 	).apply(i, MagicData::new));
 
 	public static final StreamCodec<FriendlyByteBuf, MagicData> STREAM_CODEC = StreamCodec.of(MagicData::write, MagicData::read);
@@ -67,17 +69,25 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 		readyAt = Map.copyOf(readyAt);
 	}
 
-	public MagicData withElement(Optional<Element> e) { return new MagicData(e, level, xp, selected, home, readyAt); }
+	/** Travel requests accepted (the default). */
+	public MagicData(Optional<Element> element, int level, int xp, Optional<Identifier> selected, Optional<GlobalPos> home,
+			Map<Identifier, Long> readyAt) {
+		this(element, level, xp, selected, home, readyAt, true);
+	}
 
-	public MagicData withLevel(int l) { return new MagicData(element, l, xp, selected, home, readyAt); }
+	public MagicData withElement(Optional<Element> e) { return new MagicData(e, level, xp, selected, home, readyAt, travel); }
 
-	public MagicData withXp(int x) { return new MagicData(element, level, x, selected, home, readyAt); }
+	public MagicData withLevel(int l) { return new MagicData(element, l, xp, selected, home, readyAt, travel); }
 
-	public MagicData withSelected(Optional<Identifier> s) { return new MagicData(element, level, xp, s, home, readyAt); }
+	public MagicData withXp(int x) { return new MagicData(element, level, x, selected, home, readyAt, travel); }
 
-	public MagicData withHome(Optional<GlobalPos> h) { return new MagicData(element, level, xp, selected, h, readyAt); }
+	public MagicData withSelected(Optional<Identifier> s) { return new MagicData(element, level, xp, s, home, readyAt, travel); }
 
-	public MagicData withReadyAt(Map<Identifier, Long> r) { return new MagicData(element, level, xp, selected, home, r); }
+	public MagicData withHome(Optional<GlobalPos> h) { return new MagicData(element, level, xp, selected, h, readyAt, travel); }
+
+	public MagicData withReadyAt(Map<Identifier, Long> r) { return new MagicData(element, level, xp, selected, home, r, travel); }
+
+	public MagicData withTravel(boolean t) { return new MagicData(element, level, xp, selected, home, readyAt, t); }
 
 	/** A copy with {@code spell} ready again at game time {@code gameTime}. */
 	public MagicData withReady(Identifier spell, long gameTime) {
@@ -106,6 +116,7 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 			buf.writeIdentifier(e.getKey());
 			buf.writeVarLong(e.getValue());
 		}
+		buf.writeBoolean(d.travel);
 	}
 
 	private static MagicData read(FriendlyByteBuf buf) {
@@ -121,6 +132,6 @@ public record MagicData(Optional<Element> element, int level, int xp, Optional<I
 		if (n < 0 || n > MAX_COOLDOWNS) throw new DecoderException("too many cooldowns: " + n);
 		Map<Identifier, Long> ready = new HashMap<>();
 		for (int i = 0; i < n; i++) ready.put(buf.readIdentifier(), buf.readVarLong());
-		return new MagicData(element, level, xp, selected, home, ready);
+		return new MagicData(element, level, xp, selected, home, ready, buf.readBoolean());
 	}
 }

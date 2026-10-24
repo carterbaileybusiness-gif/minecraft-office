@@ -7,6 +7,7 @@ import java.util.Set;
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.cast.ElementChoice;
+import local.carter.office.magic.cast.Travel;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.item.GrimoireItem;
@@ -17,6 +18,9 @@ import local.carter.office.magic.net.MagicPayloads.FxCancel;
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
 import local.carter.office.magic.net.MagicPayloads.SelectSpell;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
+import local.carter.office.magic.net.MagicPayloads.TravelRequest;
+import local.carter.office.magic.net.MagicPayloads.TravelRoster;
+import local.carter.office.magic.net.MagicPayloads.TravelRosterQuery;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellKit;
 import local.carter.office.magic.spell.SpellRegistry;
@@ -71,6 +75,11 @@ public final class MagicServer {
 	public static void registerReceivers() {
 		ServerPlayNetworking.registerGlobalReceiver(ChooseElement.TYPE, (p, ctx) -> chooseElement(ctx.player(), p.element()));
 		ServerPlayNetworking.registerGlobalReceiver(SelectSpell.TYPE, (p, ctx) -> select(ctx.player(), p.spell()));
+		ServerPlayNetworking.registerGlobalReceiver(TravelRequest.TYPE, (p, ctx) -> {
+			Travel.request(ctx.player(), p.target());
+			Travel.query(ctx.player()); // the page shows the outcome (throttled like any roster query)
+		});
+		ServerPlayNetworking.registerGlobalReceiver(TravelRosterQuery.TYPE, (p, ctx) -> Travel.query(ctx.player()));
 	}
 
 	/**
@@ -142,6 +151,16 @@ public final class MagicServer {
 			p.connection.send(new ClientboundSetTitlesAnimationPacket(10, 50, 15));
 			p.connection.send(new ClientboundSetSubtitleTextPacket(subtitle));
 			p.connection.send(new ClientboundSetTitleTextPacket(title));
+		}
+
+		@Override
+		public void chat(ServerPlayer p, Component c) {
+			if (p.connection != null) p.sendSystemMessage(c);
+		}
+
+		@Override
+		public void roster(ServerPlayer p, TravelRoster r) {
+			send(p, r);
 		}
 	}
 }
