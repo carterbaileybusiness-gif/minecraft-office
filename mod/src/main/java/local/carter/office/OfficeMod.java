@@ -5,6 +5,7 @@ import local.carter.office.hologram.HologramBlockEntity;
 import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.hologram.StarterKit;
+import local.carter.office.magic.MagicMod;
 import local.carter.office.net.HologramActions;
 import local.carter.office.net.OfficePayloads;
 import local.carter.office.stream.StreamRouter;
@@ -31,6 +32,7 @@ public class OfficeMod implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		OfficeBlocks.init();
+		MagicMod.init();
 		OfficePayloads.register();
 		HologramActions.registerReceivers();
 		StreamService.registerReceivers();
