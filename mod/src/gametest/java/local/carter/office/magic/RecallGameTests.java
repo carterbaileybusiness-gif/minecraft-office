@@ -8,6 +8,7 @@ import local.carter.office.magic.cast.RecallSpell;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.item.MagicItems;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.SpellRegistry;
@@ -17,10 +18,13 @@ import net.minecraft.core.GlobalPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.animal.cow.Cow;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.zombie.Zombie;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
@@ -40,6 +44,17 @@ public class RecallGameTests {
 	static final String ENV = "office-test:magic_recall";
 	/** Where homes go in the arena: open floor, 24 blocks from {@link MagicTestKit#STAND}. */
 	private static final BlockPos HOME = new BlockPos(16, 4, 28);
+
+	/** Kit players are not ticked by the server, and a shield only blocks after its raise delay: age the use by hand. */
+	private static void ageUse(ServerPlayer p, int ticks) {
+		try {
+			java.lang.reflect.Field f = net.minecraft.world.entity.LivingEntity.class.getDeclaredField("useItemRemaining");
+			f.setAccessible(true);
+			f.setInt(p, f.getInt(p) - ticks);
+		} catch (ReflectiveOperationException e) {
+			throw new IllegalStateException(e);
+		}
+	}
 
 	private static long now(GameTestHelper h) {
 		return h.getLevel().getGameTime();
@@ -103,7 +118,8 @@ public class RecallGameTests {
 		p.setShiftKeyDown(true);
 		h.assertValueEqual(recall(p), Result.CAST, "result");
 		h.assertValueEqual(home(p), Optional.of(GlobalPos.of(h.getLevel().dimension(), h.absolutePos(MagicTestKit.STAND))), "home");
-		h.assertValueEqual(cooldownLeft(h, p), 20L, "cooldown");
+		h.assertValueEqual(MagicAttachments.get(p).cooldownLeft(RecallSpell.MARK_KEY, now(h)), 20L, "mark cooldown");
+		h.assertValueEqual(cooldownLeft(h, p), 0L, "Recall's own cooldown untouched");
 		h.assertValueEqual(MagicAttachments.mana(p), 100, "mana");
 		h.assertFalse(RecallSpell.channeling(p), "channeling");
 		h.assertValueEqual(rec.messageKeys(), List.of("magic.office.home_marked"), "message");
@@ -444,7 +460,7 @@ public class RecallGameTests {
 		}
 	}
 
-	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 220)
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 400)
 	public void recallWorksWhenTheHomeChunkIsNotLoaded(GameTestHelper h) {
 		ServerPlayer p = caster(h);
 		ServerLevel level = h.getLevel();
@@ -452,17 +468,49 @@ public class RecallGameTests {
 		BlockPos far = new BlockPos(40_008, 90, 40_008);
 		platform(level, far);
 		setHome(p, GlobalPos.of(level.dimension(), far));
-		whenUnloaded(h, level, far, 40, () -> {
+		whenUnloaded(h, level, far, 150, () -> {
 			h.assertFalse(level.hasChunkAt(far), "the home chunk is unloaded");
 			h.assertValueEqual(recall(p), Result.CAST, "the start check loads the chunk and finds the platform");
-			// The start check loaded it; let it unload again so the end of the channel meets an unloaded chunk too.
-			h.runAfterDelay(50, () -> h.assertFalse(level.hasChunkAt(far), "unloaded again before the teleport"));
+			// The start check loaded it and the channel holds a ticket, so the teleport does not load it a second time.
+			h.assertTrue(level.hasChunkAt(far), "loaded by the start check");
+			h.runAfterDelay(50, () -> h.assertTrue(level.hasChunkAt(far), "still held by the channel's ticket"));
 			h.runAfterDelay(62, () -> {
 				h.assertTrue(p.level() == level, "same level");
 				h.assertTrue(p.position().distanceTo(Vec3.atBottomCenterOf(far)) < 0.01, "at home: " + p.position());
 				h.assertTrue(cooldownLeft(h, p) > 1000, "cooldown paid");
 				h.succeed();
 			});
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 400)
+	public void destinationLoadsAnUnloadedChunk(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		ServerLevel level = h.getLevel();
+		BlockPos far = new BlockPos(40_056, 90, 40_056);
+		platform(level, far);
+		whenUnloaded(h, level, far, 150, () -> {
+			h.assertFalse(level.hasChunkAt(far), "unloaded");
+			Vec3 at = RecallSpell.destination(p, GlobalPos.of(level.dimension(), far));
+			h.assertTrue(at != null && at.distanceTo(Vec3.atBottomCenterOf(far)) < 0.01, "found the platform in the unloaded chunk: " + at);
+			h.assertTrue(level.hasChunkAt(far), "and loaded it");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
+	public void carpetedHomeInATwoTallRoomLandsExactlyOnTheHome(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		setHome(h, p, HOME);
+		h.setBlock(HOME, Blocks.MOSS_CARPET);
+		MagicTestKit.fill(h, HOME.offset(-3, 0, -3), HOME.offset(3, 0, 3), Blocks.MOSS_CARPET);
+		MagicTestKit.fill(h, HOME.offset(-3, 2, -3), HOME.offset(3, 2, 3), Blocks.STONE); // a ceiling two blocks over the floor cell
+		h.assertValueEqual(recall(p), Result.CAST, "result");
+		h.runAfterDelay(62, () -> {
+			Vec3 expected = new Vec3(HOME.getX() + 0.5, HOME.getY() + 0.0625, HOME.getZ() + 0.5);
+			assertAt(h, p, expected, "standing on the carpet in the home cell");
+			h.assertTrue(cooldownLeft(h, p) > 1000, "cooldown paid");
+			h.succeed();
 		});
 	}
 
@@ -500,10 +548,96 @@ public class RecallGameTests {
 		h.runAfterDelay(70, () -> {
 			h.assertTrue(cow.isAlive() && !cow.isRemoved(), "the cow is fine");
 			AABB around = new AABB(cow.blockPosition()).inflate(4);
-			boolean stillHeld = cow.isLeashed() && cow.getLeashHolder() == p;
-			boolean lead = !h.getLevel().getEntitiesOfClass(ItemEntity.class, around, i -> i.getItem().is(Items.LEAD)).isEmpty();
-			h.assertTrue(stillHeld || (!cow.isLeashed() && lead), "the lead is either still held or dropped as an item: leashed=" + cow.isLeashed());
+			h.assertFalse(cow.isLeashed(), "the leash snapped: the home is 24 blocks away");
+			h.assertFalse(h.getLevel().getEntitiesOfClass(ItemEntity.class, around, i -> i.getItem().is(Items.LEAD)).isEmpty(), "the lead dropped as an item");
 			h.succeed();
 		});
+	}
+
+	// ---- Mark Home vs Recall cooldown, regen, charge, shields, hand signs ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
+	public void markHomeRightAfterARecall(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		setHome(h, p, HOME);
+		h.assertValueEqual(recall(p), Result.CAST, "recall");
+		h.runAfterDelay(62, () -> {
+			assertAt(h, p, centre(HOME), "at home");
+			h.assertTrue(cooldownLeft(h, p) > 1000, "Recall is cooling down");
+			h.assertValueEqual(recall(p), Result.COOLDOWN, "Recall itself is blocked");
+			MagicTestKit.teleportTo(p, new BlockPos(8, 4, 8));
+			p.setShiftKeyDown(true);
+			h.assertValueEqual(recall(p), Result.CAST, "Mark Home is not blocked by Recall's cooldown");
+			h.assertValueEqual(home(p), Optional.of(GlobalPos.of(h.getLevel().dimension(), h.absolutePos(new BlockPos(8, 4, 8)))), "the new home");
+			h.assertTrue(cooldownLeft(h, p) > 1000, "Recall's cooldown is untouched");
+			h.assertValueEqual(MagicAttachments.get(p).cooldownLeft(RecallSpell.MARK_KEY, now(h)), 20L, "mark cooldown");
+			h.assertValueEqual(recall(p), Result.COOLDOWN, "a second mark inside 20 ticks");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 60)
+	public void recallAndMarkHomeDoNotPauseManaRegen(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		MagicAttachments.setMana(p, 80);
+		p.setShiftKeyDown(true);
+		h.assertValueEqual(recall(p), Result.CAST, "mark");
+		h.runAfterDelay(15, () -> {
+			h.assertTrue(MagicAttachments.mana(p) > 80, "mana regenerated at once: " + MagicAttachments.mana(p));
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
+	public void noChargeStartsDuringTheChannel(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		setHome(h, p, HOME);
+		MagicAttachments.set(p, MagicAttachments.get(p).withSelected(Optional.of(SpellIds.RECALL)));
+		h.assertValueEqual(recall(p), Result.CAST, "recall");
+		h.runAfterDelay(10, () -> {
+			MagicItems.GRIMOIRE.use(h.getLevel(), p, InteractionHand.OFF_HAND);
+			h.assertFalse(p.isUsingItem(), "no charge started");
+			h.assertTrue(rec.messageKeys().contains("magic.office.busy"), "busy message " + rec.messageKeys());
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
+	public void recallCancelledByAShieldBlockedHit(GameTestHelper h) {
+		ServerPlayer p = caster(h);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		setHome(h, p, HOME);
+		Zombie attacker = MagicTestKit.dummy(h, MagicTestKit.STAND.offset(0, 0, 2));
+		h.assertValueEqual(recall(p), Result.CAST, "result");
+		h.runAfterDelay(5, () -> {
+			p.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(Items.SHIELD));
+			p.startUsingItem(InteractionHand.MAIN_HAND);
+			ageUse(p, 6);
+		});
+		h.runAfterDelay(25, () -> {
+			float before = p.getHealth();
+			h.assertTrue(p.isBlocking(), "the shield is up: using=" + p.isUsingItem() + " ticks=" + p.getTicksUsingItem() + " main=" + p.getMainHandItem());
+			p.hurtServer(h.getLevel(), h.getLevel().damageSources().mobAttack(attacker), 4f);
+			h.assertValueEqual(p.getHealth(), before, "the shield took the whole hit");
+			h.assertFalse(RecallSpell.channeling(p), "channeling after a blocked hit");
+			h.assertValueEqual(rec.cancels(), List.of(p.getId()), "one cancel");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV, maxTicks = 100)
+	public void recallIsBusyWhileAHandSignChallengeIsOpen(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 7);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		Identifier ultimate = Identifier.fromNamespaceAndPath("office-test", "probe_recall_signs");
+		MagicTestKit.override(h, MagicTestKit.probe("probe_recall_signs", Element.WIND, 4));
+		setHome(h, p, HOME);
+		h.assertValueEqual(MagicTestKit.cast(p, ultimate, 1f), Result.CHALLENGED, "ultimate opens a challenge");
+		h.assertValueEqual(recall(p), Result.BUSY, "Recall during the challenge");
+		h.assertTrue(rec.messageKeys().contains("magic.office.signs"), "message " + rec.messageKeys());
+		h.assertFalse(RecallSpell.channeling(p), "no channel");
+		h.assertValueEqual(cooldownLeft(h, p), 0L, "no cooldown");
+		h.succeed();
 	}
 }

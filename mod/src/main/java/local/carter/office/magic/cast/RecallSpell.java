@@ -10,6 +10,7 @@ import java.util.UUID;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.OfficeMod;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.data.MagicAttachments;
@@ -32,11 +33,16 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.TicketType;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.portal.TeleportTransition;
@@ -48,7 +54,8 @@ import net.minecraft.world.phys.Vec3;
  *
  * <ul>
  * <li><b>Shift + cast</b> marks home: the feet block, in any dimension, replacing the old home (one home per player). It sets
- * Recall's cooldown to {@link #MARK_COOLDOWN_TICKS} so a double press cannot mark twice.
+ * its own cooldown ({@link #MARK_KEY}, {@link #MARK_COOLDOWN_TICKS}) so a double press cannot mark twice; Recall's 60 s cooldown
+ * never blocks it ({@link #cooldownKey}).
  * <li><b>Cast</b> with a home starts a {@link #CHANNEL_TICKS}-tick channel (a {@link LingeringEffect}); while it runs every
  * other cast is BUSY ({@link #channeling}). Taking damage, dying, disconnecting or changing dimension interrupts it
  * ({@link #interrupt}): no teleport, no cooldown. Moving does not (the spec cancels on damage only), and nothing roots the
@@ -77,6 +84,11 @@ public final class RecallSpell implements Spell {
 	public static final int CHANNEL_TICKS = 60;
 	/** Cooldown set by Mark Home, in ticks. */
 	public static final int MARK_COOLDOWN_TICKS = 20;
+	/**
+	 * Mark Home's own {@code readyAt} key: Recall's 60 s cooldown never blocks marking a new home (and marking never blocks
+	 * Recall).
+	 */
+	public static final Identifier MARK_KEY = OfficeMod.id("recall_mark");
 	/** Action-bar message when the home cannot be reached safely. */
 	public static final String HOME_BLOCKED_KEY = "magic.office.home_blocked";
 	/** How far from the home cell a safe cell is looked for. */
@@ -110,6 +122,11 @@ public final class RecallSpell implements Spell {
 		return true;
 	}
 
+	@Override
+	public Identifier cooldownKey(Player p) {
+		return p.isShiftKeyDown() ? MARK_KEY : SpellIds.RECALL;
+	}
+
 	/** True while {@code p} has a Recall channel running ({@code CastService} answers BUSY to every cast meanwhile). */
 	public static boolean channeling(ServerPlayer p) {
 		return CHANNELS.containsKey(p.getUUID());
@@ -125,9 +142,9 @@ public final class RecallSpell implements Spell {
 		ServerPlayer p = ctx.caster();
 		long now = ctx.level().getGameTime();
 		MagicData d = MagicAttachments.get(p);
-		Long existing = d.readyAt().get(SpellIds.RECALL);
+		Long existing = d.readyAt().get(MARK_KEY);
 		MagicAttachments.set(p, d.withHome(Optional.of(GlobalPos.of(ctx.level().dimension(), p.blockPosition())))
-				.withReady(SpellIds.RECALL, Math.max(existing == null ? Long.MIN_VALUE : existing, now + MARK_COOLDOWN_TICKS)));
+				.withReady(MARK_KEY, Math.max(existing == null ? Long.MIN_VALUE : existing, now + MARK_COOLDOWN_TICKS)));
 		MagicServer.sender().actionBar(p, Component.translatable("magic.office.home_marked"));
 		return CastOutcome.cast(fx(ctx, 0));
 	}
@@ -136,10 +153,14 @@ public final class RecallSpell implements Spell {
 		ServerPlayer p = ctx.caster();
 		Optional<GlobalPos> home = MagicAttachments.get(p).home();
 		if (home.isEmpty()) return CastOutcome.fizzle("magic.office.no_home");
-		if (destination(p, home.get()) == null) return CastOutcome.fizzle(HOME_BLOCKED_KEY);
+		Vec3 dest = destination(p, home.get());
+		if (dest == null) return CastOutcome.fizzle(HOME_BLOCKED_KEY);
 		Channel channel = new Channel(p, home.get());
 		if (!ActiveEffects.add(ctx.level(), channel)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		CHANNELS.put(p.getUUID(), channel);
+		// The check above loaded the home chunk; hold it (and its neighbours) so the teleport does not load it a second time.
+		ServerLevel homeLevel = p.level().getServer().getLevel(home.get().dimension());
+		if (homeLevel != null) homeLevel.getChunkSource().addTicketWithRadius(TicketType.PORTAL, ChunkPos.containing(BlockPos.containing(dest)), 1);
 		MagicServer.sender().actionBar(p, Component.translatable("magic.office.recalling"));
 		return CastOutcome.cast(fx(ctx, CHANNEL_TICKS));
 	}
@@ -183,28 +204,39 @@ public final class RecallSpell implements Spell {
 		ServerLevel level = server.getLevel(home.dimension());
 		if (level == null) return null;
 		for (BlockPos offset : OFFSETS) {
-			BlockPos at = home.pos().offset(offset);
-			if (safe(p, level, at)) return Vec3.atBottomCenterOf(at);
+			Vec3 at = arrival(p, level, home.pos().offset(offset));
+			if (at != null) return at;
 		}
 		return null;
 	}
 
-	/** Whether the player's body fits at the bottom centre of {@code feet} and the ground below it is safe. */
-	private static boolean safe(ServerPlayer p, ServerLevel level, BlockPos feet) {
-		if (level.isOutsideBuildHeight(feet) || level.isOutsideBuildHeight(feet.getY() + 1)) return false;
-		Vec3 at = Vec3.atBottomCenterOf(feet);
-		if (!level.getWorldBorder().isWithinBounds(at)) return false;
+	/**
+	 * Where the player would stand in the cell {@code feet}, or null if that is not a safe place. A low floor in the cell (carpet,
+	 * path, farmland, snow layers, a slab) lifts the arrival to the top of its collision shape; a full block is not a floor
+	 * to stand in, it is an obstruction (the box test fails).
+	 */
+	private static @Nullable Vec3 arrival(ServerPlayer p, ServerLevel level, BlockPos feet) {
+		if (level.isOutsideBuildHeight(feet) || level.isOutsideBuildHeight(feet.getY() + 1)) return null;
+		BlockState inside = level.getBlockState(feet);
+		if (dangerous(inside) || dangerous(level.getBlockState(feet.above()))) return null;
+		double lift = 0;
+		VoxelShape shape = inside.getCollisionShape(level, feet);
+		if (!shape.isEmpty()) {
+			double top = shape.max(Direction.Axis.Y);
+			if (top > 0 && top < 1) lift = top;
+		}
+		Vec3 at = new Vec3(feet.getX() + 0.5, feet.getY() + lift, feet.getZ() + 0.5);
 		AABB box = p.getDimensions(Pose.STANDING).makeBoundingBox(at);
-		if (!level.noCollision(box)) return false;
-		if (dangerous(level.getBlockState(feet)) || dangerous(level.getBlockState(feet.above()))) return false;
+		if (!level.getWorldBorder().isWithinBounds(box)) return null;
+		if (!level.noCollision(box)) return null;
 		for (int drop = 1; drop <= MAX_DROP + 1; drop++) {
 			BlockPos below = feet.below(drop);
-			if (level.isOutsideBuildHeight(below)) return false;
+			if (level.isOutsideBuildHeight(below)) return null;
 			BlockState s = level.getBlockState(below);
-			if (dangerous(s)) return false;
-			if (!s.getCollisionShape(level, below).isEmpty() || !s.getFluidState().isEmpty()) return true;
+			if (dangerous(s)) return null;
+			if (!s.getCollisionShape(level, below).isEmpty() || !s.getFluidState().isEmpty()) return at;
 		}
-		return false;
+		return null;
 	}
 
 	/** Blocks that hurt to stand in or on. */
