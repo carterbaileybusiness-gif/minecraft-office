@@ -13,7 +13,11 @@ public interface EditBatch extends AutoCloseable {
 
 	boolean remove(BlockPos pos);
 
-	/** Turns the block into a falling block flying with {@code velocity} (no item drop). */
+	/**
+	 * Turns the block into a falling block flying with {@code velocity}. It never drops an item, and lands as a block only where
+	 * this cast could have set one (claims, spawn protection, immune blocks) with no player or protected entity in the cell or
+	 * above; elsewhere it vanishes. Landings are logged with the cast ({@link LaunchedDebris}).
+	 */
 	boolean launch(BlockPos pos, Vec3 velocity);
 
 	/**

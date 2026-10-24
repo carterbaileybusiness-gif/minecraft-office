@@ -13,6 +13,7 @@
 			"local.carter.office.magic.CastGameTests",
 			"local.carter.office.magic.TerrainGameTests",
 			"local.carter.office.magic.TempBlockBreakGameTests",
+			"local.carter.office.magic.DebrisGameTests",
 			"local.carter.office.magic.HandSignGameTests",
 			"local.carter.office.magic.RecallGameTests",
 			"local.carter.office.magic.TravelGameTests",
