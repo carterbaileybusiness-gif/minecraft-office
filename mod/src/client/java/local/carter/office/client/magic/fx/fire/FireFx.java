@@ -10,5 +10,9 @@ public final class FireFx {
 	public static void register() {
 		SpellFxRegistry.register(SpellIds.FIRE_BOLT, new FireBoltFx());
 		SpellFxRegistry.register(SpellIds.FIRE_WALL, new FireWallFx());
+		SpellFxRegistry.register(SpellIds.FLAME_DASH, new FlameDashFx());
+		SpellFxRegistry.register(SpellIds.FIREBALL_BARRAGE, new FireballBarrageFx());
+		SpellFxRegistry.register(SpellIds.METEOR, new MeteorFx());
+		MeteorRock.register();
 	}
 }
