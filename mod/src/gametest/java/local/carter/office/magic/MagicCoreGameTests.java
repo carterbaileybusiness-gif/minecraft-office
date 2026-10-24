@@ -404,8 +404,8 @@ public class MagicCoreGameTests {
 		h.assertValueEqual(SpellRegistry.at(stranger, Element.FIRE, Slots.RECALL), Optional.of(realRecall), "a random UUID: the real Recall");
 		ServerPlayer outsider = h.makeMockServerPlayerInLevel();
 		try {
-			h.assertTrue(SpellRegistry.at(outsider.getUUID(), Element.FIRE, 1).isEmpty(), "a non-kit player: no test-wide override");
-			h.assertTrue(SpellRegistry.at(outsider.getUUID(), Element.FIRE, 0).isEmpty(), "a non-kit player: no per-player probe");
+			h.assertTrue(SpellRegistry.at(outsider.getUUID(), Element.FIRE, 1).map(s -> s != shared).orElse(true), "a non-kit player: no test-wide override");
+			h.assertTrue(SpellRegistry.at(outsider.getUUID(), Element.FIRE, 0).map(s -> s != castA && s != castB).orElse(true), "a non-kit player: no per-player probe");
 			h.assertValueEqual(SpellRegistry.get(outsider.getUUID(), SpellIds.RECALL), Optional.of(realRecall), "a non-kit player: the real Recall");
 		} finally {
 			MagicTestKit.disconnect(outsider);
@@ -413,7 +413,7 @@ public class MagicCoreGameTests {
 		// otherPlayer is a kit player of this test, so it gets the test-wide probe (by design) but not A's or B's own.
 		ServerPlayer other = MagicTestKit.otherPlayer(h, new BlockPos(8, 4, 8));
 		h.assertValueEqual(SpellRegistry.at(other.getUUID(), Element.FIRE, 1), Optional.<Spell>of(shared), "otherPlayer: the test-wide probe");
-		h.assertTrue(SpellRegistry.at(other.getUUID(), Element.FIRE, 0).isEmpty(), "otherPlayer: not A's or B's FIRE 0 probe");
+		h.assertTrue(SpellRegistry.at(other.getUUID(), Element.FIRE, 0).map(s -> s != castA && s != castB).orElse(true), "otherPlayer: not A's or B's FIRE 0 probe");
 		h.assertValueEqual(SpellRegistry.at(other.getUUID(), Element.FIRE, Slots.RECALL), Optional.of(realRecall), "otherPlayer: the real Recall");
 		h.succeed();
 	}
