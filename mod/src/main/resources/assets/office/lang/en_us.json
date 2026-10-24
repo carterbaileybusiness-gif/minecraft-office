@@ -105,6 +105,7 @@
   "magic.office.home_marked": "Home marked",
   "magic.office.recalling": "Recalling…",
   "magic.office.recall_interrupted": "Recall interrupted",
+  "magic.office.home_blocked": "Your home is blocked or unsafe — you stay where you are",
   "magic.office.protected": "The land here is protected",
   "magic.office.busy": "Too much magic here — wait a moment",
   "magic.office.wrong_element": "%s belongs to another element — you are bound to %s",
