@@ -1353,11 +1353,15 @@ public class HologramClientGameTests implements FabricClientGameTest {
 		context.runOnClient(mc -> {
 			HologramSettingsScreen screen = new HologramSettingsScreen(clientHologram(mc), "Test");
 			mc.gui.setScreen(screen);
+			// find first, press after: pressing a mode rebuilds the screen's widgets
+			net.minecraft.client.gui.components.Button pick = null;
 			for (var child : screen.children()) {
 				if (child instanceof net.minecraft.client.gui.components.Button b && b.getMessage().getString().equals(label)) {
-					b.onPress(new net.minecraft.client.input.KeyEvent(InputConstants.KEY_RETURN, 0, 0));
+					pick = b;
 				}
 			}
+			if (pick == null) throw new AssertionError("no " + label + " button in the hologram settings");
+			pick.onPress(new net.minecraft.client.input.KeyEvent(InputConstants.KEY_RETURN, 0, 0));
 			mc.gui.setScreen(null);
 		});
 		sp.getConnection().waitForServerboundPackets();
