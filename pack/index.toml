@@ -111,7 +111,7 @@ metafile = true
 
 [[files]]
 file = "mods/office.pw.toml"
-hash = "9bfe7a2cfd1849ee5ea5f9973710c6df576be225929af16e9014ce5dbea881c2"
+hash = "73c8befe7ce0e2f18ab1ce6c4a30959385e8653f368d399972e1183e80638126"
 metafile = true
 
 [[files]]
