@@ -15,18 +15,8 @@ hash = "ff675667f4c6924a9eaebc42dc2df5306dc5e8b005e931d9d8b73cebad67d5eb"
 metafile = true
 
 [[files]]
-file = "mods/armor-model-api.pw.toml"
-hash = "c78c5ece3e0fb9f35d1959962d8ebd6f58031609b7ff484430635f0c13bbb941"
-metafile = true
-
-[[files]]
 file = "mods/balm.pw.toml"
 hash = "3f529d5fd5e99dbcba1364cfc68eefc9235e6956dcd05f4c6554116f89d9c9c9"
-metafile = true
-
-[[files]]
-file = "mods/bundle-api.pw.toml"
-hash = "ddb32e4c34094862948fc54dc092df8eb06af414438f4425089d2cc2108406e3"
 metafile = true
 
 [[files]]
@@ -145,16 +135,6 @@ hash = "4d3d2ad41a037af6f78e2a6c2908c4098bb0b5c03ad0d2711a0c0c6df5e7a172"
 metafile = true
 
 [[files]]
-file = "mods/player-animation-library.pw.toml"
-hash = "5f500b882196aa8eae0d0dff4299b2fff908a8e61c7b6aab0d840a2824b3bc5f"
-metafile = true
-
-[[files]]
-file = "mods/runes.pw.toml"
-hash = "870deeab89b26266c358e6093caaa4fb41eb20bd5cbb0550226faeec3b525a44"
-metafile = true
-
-[[files]]
 file = "mods/shogi.pw.toml"
 hash = "7dce4255d013864163503866db2a902f7071d64ef184c3d40189c1ac9641a7f2"
 metafile = true
@@ -180,23 +160,8 @@ hash = "c9a22446b9e7867bd4ccdb2c653d053339145c6bc06bf798ce8ec1f253df7c6c"
 metafile = true
 
 [[files]]
-file = "mods/spell-engine.pw.toml"
-hash = "4427350c7b97e1d5eff88fc9c7f3a169f51510884c21e8cded9b8c32da8929cb"
-metafile = true
-
-[[files]]
-file = "mods/spell-power.pw.toml"
-hash = "7f23e796e7ac1762c6828a8ef65801247bcf0dc924b0565490704290dfa9bbd8"
-metafile = true
-
-[[files]]
 file = "mods/structory.pw.toml"
 hash = "fb14f0b5b51fedbe13cda9b516b6d4f686e4833ad61ab62dee9804adaea5dc50"
-metafile = true
-
-[[files]]
-file = "mods/structure-pool-api.pw.toml"
-hash = "7323d30598747e1fc777ef7749942453924b1a20f7d83f8a1cfb920194c6b15d"
 metafile = true
 
 [[files]]
@@ -215,16 +180,6 @@ hash = "93e5f8e08798ba4f920dd308edbb05a3183717ccf53796331ddaa71265276a23"
 metafile = true
 
 [[files]]
-file = "mods/trinkets-updated.pw.toml"
-hash = "e42d9b9488b43a065f5e1aafd4e8802a42568a9be4737888ba8d6b2af7a7c500"
-metafile = true
-
-[[files]]
 file = "mods/waystones.pw.toml"
 hash = "85e00f97c2d58db3167bb6608558aa956654f5b0570e0abac082a1d0d4e3c19d"
-metafile = true
-
-[[files]]
-file = "mods/wizards.pw.toml"
-hash = "31e72050f9aa0e305e5b01c9331aa50a25be4b493e1a5def496f47fe0dabc936"
 metafile = true
