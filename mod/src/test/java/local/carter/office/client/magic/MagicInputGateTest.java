@@ -67,6 +67,42 @@ class MagicInputGateTest {
 	}
 
 	@Test
+	void shiftScrollOnAMacArrivesHorizontal() {
+		assertEquals(-1.0, MagicInputGate.scrollAmount(0, -1), "plain wheel down");
+		assertEquals(1.0, MagicInputGate.scrollAmount(0, 1), "plain wheel up");
+		assertEquals(-1.0, MagicInputGate.scrollAmount(1, 0), "Mac Shift + wheel down arrives as +x: next, like vanilla's hotbar");
+		assertEquals(1.0, MagicInputGate.scrollAmount(-1, 0), "Mac Shift + wheel up arrives as -x: previous");
+		assertEquals(-2.0, MagicInputGate.scrollAmount(5, -2), "the vertical part wins when there is one");
+		assertEquals(0.0, MagicInputGate.scrollAmount(0, 0), 0.0, "no scroll");
+	}
+
+	@Test
+	void shiftScrollAtAHologramTheMonitorDidNotTakeIsSwallowed() {
+		assertTrue(MagicInputGate.scrollSwallowed(true, false, true, true, true, true), "stance at a hologram: neither spell nor hotbar");
+		assertFalse(MagicInputGate.scrollSwallowed(false, false, true, true, true, true), "no Shift: vanilla");
+		assertFalse(MagicInputGate.scrollSwallowed(true, false, false, true, true, true), "not aiming: it selects instead");
+		assertFalse(MagicInputGate.scrollSwallowed(true, false, true, true, false, true), "out of stance: vanilla");
+		assertFalse(MagicInputGate.scrollSwallowed(true, false, true, true, true, false), "unbound: vanilla");
+		assertFalse(MagicInputGate.scrollSwallowed(true, true, true, true, true, true), "typing: not magic's");
+		for (boolean aiming : new boolean[] {false, true}) {
+			assertFalse(MagicInputGate.scrollSelects(true, false, aiming, true, true, true)
+					&& MagicInputGate.scrollSwallowed(true, false, aiming, true, true, true), "never both");
+		}
+	}
+
+	@Test
+	void wheelFeelsTheSameAtAnySensitivity() {
+		assertEquals(1.0, SpellWheel.turnScale(0.5), 1e-9, "vanilla's default multiplier");
+		for (double s : new double[] {0.3, 0.5, 0.8, 1.0}) {
+			double turn = 10 * SpellWheel.turnScale(s); // what vanilla turns for 10 px at this setting
+			assertEquals(10.0, SpellWheel.fromTurn(turn, s), 1e-9, "10 px stay 10 wheel units at sensitivity " + s);
+		}
+		// Very low settings: the divisor is floored at 0.3 (0% sensitivity gives 0.064).
+		assertEquals(10 * SpellWheel.turnScale(0.0) / 0.3, SpellWheel.fromTurn(10 * SpellWheel.turnScale(0.0), 0.0), 1e-9);
+		assertTrue(SpellWheel.fromTurn(1, 0.0) <= 1 / 0.3 + 1e-9, "a tiny turn never becomes a huge jump");
+	}
+
+	@Test
 	void releaseIsSuppressedWhileTyping() {
 		assertTrue(MagicInputGate.dropsCharge(true, true));
 		assertFalse(MagicInputGate.dropsCharge(false, true));

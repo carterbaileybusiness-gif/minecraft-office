@@ -55,9 +55,31 @@ public final class MagicInputGate {
 	 * A grimoire charge still running while typing is dropped on the client without a release, so no cast is ever sent from
 	 * typing or work mode. (Normally unreachable: vanilla ignores clicks while an item is in use, so work mode can't begin
 	 * mid-charge.)
+	 *
+	 * <p>No {@code CancelCharge} payload is needed: the server never casts on its own, only on a release packet
+	 * ({@code GrimoireItem.releaseUsing}), and the client sends none for a dropped charge. The server's leftover "using" state
+	 * is harmless and short-lived: it costs nothing, the next right-click restarts the use (and recaptures the spell), a
+	 * main-hand item ends it ({@code GrimoireItem.onUseTick}), and death, disconnect and dimension change discard it.
 	 */
 	public static boolean dropsCharge(boolean typing, boolean usingGrimoire) {
 		return typing && usingGrimoire;
+	}
+
+	/**
+	 * The scroll amount in notches (positive = up = previous). Shift + wheel arrives as a horizontal scroll on a Mac, so with
+	 * no vertical part the horizontal one counts, flipped (vanilla's hotbar does the same).
+	 */
+	public static double scrollAmount(double dx, double dy) {
+		return dy != 0 ? dy : -dx;
+	}
+
+	/**
+	 * Shift + scroll in off-hand casting stance at a hologram the monitor didn't take (not your own live screen): swallowed, so
+	 * neither a spell nor the hotbar changes (a hotbar step would leave the casting stance).
+	 */
+	public static boolean scrollSwallowed(boolean shift, boolean typing, boolean aimingAtHologram, boolean grimoireOffhand,
+			boolean mainHandEmpty, boolean bound) {
+		return shift && !typing && aimingAtHologram && grimoireOffhand && mainHandEmpty && bound;
 	}
 
 	// ---------------------------------------------------------------- live
@@ -84,24 +106,35 @@ public final class MagicInputGate {
 		return blocksUse(typing, !typing && off && empty && aimingAtHologram(mc), off, empty);
 	}
 
+	/** Also closed while the HUD is hidden (F1): the wheel is drawn as part of the HUD. */
 	public static boolean wheelAllowed(Minecraft mc) {
 		LocalPlayer p = mc.player;
-		if (p == null || p.isSpectator()) return false;
+		if (p == null || p.isSpectator() || mc.gui.hud.isHidden()) return false;
 		boolean held = stance(GrimoireItem.isGrimoire(p.getMainHandItem()), p.getMainHandItem().isEmpty(),
 				GrimoireItem.isGrimoire(p.getOffhandItem()));
 		return wheelAllowed(mc.gui.screen() != null, typing(), held, MagicAttachments.get(p).element().isPresent());
 	}
 
 	public static boolean scrollSelects(Minecraft mc) {
+		return scroll(mc) == Scroll.SELECT;
+	}
+
+	/** What a world scroll does: select a spell, nothing (swallowed at a hologram), or vanilla's hotbar step. */
+	public enum Scroll { SELECT, SWALLOW, VANILLA }
+
+	public static Scroll scroll(Minecraft mc) {
 		LocalPlayer p = mc.player;
-		if (p == null || p.isSpectator() || mc.gui.screen() != null) return false;
+		if (p == null || p.isSpectator() || mc.gui.screen() != null) return Scroll.VANILLA;
 		boolean shift = mc.hasShiftDown();
 		boolean off = GrimoireItem.isGrimoire(p.getOffhandItem());
 		boolean empty = p.getMainHandItem().isEmpty();
 		boolean bound = MagicAttachments.get(p).element().isPresent();
-		if (!shift || !off || !empty || !bound) return false;
+		if (!shift || !off || !empty || !bound) return Scroll.VANILLA;
 		boolean typing = typing();
-		return scrollSelects(true, typing, !typing && aimingAtHologram(mc), true, true, true);
+		boolean aiming = !typing && aimingAtHologram(mc);
+		if (scrollSelects(true, typing, aiming, true, true, true)) return Scroll.SELECT;
+		if (scrollSwallowed(true, typing, aiming, true, true, true)) return Scroll.SWALLOW;
+		return Scroll.VANILLA;
 	}
 
 	/** The player is charging a grimoire (either hand). */

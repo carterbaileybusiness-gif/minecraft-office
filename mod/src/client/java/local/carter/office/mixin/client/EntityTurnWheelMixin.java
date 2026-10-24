@@ -13,8 +13,9 @@ import net.minecraft.world.entity.Entity;
 /**
  * While the R spell wheel is open the mouse points at a slice instead of turning the camera: the turn vanilla's mouse
  * handler asks of the local player ({@code MouseHandler.turnPlayer} → {@code Entity.turn}) goes to
- * {@link SpellWheel#addMouse} and the camera stays put. Movement keys (WASD) keep working. The turn already carries the player's mouse sensitivity (1 unit per
- * pixel at the default), and the invert-mouse options are undone so the pointer follows the hand on screen.
+ * {@link SpellWheel#addMouse} and the camera stays put. Movement keys (WASD) keep working. The player's sensitivity is
+ * divided back out ({@link SpellWheel#fromTurn}), the cinematic camera is off while the wheel is open ({@link SpellWheel#open}),
+ * and the invert-mouse options are undone, so the pointer follows the hand on screen the same way at any setting.
  *
  * <p>Hooked here rather than on {@code MouseHandler}, which routes the fullscreen key: {@code FullscreenGuardTest} keeps
  * every mixin off the fullscreen path.
@@ -30,8 +31,9 @@ public abstract class EntityTurnWheelMixin {
 		if (mc.player != (Object) this) {
 			return;
 		}
-		double dx = mc.options.invertMouseX().get() ? -yRot : yRot;
-		double dy = mc.options.invertMouseY().get() ? -xRot : xRot;
+		double sensitivity = mc.options.sensitivity().get();
+		double dx = SpellWheel.fromTurn(mc.options.invertMouseX().get() ? -yRot : yRot, sensitivity);
+		double dy = SpellWheel.fromTurn(mc.options.invertMouseY().get() ? -xRot : xRot, sensitivity);
 		SpellWheel.addMouse(dx, dy);
 		ci.cancel();
 	}

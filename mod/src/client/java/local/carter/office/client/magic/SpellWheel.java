@@ -11,6 +11,7 @@ import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellRegistry;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.resources.Identifier;
 import net.minecraft.sounds.SoundEvents;
@@ -42,6 +43,9 @@ public final class SpellWheel {
 
 	private SpellWheel() {}
 
+	/** Cinematic camera (F8) as it was when the wheel opened; it is off while the wheel is open (no smoothing lag). */
+	private static boolean savedSmoothCamera;
+
 	public static void open() {
 		open = true;
 		age = 0;
@@ -50,6 +54,32 @@ public final class SpellWheel {
 		hovered = -1;
 		chosen = -1;
 		hoveredAt = Util.getMillis();
+		Options o = Minecraft.getInstance().options;
+		savedSmoothCamera = o.smoothCamera;
+		o.smoothCamera = false;
+	}
+
+	/** Restores the cinematic camera setting the wheel switched off. */
+	private static void restoreCamera() {
+		if (savedSmoothCamera) Minecraft.getInstance().options.smoothCamera = true;
+		savedSmoothCamera = false;
+	}
+
+	/**
+	 * Vanilla's turn multiplier for a mouse sensitivity setting ({@code MouseHandler.turnPlayer}: {@code (s·0.6 + 0.2)³ · 8},
+	 * 1 at the default 0.5).
+	 */
+	public static double turnScale(double sensitivity) {
+		double f = sensitivity * 0.6 + 0.2;
+		return f * f * f * 8;
+	}
+
+	/**
+	 * A camera turn back to wheel units (about window pixels): the player's sensitivity is divided out so the wheel feels the
+	 * same at any setting; very low settings are floored at 0.3 so a tiny turn never becomes a huge jump.
+	 */
+	public static double fromTurn(double turn, double sensitivity) {
+		return turn / Math.max(turnScale(sensitivity), 0.3);
 	}
 
 	public static boolean isOpen() {
@@ -153,6 +183,7 @@ public final class SpellWheel {
 
 	/** Gone at once (disconnect). */
 	public static void reset() {
+		if (open) restoreCamera();
 		open = false;
 		closing = 0;
 		hovered = -1;
@@ -162,6 +193,7 @@ public final class SpellWheel {
 	private static void close() {
 		open = false;
 		closing = CLOSE_TICKS;
+		restoreCamera();
 	}
 
 	public static void tick() {

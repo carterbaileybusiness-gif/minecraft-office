@@ -482,7 +482,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
 			long now = p.level().getGameTime();
 			MagicAttachments.set(p, MagicData.EMPTY.withElement(Optional.of(Element.FIRE)).withLevel(3)
-					.withSelected(Optional.of(PROBE_0)).withReadyAt(Map.of(SpellIds.RECALL, now + 2_400L)));
+					.withSelected(Optional.of(PROBE_0)).withReadyAt(Map.of(SpellIds.RECALL, now + 600L)));
 			MagicAttachments.setMana(p, FULL_MANA); // full: no regen, so any spend shows
 			BlockPos stand = p.blockPosition();
 			at[0] = stand.offset(0, 0, 2);
@@ -498,6 +498,8 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			emptyHandChestStillOpens(context, sp, at[0]);
 			rightClickHologramDoesNotCast(context, sp, at[1]);
 			shiftScrollOnHologramScrollsMonitor(context, sp);
+			plainScrollMovesTheHotbar(context, sp);
+			hiddenHudClosesTheWheel(context, sp);
 			shiftScrollSelectsNextSpell(context, sp);
 			wheelScreenshotNotBlank(context, sp);
 			wheelSelectsByMouse(context, sp);
@@ -528,12 +530,22 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		context.waitTicks(3);
 	}
 
-	/** Looking at an own hologram: the right-click is the monitor's; the grimoire neither casts nor charges. */
+	/**
+	 * Looking at an own hologram: the right-click is the monitor's; the grimoire neither casts nor charges.
+	 *
+	 * <p>Note: in {@code MinecraftUseItemMixin} the hologram code ({@code HologramInteractions.onUse}) takes this click first
+	 * (own screen: in-world use or zoom; a friend's: swallowed), so the click itself never reaches the magic gate's hologram
+	 * branch, which is a backstop. That branch is checked directly here: the live {@code MagicInputGate.blocksUse} must say
+	 * "block" while aiming at the hologram in casting stance, and "don't" once the view is off it.
+	 */
 	private static void rightClickHologramDoesNotCast(ClientGameTestContext context, TestSingleplayerContext sp, BlockPos emitter) {
 		HologramSpec spec = context.computeOnClient(mc -> ((HologramBlockEntity) mc.level.getBlockEntity(emitter)).spec());
 		Vec3d c = HologramPlacement.frame(emitter.getX(), emitter.getY(), emitter.getZ(), spec).center();
 		lookAt(context, c.x(), c.y() + 0.2, c.z());
 		context.waitFor(MagicInputGate::aimingAtHologram, 40);
+		if (!context.computeOnClient(mc -> MagicInputGate.blocksUse(mc))) {
+			throw new AssertionError("the gate's hologram branch must block a right-click at a hologram in casting stance");
+		}
 		context.getInput().holdMouseFor(MOUSE_RIGHT, 12); // a long hold would be a charge
 		context.waitTicks(3);
 		sp.getConnection().waitForServerboundPackets();
@@ -546,20 +558,102 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		context.waitTicks(2);
 	}
 
-	/** Aiming at a hologram, Shift + scroll belongs to the monitor: the selected spell stays. */
+	/**
+	 * Aiming at a hologram, Shift + scroll belongs to the monitor: the selected spell stays. The test hologram isn't live (no
+	 * helper or screen source here), so the monitor doesn't take the scroll either: it is swallowed and the hotbar stays too.
+	 * Then, with the R wheel open on that hologram, the mouse wheel steps the wheel (magic's scroll phase runs first).
+	 */
 	private static void shiftScrollOnHologramScrollsMonitor(ClientGameTestContext context, TestSingleplayerContext sp) {
 		if (!context.computeOnClient(MagicInputGate::aimingAtHologram)) throw new AssertionError("should still aim at the hologram");
+		int slot = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
 		context.getInput().holdShift();
 		context.getInput().scroll(-1);
+		context.getInput().scroll(1, 0); // a Mac's Shift + wheel (horizontal)
 		context.waitTicks(2);
 		context.getInput().releaseShift();
 		sp.getConnection().waitForServerboundPackets();
 		context.waitTicks(2);
 		Optional<Identifier> sel = sp.getServer().computeOnServer(server -> MagicAttachments.get(player(server)).selected());
 		if (!sel.equals(Optional.of(PROBE_0))) throw new AssertionError("Shift + scroll on a hologram must not select, got " + sel);
-		// The hotbar may move (vanilla) but the main hand stays empty: put it back on slot 0 anyway.
+		int after = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		if (after != slot) throw new AssertionError("Shift + scroll at a hologram in stance must keep the hotbar: " + slot + " -> " + after);
+
+		context.getInput().holdKey(MagicKeys.WHEEL);
+		context.waitFor(mc -> SpellWheel.isOpen(), 20);
+		context.getInput().scroll(-1);
+		context.waitTicks(1);
+		int hovered = context.computeOnClient(mc -> SpellWheel.hovered());
+		if (hovered != 1) throw new AssertionError("the open wheel takes the scroll at a hologram: from Fire Bolt to slice 1, hovered " + hovered);
+		context.getInput().scroll(1);
+		context.waitTicks(1);
+		hovered = context.computeOnClient(mc -> SpellWheel.hovered());
+		if (hovered != 0) throw new AssertionError("scrolling back up hovers Fire Bolt (0), hovered " + hovered);
+		context.getInput().releaseKey(MagicKeys.WHEEL); // Fire Bolt is already selected: nothing changes
+		context.waitFor(mc -> !SpellWheel.visible(), 20);
+		after = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		if (after != slot) throw new AssertionError("scrolling the open wheel must keep the hotbar: " + slot + " -> " + after);
+		sp.getConnection().waitForServerboundPackets();
+		sel = sp.getServer().computeOnServer(server -> MagicAttachments.get(player(server)).selected());
+		if (!sel.equals(Optional.of(PROBE_0))) throw new AssertionError("re-picking the selected spell changes nothing, got " + sel);
+		assertNoCast(context, sp, "the wheel at a hologram");
+	}
+
+	/**
+	 * Vanilla scrolling stays vanilla: in casting stance a plain scroll moves the hotbar (and selects nothing); with a stick in
+	 * the main hand (out of casting stance) Shift + scroll moves the hotbar too.
+	 */
+	private static void plainScrollMovesTheHotbar(ClientGameTestContext context, TestSingleplayerContext sp) {
+		lookEast(context);
 		context.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
 		context.waitTicks(2);
+		context.getInput().scroll(-1);
+		context.waitTicks(2);
+		int slot = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		if (slot != 1) throw new AssertionError("a plain scroll in casting stance moves the hotbar to slot 1, at " + slot);
+		context.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+		sp.getServer().runOnServer(server -> player(server).getInventory().setItem(0, new ItemStack(Items.STICK)));
+		context.waitFor(mc -> mc.player.getMainHandItem().is(Items.STICK), 20);
+		context.getInput().holdShift();
+		context.getInput().scroll(-1);
+		context.waitTicks(2);
+		context.getInput().releaseShift();
+		slot = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		if (slot != 1) throw new AssertionError("Shift + scroll out of casting stance moves the hotbar to slot 1, at " + slot);
+		sp.getConnection().waitForServerboundPackets();
+		Optional<Identifier> sel = sp.getServer().computeOnServer(server -> MagicAttachments.get(player(server)).selected());
+		if (!sel.equals(Optional.of(PROBE_0))) throw new AssertionError("vanilla scrolling must not select a spell, got " + sel);
+		sp.getServer().runOnServer(server -> player(server).getInventory().setItem(0, ItemStack.EMPTY));
+		context.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+		context.waitFor(mc -> mc.player.getMainHandItem().isEmpty() && mc.player.getInventory().getSelectedSlot() == 0, 20);
+		context.waitTicks(2);
+	}
+
+	/** Hiding the HUD (F1) closes the open wheel without choosing; the wheel doesn't open while it is hidden. */
+	private static void hiddenHudClosesTheWheel(ClientGameTestContext context, TestSingleplayerContext sp) {
+		lookEast(context);
+		context.getInput().holdKey(MagicKeys.WHEEL);
+		context.waitFor(mc -> SpellWheel.isOpen(), 20);
+		context.getInput().moveCursor(1, 0);
+		context.waitTicks(1);
+		context.getInput().moveCursor(0, 40); // hover the bottom slice (locked) while open
+		context.waitTicks(1);
+		context.getInput().pressKey(InputConstants.KEY_F1);
+		context.waitTicks(2);
+		try {
+			if (!context.computeOnClient(mc -> mc.gui.hud.isHidden())) throw new AssertionError("F1 should hide the HUD");
+			if (context.computeOnClient(mc -> SpellWheel.isOpen())) throw new AssertionError("hiding the HUD must close the wheel");
+			context.getInput().releaseKey(MagicKeys.WHEEL);
+			context.getInput().holdKey(MagicKeys.WHEEL);
+			context.waitTicks(3);
+			if (context.computeOnClient(mc -> SpellWheel.isOpen())) throw new AssertionError("no wheel while the HUD is hidden");
+			context.getInput().releaseKey(MagicKeys.WHEEL);
+		} finally {
+			context.getInput().pressKey(InputConstants.KEY_F1);
+			context.waitFor(mc -> !mc.gui.hud.isHidden(), 20);
+		}
+		sp.getConnection().waitForServerboundPackets();
+		Optional<Identifier> sel = sp.getServer().computeOnServer(server -> MagicAttachments.get(player(server)).selected());
+		if (!sel.equals(Optional.of(PROBE_0))) throw new AssertionError("a wheel closed by F1 chooses nothing, got " + sel);
 	}
 
 	/** Not aiming at a hologram: Shift + scroll down selects the next unlocked spell; the hotbar slot stays. */
@@ -576,9 +670,25 @@ public class MagicClientGameTests implements FabricClientGameTest {
 		sp.getServer().waitFor(server -> MagicAttachments.get(player(server)).selected().equals(Optional.of(PROBE_1)), 40);
 		int after = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
 		if (after != slot) throw new AssertionError("Shift + scroll must keep the hotbar slot: " + slot + " -> " + after);
+		// A Mac sends Shift + wheel as a horizontal scroll: +x is down (next: Recall), -x is up (back to Fire Wall).
+		macShiftScroll(context, sp, 1, SpellIds.RECALL);
+		macShiftScroll(context, sp, -1, PROBE_1);
+		after = context.computeOnClient(mc -> mc.player.getInventory().getSelectedSlot());
+		if (after != slot) throw new AssertionError("horizontal Shift + scroll must keep the hotbar slot: " + slot + " -> " + after);
 		assertNoCast(context, sp, "Shift + scroll");
 		context.waitTicks(10);
 		context.takeScreenshot("magic-wheel-scroll-label-gui4");
+	}
+
+	private static void macShiftScroll(ClientGameTestContext context, TestSingleplayerContext sp, double dx, Identifier expect) {
+		context.waitTicks(2);
+		context.getInput().holdShift();
+		context.getInput().scroll(dx, 0);
+		context.waitTicks(2);
+		context.getInput().releaseShift();
+		sp.getConnection().waitForServerboundPackets();
+		sp.getServer().waitFor(server -> MagicAttachments.get(player(server)).selected().equals(Optional.of(expect)), 40);
+		context.waitFor(mc -> MagicAttachments.get(mc.player).selected().equals(Optional.of(expect)), 40);
 	}
 
 	/** With the wheel open, at least 20 % of the pixels inside its outer circle differ from the same view without it. */

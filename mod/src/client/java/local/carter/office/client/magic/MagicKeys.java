@@ -23,6 +23,7 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Util;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.event.Event;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -40,6 +41,8 @@ public final class MagicKeys {
 	public static final KeyMapping WHEEL = new KeyMapping("key.office.spell_wheel", InputConstants.Type.KEYBOARD, InputConstants.KEY_R, CATEGORY);
 	/** A just-sent selection counts as current until the server's copy agrees (or this long passes). */
 	private static final long PENDING_MS = 1500;
+	/** Scroll-event phase that runs before the default one (the monitors' scroll handlers). */
+	static final Identifier WHEEL_PHASE = OfficeMod.id("spell_wheel");
 
 	private static @Nullable Identifier pending;
 	private static long pendingAt;
@@ -50,6 +53,10 @@ public final class MagicKeys {
 		KeyMappingHelper.registerKeyMapping(WHEEL);
 		ClientTickEvents.START_CLIENT_TICK.register(MagicKeys::beforeTick);
 		ClientTickEvents.END_CLIENT_TICK.register(MagicKeys::tick);
+		// The open wheel takes the mouse wheel before anything else (a monitor under the crosshair included); Shift + scroll
+		// comes after the monitors (default phase, registered after HologramInteractions).
+		ClientHotbarScrollEvents.ALLOW.addPhaseOrdering(WHEEL_PHASE, Event.DEFAULT_PHASE);
+		ClientHotbarScrollEvents.ALLOW.register(WHEEL_PHASE, (inventory, current, next, dx, dy) -> onWheelScroll(dx, dy));
 		ClientHotbarScrollEvents.ALLOW.register((inventory, current, next, dx, dy) -> onScroll(dx, dy));
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			SpellWheel.reset();
@@ -96,15 +103,25 @@ public final class MagicKeys {
 		}
 	}
 
-	/** Mouse wheel in the world. False = it was magic's (the hotbar slot stays). */
+	/**
+	 * Mouse wheel while the R wheel is open: steps its hover, whatever is under the crosshair (this listener runs in
+	 * {@link #WHEEL_PHASE}, before the monitors'). False = the hotbar slot stays.
+	 */
+	static boolean onWheelScroll(double dx, double dy) {
+		if (!SpellWheel.isOpen()) return true;
+		double amount = MagicInputGate.scrollAmount(dx, dy);
+		if (amount != 0) SpellWheel.step(amount < 0 ? 1 : -1);
+		return false;
+	}
+
+	/** Shift + scroll in the world, after the monitors had their turn. False = it was magic's (the hotbar slot stays). */
 	static boolean onScroll(double dx, double dy) {
-		double amount = dy != 0 ? dy : dx;
-		if (SpellWheel.isOpen()) {
-			if (amount != 0) SpellWheel.step(amount < 0 ? 1 : -1);
-			return false;
-		}
+		if (SpellWheel.isOpen()) return false;
+		double amount = MagicInputGate.scrollAmount(dx, dy);
 		Minecraft mc = Minecraft.getInstance();
-		if (amount == 0 || !MagicInputGate.scrollSelects(mc)) return true;
+		MagicInputGate.Scroll what = MagicInputGate.scroll(mc);
+		if (what == MagicInputGate.Scroll.VANILLA) return true;
+		if (what == MagicInputGate.Scroll.SWALLOW || amount == 0) return false;
 		MagicData d = MagicAttachments.get(mc.player);
 		List<Identifier> ids = SpellRegistry.unlocked(d).stream().map(Spell::id).toList();
 		Identifier current = selected(d);
