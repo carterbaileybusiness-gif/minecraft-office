@@ -1,6 +1,8 @@
 package local.carter.office.magic.spell.wind;
 
 import local.carter.office.magic.core.ChargeMath;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.world.phys.Vec3;
 
@@ -50,6 +52,11 @@ public record TornadoGeometry(Vec3 origin, Vec3 dir, int life) {
 		return RADIUS * ChargeMath.size(charge);
 	}
 
+	/** The reach at {@code charge} and {@code rank}: the size knob on it, Eye of the Storm's ×1.5 on top. */
+	public static double radius(float charge, SpellRank rank) {
+		return radius(charge) * rank.mul(Knob.SIZE) * (rank.is(Tornado.EYE) ? Tornado.EYE_RADIUS : 1);
+	}
+
 	/** Whether {@code p} is inside a tap's tornado whose base is at {@code base}. */
 	public static boolean inReach(Vec3 base, Vec3 p) {
 		return inReach(base, p, RADIUS);
@@ -76,11 +83,16 @@ public record TornadoGeometry(Vec3 origin, Vec3 dir, int life) {
 	 * {@link #INWARD} toward the axis (none inside {@link #CORE}), {@link #UP} up, plus this tornado's travel.
 	 */
 	public Vec3 push(Vec3 base, Vec3 p) {
+		return push(base, p, 1);
+	}
+
+	/** {@link #push(Vec3, Vec3)} with the inward pull times {@code inward} (Eye of the Storm). */
+	public Vec3 push(Vec3 base, Vec3 p, double inward) {
 		double dx = p.x - base.x;
 		double dz = p.z - base.z;
 		double len = Math.sqrt(dx * dx + dz * dz);
 		Vec3 t = tangent(dx, dz).scale(TANGENTIAL);
-		Vec3 in = len > CORE ? new Vec3(-dx / len, 0, -dz / len).scale(INWARD) : Vec3.ZERO;
+		Vec3 in = len > CORE ? new Vec3(-dx / len, 0, -dz / len).scale(INWARD * inward) : Vec3.ZERO;
 		return t.add(in).add(0, UP, 0).add(dir.scale(SPEED));
 	}
 

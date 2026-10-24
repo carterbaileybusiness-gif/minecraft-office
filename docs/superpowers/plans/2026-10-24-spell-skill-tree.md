@@ -114,9 +114,9 @@ session (e.g. Earth: 27 diamonds, 14 ancient debris; Shadow: 12 echo shards).
   ranks kept, materials not refunded). Both share one throttle like `SelectSpell` (10 a second, the rest ignored).
 - **Server checks in order** (first failure wins, nothing is taken): not your element's spell → `NOT_YOURS`; maxed →
   `MAXED`; wrong payload for the next rank (RankUp at III/V, ChooseFork at a bump, a rank that is not next) →
-  `WRONG_RANK`; spell locked → `LOCKED`; XP levels short → `NO_LEVELS`; materials short → `NO_ITEMS`; re-pick without
-  window or seal → `NO_SEAL`; same fork again → `SAME`. Then it takes the levels and every item line in one go (the
-  server thread: atomic), stores the rank and replies.
+  `WRONG_RANK`; spell locked → `LOCKED`; XP levels short → `NO_LEVELS`; materials short → `NO_ITEMS`; a re-pick of the
+  option already held → `SAME`, without window or seal → `NO_SEAL`. Then it takes the levels and every item line in one go
+  (the server thread: atomic), stores the rank and replies.
 - **S2C `TreeResult(spell, rank, fork, outcome)`** — the screen plays the burst on `OK` (the synced `MagicData` already
   shows the new rank) and shows the reason otherwise.
 - **Hook:** `CastContext.rank()` (`SpellRank`), `FxEvent.rank` (packed), `Hurt.damage` riders, `CastService` mana /

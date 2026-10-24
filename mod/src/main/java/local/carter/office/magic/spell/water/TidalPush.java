@@ -23,12 +23,17 @@ import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
@@ -51,6 +56,11 @@ import net.minecraft.world.phys.Vec3;
  * is the client's, drawn from the same geometry: ghost blocks that live {@link TidalWaveGeometry#CELL_LIFE} ticks in air cells
  * only, spray and foam.
  *
+ * <p>Ranks lengthen the cone and the wave (the size knob, up to {@link #MAX_RANGE}). Forks: III {@link #BREAKER} (the wave hits
+ * everything it carries for {@link #BREAKER_DAMAGE}{@code × P}) or {@link #SURGE} (shove {@link #SURGE_KNOCK}×); V {@link #TSUNAMI}
+ * (range ×1.5, up to {@link #MAX_RANGE}; carries twice as hard) or {@link #FRIGID} (everything it shoves or carries gets Slowness
+ * III for {@link #FRIGID_TICKS}).
+ *
  * <p>Fx: {@code target} = the wave's start (bottom centre of the caster's feet cell), {@code duration} = the wave's
  * {@link TidalWaveGeometry#duration()}, {@code entities} = what the cone shoved (first 32), {@code data[0]} = the cone's range
  * (the client rebuilds the wave's length from it, {@link TidalWaveGeometry#length(double)}).
@@ -61,6 +71,21 @@ public final class TidalPush implements Spell {
 	/** The wave's own push on whatever it reaches (once each). */
 	public static final double CARRY = 0.6;
 	public static final double CARRY_UP = 0.12;
+	public static final String BREAKER = "breaker";
+	public static final String SURGE = "surge";
+	public static final String TSUNAMI = "tsunami";
+	public static final String FRIGID = "frigid";
+	/** Longest a ranked cone and wave reach. */
+	public static final double MAX_RANGE = 24;
+	public static final float BREAKER_DAMAGE = 4;
+	public static final float SURGE_KNOCK = 1.6F;
+	public static final float TSUNAMI_RANGE = 1.5F;
+	public static final int FRIGID_TICKS = 80;
+
+	/** The cone's range at {@code charge} and {@code rank}: {@code 8 × (1 + charge)} times the size knob (and Tsunami), at most {@link #MAX_RANGE}. */
+	public static double range(float charge, SpellRank rank) {
+		return Math.min(MAX_RANGE, TidalWaveGeometry.range(charge) * rank.mul(Knob.SIZE) * (rank.is(TSUNAMI) ? TSUNAMI_RANGE : 1));
+	}
 
 	@Override
 	public Identifier id() {
@@ -82,7 +107,7 @@ public final class TidalPush implements Spell {
 		ServerLevel level = ctx.level();
 		Vec3 eye = ctx.eye();
 		Vec3 look = ctx.look().normalize();
-		double range = TidalWaveGeometry.range(ctx.charge());
+		double range = range(ctx.charge(), ctx.rank());
 		Vec3 start = Vec3.atBottomCenterOf(ctx.caster().blockPosition());
 		TidalWaveGeometry wave = new TidalWaveGeometry(start, look, TidalWaveGeometry.length(range));
 		Wave effect = new Wave(ctx, wave);
@@ -90,12 +115,13 @@ public final class TidalPush implements Spell {
 
 		// The shove.
 		List<Integer> shoved = new ArrayList<>();
-		double strength = KNOCK * ctx.power();
+		double strength = KNOCK * ctx.power() * ctx.rank().mul(Knob.KNOCK);
 		for (Entity e : Targets.cone(ctx, range, TidalWaveGeometry.HALF_ANGLE, true)) {
 			if (!visible(ctx, eye, e.getBoundingBox().getCenter(), null)) continue; // behind a wall
 			if (Hurt.knock(e, look, strength, KNOCK_UP)) {
 				shoved.add(e.getId());
 				effect.carried.add(e.getId()); // already shoved: the wave only douses it
+				chill(ctx, e);
 			}
 		}
 		// Douse anything burning in the cone (players and pets too: it only puts them out).
@@ -124,6 +150,13 @@ public final class TidalPush implements Spell {
 				.withData((float) range));
 	}
 
+	/** Frigid Wave: what the wave moves is slowed (a control effect: never a boss). */
+	static void chill(CastContext ctx, Entity e) {
+		if (ctx.rank().is(FRIGID) && e instanceof LivingEntity l && TargetFilter.controllable(ctx.caster(), l)) {
+			l.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, FRIGID_TICKS, 2), ctx.caster());
+		}
+	}
+
 	/** True when nothing solid stands between the eye and {@code to} (a hit on {@code cell} itself, if given, counts as clear). */
 	private static boolean visible(CastContext ctx, Vec3 eye, Vec3 to, @Nullable BlockPos cell) {
 		BlockHitResult hit = ctx.level().clip(new ClipContext(eye, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, ctx.caster()));
@@ -135,6 +168,8 @@ public final class TidalPush implements Spell {
 		private final CastContext ctx;
 		private final TidalWaveGeometry wave;
 		final Set<Integer> carried = new HashSet<>();
+		/** Breaker: what the wave has struck. */
+		private final Set<Integer> struck = new HashSet<>();
 		private final Map<Integer, EditBatch> batches = new HashMap<>();
 		/** The columns' state, moved by {@link TidalWaveGeometry#step} each tick (the client runs the same rule). */
 		private final int[] colY;
@@ -157,7 +192,12 @@ public final class TidalPush implements Spell {
 			for (Entity e : level.getEntities((Entity) null, box, e -> wave.inFront(age, e.position(), colY, broken))) {
 				if (e.isOnFire()) e.extinguishFire();
 				if (TargetFilter.pushable(ctx.caster(), e) && carried.add(e.getId())) {
-					Hurt.knock(e, wave.dir(), CARRY * ctx.power(), CARRY_UP);
+					Hurt.knock(e, wave.dir(), CARRY * ctx.power() * (ctx.rank().is(TSUNAMI) ? 2 : 1), CARRY_UP);
+					chill(ctx, e);
+				}
+				// Breaker: the wave strikes what it reaches (each once, the cone's shoved too).
+				if (ctx.rank().is(BREAKER) && e instanceof LivingEntity l && TargetFilter.affects(ctx.caster(), l) && struck.add(e.getId())) {
+					Hurt.damage(ctx, l, BREAKER_DAMAGE * ctx.power());
 				}
 			}
 			int seg = wave.segmentOf(wave.at(age));

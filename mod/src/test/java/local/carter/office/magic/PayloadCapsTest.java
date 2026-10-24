@@ -27,11 +27,14 @@ class PayloadCapsTest {
 		return new FriendlyByteBuf(Unpooled.buffer());
 	}
 
-	/** Encodes {@link #base()} (empty arrays, so the last two bytes are the two zero counts) without those last {@code drop} bytes. */
+	/**
+	 * Encodes {@link #base()} (empty arrays, so before the trailing rank byte come the two zero counts) without the rank byte and
+	 * the last {@code drop} bytes before it.
+	 */
 	private static FriendlyByteBuf prefix(int drop) {
 		FriendlyByteBuf b = buf();
 		FxEvent.STREAM_CODEC.encode(b, base());
-		b.writerIndex(b.writerIndex() - drop);
+		b.writerIndex(b.writerIndex() - drop - 1);
 		return b;
 	}
 
@@ -52,6 +55,27 @@ class PayloadCapsTest {
 		FriendlyByteBuf p = buf();
 		CastFx.CODEC.encode(p, new CastFx(e));
 		assertEquals(e, CastFx.CODEC.decode(p).event());
+	}
+
+	@Test void rankRidesInTheFxAndTheTreePayloadsRoundTrip() {
+		int packed = new local.carter.office.magic.tree.SpellRank(SpellIds.FIRE_BOLT, 5, 2, 1).packed();
+		FxEvent e = new FxEvent(SpellIds.FIRE_BOLT, 42, new Vec3(1, 2, 3), new Vec3(0, 0, 1), new Vec3(1, 2, 11), 0.5f, 1.5f, 77L, 0,
+				new int[0], new float[0], packed).withData(1f).withDir(new Vec3(1, 0, 0));
+		assertEquals(packed, e.rank(), "the builders keep the rank");
+		FriendlyByteBuf b = buf();
+		FxEvent.STREAM_CODEC.encode(b, e);
+		assertEquals(e, FxEvent.STREAM_CODEC.decode(b));
+		assertEquals(5, e.spellRank().rank());
+		MagicPayloads.TreeResult r = new MagicPayloads.TreeResult(SpellIds.METEOR, packed, local.carter.office.magic.tree.TreeService.Outcome.NO_ITEMS);
+		MagicPayloads.TreeResult.CODEC.encode(b, r);
+		assertEquals(r, MagicPayloads.TreeResult.CODEC.decode(b));
+		MagicPayloads.ChooseFork f = new MagicPayloads.ChooseFork(SpellIds.GUST, 3, 2);
+		MagicPayloads.ChooseFork.CODEC.encode(b, f);
+		assertEquals(f, MagicPayloads.ChooseFork.CODEC.decode(b));
+		MagicPayloads.RankUp u = new MagicPayloads.RankUp(SpellIds.QUAKE);
+		MagicPayloads.RankUp.CODEC.encode(b, u);
+		assertEquals(u, MagicPayloads.RankUp.CODEC.decode(b));
+		assertEquals(0, b.readableBytes());
 	}
 
 	@Test void buildersClampToCaps() {

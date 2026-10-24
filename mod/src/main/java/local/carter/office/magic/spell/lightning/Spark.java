@@ -14,6 +14,8 @@ import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.LivingEntity;
@@ -26,6 +28,10 @@ import net.minecraft.world.phys.Vec3;
  * {@link #arcRange} (4 → 8) of the last one (centre to centre, in its sight; a control effect, so never a boss: {@link Arcs}),
  * for 60 % of that. No block changes.
  *
+ * <p>Ranks lengthen the zap (the size knob). Forks: III {@link #FORKED} (+1 arc, a knob) or {@link #STATIC} (Glowing and
+ * Slowness I, riders); V {@link #OVERCHARGE} (arcs hit for the full damage and leap {@link #OVERCHARGE_LEAP}× as far) or
+ * {@link #STUN} (Slowness IV, a rider).
+ *
  * <p>Fx: {@code target} = the end of the zap (the struck target's middle, else where the look meets a block or the range ends);
  * {@code entities} = the struck target, then the arcs' targets in order (empty on a miss); no {@code data}.
  */
@@ -35,6 +41,31 @@ public final class Spark implements Spell {
 	public static final float DAMAGE = 3;
 	public static final double ARC_RANGE = 4;
 	public static final float ARC_SHARE = 0.6F;
+	public static final String FORKED = "forked";
+	public static final String STATIC = "static";
+	public static final String OVERCHARGE = "overcharge";
+	public static final String STUN = "stun";
+	public static final double OVERCHARGE_LEAP = 1.5;
+
+	/** The zap's reach at {@code charge} and {@code rank} (the size knob). */
+	public static double range(float charge, SpellRank rank) {
+		return range(charge) * rank.mul(Knob.SIZE);
+	}
+
+	/** Arcs at {@code charge} and {@code rank} (Forked's extra). */
+	public static int arcs(float charge, SpellRank rank) {
+		return arcs(charge) + Math.round(rank.add(Knob.COUNT));
+	}
+
+	/** How far an arc leaps at {@code charge} and {@code rank} (Overcharge's ×1.5). */
+	public static double arcRange(float charge, SpellRank rank) {
+		return arcRange(charge) * (rank.is(OVERCHARGE) ? OVERCHARGE_LEAP : 1);
+	}
+
+	/** What an arc deals, as a share of the zap: {@link #ARC_SHARE}, all of it with Overcharge. */
+	public static float arcShare(SpellRank rank) {
+		return rank.is(OVERCHARGE) ? 1F : ARC_SHARE;
+	}
 
 	/** How far the zap reaches at {@code charge}: 16, 32 at full charge. */
 	public static double range(float charge) {
@@ -68,15 +99,15 @@ public final class Spark implements Spell {
 
 	@Override
 	public CastOutcome cast(CastContext ctx) {
-		double range = range(ctx.charge());
+		double range = range(ctx.charge(), ctx.rank());
 		Optional<LivingEntity> hit = Targets.ray(ctx, range, FORGIVENESS);
 		if (hit.isEmpty()) return CastOutcome.cast(ctx.fx().withTarget(Targets.point(ctx, range)));
 		LivingEntity first = hit.get();
 		float damage = DAMAGE * ctx.power();
 		// Pick the arc before the hit lands, so a target the zap kills still passes it on.
-		List<LivingEntity> struck = Arcs.chain(ctx, first, arcs(ctx.charge()), arcRange(ctx.charge()));
+		List<LivingEntity> struck = Arcs.chain(ctx, first, arcs(ctx.charge(), ctx.rank()), arcRange(ctx.charge(), ctx.rank()));
 		Hurt.damage(ctx, first, damage);
-		for (int i = 1; i < struck.size(); i++) Hurt.damage(ctx, struck.get(i), damage * ARC_SHARE);
+		for (int i = 1; i < struck.size(); i++) Hurt.damage(ctx, struck.get(i), damage * arcShare(ctx.rank()));
 		Vec3 end = Arcs.centre(first);
 		return CastOutcome.cast(ctx.fx().withTarget(end).withEntities(Arcs.ids(struck)));
 	}

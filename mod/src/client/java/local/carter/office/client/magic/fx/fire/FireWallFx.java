@@ -5,10 +5,12 @@ import java.util.Set;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.fire.FireWall;
 import local.carter.office.magic.spell.fire.FireWallGeometry;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -50,8 +52,13 @@ public final class FireWallFx implements SpellFx {
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
-		FireWallGeometry g = FireWallGeometry.of(e.target(), e.dir(), e.charge());
+		SpellRank rank = e.spellRank();
+		FireWallGeometry g = FireWallGeometry.of(e.target(), e.dir(), e.charge(), rank);
 		int life = Math.max(1, e.duration() > 0 ? e.duration() : g.duration());
+		boolean marching = rank.is(FireWall.MARCHING);
+		boolean inferno = rank.is(FireWall.INFERNO);
+		// Marching Wall: the sheets drift along with it (the server rolls it MARCH_DISTANCE over its life).
+		Vec3 drift = marching ? g.forward().scale(FireWall.MARCH_DISTANCE / life) : Vec3.ZERO;
 		float c = Mth.clamp(e.charge(), 0F, 1F);
 		Vec3 base = g.base();
 		double halfW = g.width() / 2;
@@ -76,24 +83,32 @@ public final class FireWallFx implements SpellFx {
 
 		Set<Integer> burnt = new HashSet<>();
 		kit.simulate(1, life, t -> {
-			if (t % ROW_DELAY == 0 && t / ROW_DELAY < ROW_SIZE.length) row(level, kit, g, r, fire, t / ROW_DELAY, life - t);
-			burnProjectiles(level, kit, g, burnt);
+			FireWallGeometry g0 = marching ? g.marched(FireWall.march(t, life)) : g;
+			if (t % ROW_DELAY == 0 && t / ROW_DELAY < ROW_SIZE.length) row(level, kit, g0, r, fire, t / ROW_DELAY, life - t, drift);
+			burnProjectiles(level, kit, g0, burnt);
+			if (inferno && t % 2 == 1) {
+				// Inferno: it roars, twice the flames licking up it.
+				Vec3 at = g0.point(FireBoltFx.jitter(r, halfW), r.nextDouble() * g0.height() * 0.8);
+				FireBoltFx.add(kit, level, ParticleTypes.FLAME, at, new Vec3(FireBoltFx.jitter(r, 0.02), 0.08 + 0.05 * r.nextDouble(), FireBoltFx.jitter(r, 0.02)));
+			}
+			if (t == life - 1 && rank.is(FireWall.BACKDRAFT)) backdraft(level, kit, g0, r);
 			if (t % 2 != 0) return;
+			FireWallGeometry w = g0;
 			boolean ending = t >= life - 8;
 			// A flame licking up the curtain.
-			Vec3 at = g.point(FireBoltFx.jitter(r, halfW), r.nextDouble() * g.height() * 0.7).add(g.forward().scale(FireBoltFx.jitter(r, 0.35)));
+			Vec3 at = w.point(FireBoltFx.jitter(r, halfW), r.nextDouble() * w.height() * 0.7).add(w.forward().scale(FireBoltFx.jitter(r, 0.35)));
 			FireBoltFx.add(kit, level, ParticleTypes.FLAME, at, new Vec3(FireBoltFx.jitter(r, 0.01), 0.05 + 0.05 * r.nextDouble(), FireBoltFx.jitter(r, 0.01)));
 			if (!ending) {
 				// A spark of heat in front of the curtain (small and orange: wide additive glows wash out to white).
-				Vec3 heat = g.point(FireBoltFx.jitter(r, halfW * 0.9), 0.3 + r.nextDouble() * (g.height() - 0.5)).subtract(g.forward().scale(0.45));
+				Vec3 heat = w.point(FireBoltFx.jitter(r, halfW * 0.9), 0.3 + r.nextDouble() * (w.height() - 0.5)).subtract(w.forward().scale(0.45));
 				FireBoltFx.glow(kit, level, heat, new Vec3(0, 0.03, 0), FireBoltFx.HOT, 0.14F + 0.08F * r.nextFloat(), 16, GlowMote.Drift.RISE);
 			}
 			if (t % 6 == 0) {
-				Vec3 top = g.point(FireBoltFx.jitter(r, halfW), g.height());
+				Vec3 top = w.point(FireBoltFx.jitter(r, halfW), w.height());
 				kit.motes(top, FireBoltFx.HOT, 1, 0.2, new Vec3(0, 0.06, 0), 0.03, GlowMote.Drift.RISE, 0.07F, 30);
 			}
 			if (t % 8 == 0) {
-				FireBoltFx.add(kit, level, ParticleTypes.LARGE_SMOKE, g.point(FireBoltFx.jitter(r, halfW), g.height() - 0.3), new Vec3(0, 0.05, 0));
+				FireBoltFx.add(kit, level, ParticleTypes.LARGE_SMOKE, w.point(FireBoltFx.jitter(r, halfW), w.height() - 0.3), new Vec3(0, 0.05, 0));
 			}
 			if (t % 24 == 0) {
 				level.playLocalSound(base.x, base.y + 1, base.z, SoundEvents.FIRE_AMBIENT, SoundSource.PLAYERS, 1.2F, 0.7F + r.nextFloat() * 0.3F, false);
@@ -101,18 +116,31 @@ public final class FireWallFx implements SpellFx {
 			if (ending) {
 				// It smokes out.
 				for (int i = 0; i < 2; i++) {
-					FireBoltFx.add(kit, level, ParticleTypes.SMOKE, g.point(FireBoltFx.jitter(r, halfW), r.nextDouble() * 1.5), new Vec3(0, 0.04, 0));
+					FireBoltFx.add(kit, level, ParticleTypes.SMOKE, w.point(FireBoltFx.jitter(r, halfW), r.nextDouble() * 1.5), new Vec3(0, 0.04, 0));
 				}
 				if (t >= life - 2) level.playLocalSound(base.x, base.y + 1, base.z, SoundEvents.FIRE_EXTINGUISH, SoundSource.PLAYERS, 0.6F, 0.8F, false);
 			}
 		});
 	}
 
+	/** Backdraft: the dying wall bursts in a flash along its whole width. */
+	private static void backdraft(ClientLevel level, FxKit kit, FireWallGeometry g, RandomSource r) {
+		double halfW = g.width() / 2;
+		RankFx.blast(kit, level, g.point(0, 0.2), FireWall.BACKDRAFT_RADIUS + halfW * 0.5, FireBoltFx.HOT, ParticleTypes.LAVA);
+		for (int i = 0; i < 24; i++) {
+			Vec3 at = g.point(FireBoltFx.jitter(r, halfW), r.nextDouble() * g.height());
+			Vec3 v = g.forward().scale(FireBoltFx.jitter(r, 0.3)).add(FireBoltFx.jitter(r, 0.1), 0.1 + 0.1 * r.nextDouble(), FireBoltFx.jitter(r, 0.1));
+			FireBoltFx.add(kit, level, ParticleTypes.FLAME, at, v);
+		}
+		kit.motes(g.point(0, 1), FireBoltFx.HOT, 20, halfW, Vec3.ZERO, 0.2, GlowMote.Drift.COAST, 0.16F, 10);
+	}
+
 	/**
 	 * One row of flame sheets along the wall's line: every other row shifted half a step, each sheet nudged along and across the
 	 * wall and a little varied in size, so the curtain is one ragged, deep sheet of fire with no grid and no stair steps.
 	 */
-	private static void row(ClientLevel level, FxKit kit, FireWallGeometry g, RandomSource r, TextureAtlasSprite fire, int row, int life) {
+	private static void row(ClientLevel level, FxKit kit, FireWallGeometry g, RandomSource r, TextureAtlasSprite fire, int row, int life,
+			Vec3 drift) {
 		double halfW = g.width() / 2 - 0.25;
 		boolean crown = row == ROW_SIZE.length - 1;
 		for (double s = -halfW + (row % 2) * SPACING / 2; s <= halfW + 1e-6; s += SPACING) {
@@ -125,7 +153,7 @@ public final class FireWallFx implements SpellFx {
 			// Upper rows burn a little redder.
 			float green = 0.74F - 0.06F * row;
 			Minecraft.getInstance().particleEngine.add(new Flame(level, at, fire, size, life, r.nextBoolean(), r.nextFloat() * Mth.TWO_PI, green,
-					row == 0 ? 0F : CROP));
+					row == 0 ? 0F : CROP).drift(drift));
 		}
 	}
 
@@ -176,6 +204,13 @@ public final class FireWallFx implements SpellFx {
 			setSize(2 * size, 2 * size);
 			place(0);
 			this.yo = this.y;
+		}
+
+		/** Moves the sheet {@code v} a tick (level part; Marching Wall), keeping it on its row's line. */
+		Flame drift(Vec3 v) {
+			this.xd = v.x;
+			this.zd = v.z;
+			return this;
 		}
 
 		@Override

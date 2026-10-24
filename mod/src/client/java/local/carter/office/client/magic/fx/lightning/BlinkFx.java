@@ -2,9 +2,12 @@ package local.carter.office.client.magic.fx.lightning;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.lightning.Blink;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.particles.ParticleTypes;
@@ -57,6 +60,14 @@ public final class BlinkFx implements SpellFx {
 		kit.trail(start.add(0, 0.1, 0), end.add(0, 0.1, 0), ParticleTypes.ELECTRIC_SPARK, (int) Math.min(18, travelled * 1.4));
 
 		Volts.zap(kit, level, all, to, own ? 0.5F : 0.85F + 0.2F * c);
+		// The forks: Static Step's shocks at both ends, Thunderclap's ring, Surge's crackle round the caster.
+		SpellRank rank = e.spellRank();
+		if (rank.is(Blink.STATIC_STEP)) {
+			RankFx.blast(kit, level, body, Blink.STATIC_RADIUS, LightningLook.YELLOW, ParticleTypes.ELECTRIC_SPARK);
+			RankFx.blast(kit, level, to, Blink.STATIC_RADIUS, LightningLook.YELLOW, ParticleTypes.ELECTRIC_SPARK);
+		}
+		if (rank.is(Blink.THUNDERCLAP)) RankFx.shockRing(kit, level, end.add(0, 0.1, 0), Blink.CLAP_RADIUS, 6, LightningLook.CORE, ParticleTypes.ELECTRIC_SPARK);
+		if (rank.is(Blink.SURGE)) RankFx.aura(kit, level, e.casterId(), LightningLook.YELLOW, Blink.SURGE_TICKS);
 		Volts.ground(kit, all, end.add(0, 0.05, 0));
 		Volts.crawl(kit, level, all, e.casterId(), seed + 11);
 		level.playLocalSound(to.x, to.y, to.z, SoundEvents.FIREWORK_ROCKET_TWINKLE, SoundSource.PLAYERS, 0.55F, 1.6F + 0.2F * c, false);

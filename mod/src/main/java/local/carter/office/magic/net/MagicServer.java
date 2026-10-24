@@ -14,21 +14,25 @@ import local.carter.office.magic.cast.ElementChoice;
 import local.carter.office.magic.cast.Travel;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
-import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.data.MagicData;
+import local.carter.office.magic.item.GrimoireItem;
 import local.carter.office.magic.net.MagicPayloads.CancelCharge;
 import local.carter.office.magic.net.MagicPayloads.CastFx;
 import local.carter.office.magic.net.MagicPayloads.ChooseElement;
+import local.carter.office.magic.net.MagicPayloads.ChooseFork;
 import local.carter.office.magic.net.MagicPayloads.FxCancel;
 import local.carter.office.magic.net.MagicPayloads.OpenGrimoire;
+import local.carter.office.magic.net.MagicPayloads.RankUp;
 import local.carter.office.magic.net.MagicPayloads.SelectSpell;
 import local.carter.office.magic.net.MagicPayloads.SignChallenge;
 import local.carter.office.magic.net.MagicPayloads.TravelRequest;
 import local.carter.office.magic.net.MagicPayloads.TravelRoster;
 import local.carter.office.magic.net.MagicPayloads.TravelRosterQuery;
+import local.carter.office.magic.net.MagicPayloads.TreeResult;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellKit;
 import local.carter.office.magic.spell.SpellRegistry;
+import local.carter.office.magic.tree.TreeService;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -48,12 +52,16 @@ public final class MagicServer {
 	public static final double CANCEL_RANGE = 128;
 	/** {@code SelectSpell} packets handled per player per second (20 ticks); the rest are ignored. */
 	public static final int SELECTS_PER_SECOND = 20;
+	/** {@code RankUp} and {@code ChooseFork} packets handled per player per second, together; the rest are ignored. */
+	public static final int TREE_PER_SECOND = 10;
 
 	private static final MagicSender NETWORK = new NetworkSender();
 	private static @Nullable MagicSender testSender;
 	private static SpellKit kit = SpellKit.NONE;
 	/** Player → {second (server tick / 20), SelectSpell packets handled in it}. Server thread only. */
 	private static final Map<UUID, long[]> SELECTS = new HashMap<>();
+	/** Player → {second, RankUp / ChooseFork packets handled in it}. Server thread only. */
+	private static final Map<UUID, long[]> TREE = new HashMap<>();
 
 	private MagicServer() {}
 
@@ -90,6 +98,30 @@ public final class MagicServer {
 			Travel.query(ctx.player()); // the page shows the outcome (throttled like any roster query)
 		});
 		ServerPlayNetworking.registerGlobalReceiver(TravelRosterQuery.TYPE, (p, ctx) -> Travel.query(ctx.player()));
+		ServerPlayNetworking.registerGlobalReceiver(RankUp.TYPE, (p, ctx) -> {
+			if (allowTree(ctx.player())) TreeService.rankUp(ctx.player(), p.spell());
+		});
+		ServerPlayNetworking.registerGlobalReceiver(ChooseFork.TYPE, (p, ctx) -> {
+			if (allowTree(ctx.player())) TreeService.chooseFork(ctx.player(), p.spell(), p.rank(), p.option());
+		});
+	}
+
+	/**
+	 * The {@code RankUp} / {@code ChooseFork} throttle: at most {@link #TREE_PER_SECOND} per player each second, the rest ignored
+	 * (a flood can't make the server re-check inventories and re-sync data every packet).
+	 */
+	public static boolean allowTree(ServerPlayer p) {
+		return allow(TREE, p, TREE_PER_SECOND);
+	}
+
+	private static boolean allow(Map<UUID, long[]> windows, ServerPlayer p, int perSecond) {
+		long second = p.level().getServer().getTickCount() / 20;
+		long[] window = windows.computeIfAbsent(p.getUUID(), id -> new long[] {second, 0});
+		if (window[0] != second) {
+			window[0] = second;
+			window[1] = 0;
+		}
+		return ++window[1] <= perSecond;
 	}
 
 	/**
@@ -107,20 +139,21 @@ public final class MagicServer {
 	 * the rest are ignored, so a flood cannot make the server re-sync the player's data and re-stamp the grimoire every packet.
 	 */
 	public static boolean receiveSelect(ServerPlayer p, Identifier spell) {
-		long second = p.level().getServer().getTickCount() / 20;
-		long[] window = SELECTS.computeIfAbsent(p.getUUID(), id -> new long[] {second, 0});
-		if (window[0] != second) {
-			window[0] = second;
-			window[1] = 0;
-		}
-		if (++window[1] > SELECTS_PER_SECOND) return false;
+		if (!allow(SELECTS, p, SELECTS_PER_SECOND)) return false;
 		return select(p, spell);
 	}
 
-	/** A player left (or the server stops, with {@code null}): forget their select throttle. */
+	/** A player left (or the server stops, with {@code null}): forget their throttles and re-pick window. */
 	public static void forget(@Nullable ServerPlayer p) {
-		if (p == null) SELECTS.clear();
-		else SELECTS.remove(p.getUUID());
+		if (p == null) {
+			SELECTS.clear();
+			TREE.clear();
+			TreeService.clear();
+		} else {
+			SELECTS.remove(p.getUUID());
+			TREE.remove(p.getUUID());
+			TreeService.forget(p);
+		}
 	}
 
 	/** Selects {@code spell} if it is one of the player's unlocked spells; anything else is ignored. */
@@ -191,6 +224,11 @@ public final class MagicServer {
 
 		@Override
 		public void roster(ServerPlayer p, TravelRoster r) {
+			send(p, r);
+		}
+
+		@Override
+		public void treeResult(ServerPlayer p, TreeResult r) {
 			send(p, r);
 		}
 	}

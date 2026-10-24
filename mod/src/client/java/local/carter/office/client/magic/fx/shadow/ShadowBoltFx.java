@@ -12,6 +12,7 @@ import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.shadow.ShadowBolt;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -25,8 +26,12 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
  * Shadow Bolt: a small violet circle snaps open before the caster and a ball of darkness ringed with violet light streaks out
@@ -47,7 +52,6 @@ public final class ShadowBoltFx implements SpellFx {
 		float[] data = e.data();
 		double speed = data.length > 0 && data[0] > 0 ? data[0] : ShadowBolt.SPEED;
 		double radius = data.length > 1 ? data[1] : ShadowBolt.RADIUS;
-		ProjectileSpec spec = new ProjectileSpec(origin, dir.scale(speed), 0, radius, ShadowBolt.MAX_TICKS, false);
 		double stop = e.target().distanceTo(origin);
 		// The server names the wall it meets, or the end of its range: a bolt that runs out just thins away.
 		boolean spent = stop >= speed * ShadowBolt.MAX_TICKS - 0.01;
@@ -61,19 +65,46 @@ public final class ShadowBoltFx implements SpellFx {
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.ILLUSIONER_CAST_SPELL, SoundSource.PLAYERS, 0.55F, 0.65F + 0.15F * (1 - c), false);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.WITHER_SHOOT, SoundSource.PLAYERS, 0.18F + 0.1F * c, 1.7F - 0.3F * c, false);
 
-		// As big as the server's bolt (ShadowBolt.radius): twice a tap's at full charge.
-		float size = 0.3F * (1F + c);
+		SpellRank rank = e.spellRank();
+		if (!rank.is(ShadowBolt.TWIN)) {
+			bolt(e, level, kit, dir, speed, radius, stop, spent, c, rank.is(ShadowBolt.VOID_LANCE));
+			return;
+		}
+		// Twin Bolts: each finds its own wall on this client (the server sent the look's).
+		double range = speed * ShadowBolt.MAX_TICKS;
+		for (Vec3 d : ShadowBolt.dirs(dir, rank)) {
+			Vec3 u = d.normalize();
+			BlockHitResult wall = level.clip(new ClipContext(origin, origin.add(u.scale(range)), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE,
+					CollisionContext.empty()));
+			double at = wall.getType() == HitResult.Type.MISS ? range : wall.getLocation().distanceTo(origin);
+			bolt(e, level, kit, u, speed, radius, at, at >= range - 0.01, c, false);
+		}
+	}
+
+	/** One bolt along {@code dir}, stopping at {@code stop} blocks (or at the first creature, unless it pierces). */
+	private static void bolt(FxEvent e, ClientLevel level, FxKit kit, Vec3 dir, double speed, double radius, double stop, boolean spent,
+			float c, boolean pierce) {
+		Vec3 origin = e.origin();
+		ProjectileSpec spec = new ProjectileSpec(origin, dir.scale(speed), 0, radius, ShadowBolt.MAX_TICKS, false);
+		// As big as the server's bolt (ShadowBolt.spec's radius): twice a tap's at full charge, the rank's size on top.
+		float size = 0.3F * (float) (radius / ShadowBolt.RADIUS);
 		Head head = new Head(level, origin, dir, speed, (float) Math.min(ShadowBolt.MAX_TICKS, stop / speed), size);
 		if (kit.budget().particles(Head.cost()) >= Head.cost()) Minecraft.getInstance().particleEngine.add(head);
 
 		boolean[] done = {false};
 		Vec3[] last = {origin.add(dir.scale(TRAIL_CLEAR))};
-		kit.simulate(1, e.duration() + 1, t -> {
+		int flight = (int) Math.min(ShadowBolt.MAX_TICKS, Math.ceil(stop / speed));
+		kit.simulate(1, Math.max(1, flight) + 1, t -> {
 			if (done[0]) return;
 			double b = Math.min((t + 1) * speed, stop);
 			Vec3 from = Projectiles.step(spec, t);
 			Vec3 to = origin.add(dir.scale(b));
 			Optional<Vec3> hit = sweep(level, e.casterId(), from, to, radius);
+			if (hit.isPresent() && pierce) {
+				// Void Lance: it tears through and flies on.
+				kit.burst(hit.get(), ParticleTypes.REVERSE_PORTAL, 10, 0.2);
+				hit = Optional.empty();
+			}
 			boolean wall = (t + 1) * speed >= stop;
 			Vec3 at = hit.orElse(to);
 			double atDist = at.distanceTo(origin);

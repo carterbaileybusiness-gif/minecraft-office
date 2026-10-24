@@ -4,6 +4,7 @@ import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.LightPipeline;
 import local.carter.office.client.magic.fx.MagicCircleRenderer;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
@@ -16,6 +17,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.ParticleRenderType;
 import net.minecraft.client.particle.SingleQuadParticle;
 import net.minecraft.client.renderer.state.level.QuadParticleRenderState;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.LightCoordsUtil;
@@ -33,6 +35,21 @@ public final class AirStepFx implements SpellFx {
 	/** Ticks the motes trail the caster. */
 	private static final int TRAIL = 10;
 
+	/** Shockwave Landing: when the caster comes back down, a blast ring round their feet (as the server's). */
+	private static void landing(FxEvent e, ClientLevel level, FxKit kit) {
+		boolean[] state = {false, false}; // airborne, landed
+		kit.simulate(1, AirStep.SHOCKWAVE_WAIT, t -> {
+			Entity caster = level.getEntity(e.casterId());
+			if (caster == null || state[1]) return;
+			if (!caster.onGround()) state[0] = true;
+			else if (state[0] || t > 10) {
+				state[1] = true;
+				RankFx.blast(kit, level, caster.position().add(0, 0.1, 0), AirStep.SHOCKWAVE_RADIUS, PALE, ParticleTypes.GUST);
+				RankFx.shockRing(kit, level, caster.position().add(0, 0.1, 0), AirStep.SHOCKWAVE_RADIUS, 6, 0xFFFFFF, null);
+			}
+		});
+	}
+
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
 		float c = Mth.clamp(e.charge(), 0F, 1F);
@@ -44,6 +61,7 @@ public final class AirStepFx implements SpellFx {
 				1.45F - 0.2F * c + level.getRandom().nextFloat() * 0.1F, false);
 		level.playLocalSound(feet.x, feet.y, feet.z, SoundEvents.BREEZE_JUMP, SoundSource.PLAYERS, 0.8F, 1.2F, false);
 		kit.fovKick(0.04F + 0.03F * c);
+		if (e.spellRank().is(AirStep.SHOCKWAVE)) landing(e, level, kit);
 
 		// Two level rings bursting out from the feet, the second a little later and wider.
 		for (int k = 0; k < 2; k++) {

@@ -21,6 +21,8 @@ import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -50,9 +52,14 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * the creatures it holds take {@code 1 × (1 + charge)}; a boss in reach takes that damage too but is never lifted. At most {@link Targets#MAX_ENTITIES} things and {@link #MAX_CLIPS} sight checks a tick.
  * No block changes.
  *
+ * <p>Ranks widen the funnel (the size knob). Forks: III {@link #LONG_STORM} (lasts {@link #LONG_STORM_LIFE}× as long) or
+ * {@link #SANDBLAST} (hurts every {@link #SANDBLAST_EVERY} ticks); V {@link #TWIN} (a second tornado leaves
+ * {@link #TWIN_ANGLE}° to the side; its own caster slot) or {@link #EYE} (radius {@link #EYE_RADIUS}×, pull in twice as hard).
+ *
  * <p>Fx: {@code target} = the start (on the ground), {@code dir} = the level travel direction, {@code duration} = the life in
- * ticks. The client rebuilds the path with {@code new TornadoGeometry(target, dir, duration)} and {@link #follow}, and the
- * funnel's width from {@code charge} ({@link TornadoGeometry#radius}).
+ * ticks. The client rebuilds the path with {@code new TornadoGeometry(target, dir, duration)} and {@link #follow}, the funnel's
+ * width from {@code charge} and the rank ({@link TornadoGeometry#radius(float, SpellRank)}), and Twin Tornadoes' second one turned
+ * by {@link #twinDir}.
  */
 public final class Tornado implements Spell {
 	/** Highest step the base climbs in a tick, and deepest drop it follows. */
@@ -61,6 +68,25 @@ public final class Tornado implements Spell {
 	static final int MAX_CLIPS = 128;
 	/** Velocities are synced to clients every this many ticks. */
 	static final int SYNC_EVERY = 2;
+	public static final String LONG_STORM = "long_storm";
+	public static final String SANDBLAST = "sandblast";
+	public static final String TWIN = "twin";
+	public static final String EYE = "eye";
+	public static final float LONG_STORM_LIFE = 1.6F;
+	public static final int SANDBLAST_EVERY = 5;
+	public static final float TWIN_ANGLE = 30;
+	public static final double EYE_RADIUS = 1.5;
+	public static final double EYE_PULL = 2;
+
+	/** Twin Tornadoes' second one's travel: {@code dir} turned {@link #TWIN_ANGLE}° (shared with the fx). */
+	public static Vec3 twinDir(Vec3 dir) {
+		return dir.yRot((float) Math.toRadians(TWIN_ANGLE));
+	}
+
+	/** The life at {@code charge} and {@code rank} (Long Storm). */
+	public static int life(float charge, SpellRank rank) {
+		return Math.round(TornadoGeometry.life(charge) * (rank.is(LONG_STORM) ? LONG_STORM_LIFE : 1));
+	}
 
 	@Override
 	public Identifier id() {
@@ -82,11 +108,11 @@ public final class Tornado implements Spell {
 		if (ActiveEffects.full(ctx.caster().getUUID())) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Vec3 start = start(ctx);
 		Vec3 dir = AirStep.lookH(ctx.look(), ctx.caster().getYRot());
-		TornadoGeometry geo = new TornadoGeometry(start, dir, TornadoGeometry.life(ctx.charge()));
+		TornadoGeometry geo = new TornadoGeometry(start, dir, life(ctx.charge(), ctx.rank()));
 		if (!ActiveEffects.add(ctx, new Twister(ctx, geo))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (ctx.rank().is(TWIN)) ActiveEffects.add(ctx, new Twister(ctx, new TornadoGeometry(start, twinDir(geo.dir()), geo.life())));
 		FxEvent fx = ctx.fx();
-		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), geo.dir(), start, fx.charge(), fx.power(), fx.seed(),
-				geo.life(), new int[0], new float[0]));
+		return CastOutcome.cast(fx.withDir(geo.dir()).withTarget(start).withDuration(geo.life()));
 	}
 
 	/** The start: the ray point stepped 0.3 back toward the eye (off a wall's face), moved down to the ground of its column. */
@@ -168,12 +194,13 @@ public final class Tornado implements Spell {
 			if (!level.isLoaded(BlockPos.containing(flat.x, y, flat.z))) return false;
 			y = follow(level, flat.x, flat.z, y);
 			Vec3 base = new Vec3(flat.x, y, flat.z);
-			double r = TornadoGeometry.radius(ctx.charge());
+			double r = TornadoGeometry.radius(ctx.charge(), ctx.rank());
+			double inward = ctx.rank().is(EYE) ? EYE_PULL : 1;
 			AABB reach = new AABB(base.x - r, base.y - TornadoGeometry.BELOW, base.z - r, base.x + r, base.y + TornadoGeometry.HEIGHT, base.z + r);
 			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, reach,
 					e -> catches(ctx, e) && TornadoGeometry.inReach(base, e.position(), r)));
 			caught.sort(Comparator.comparingDouble(e -> e.position().distanceToSqr(base)));
-			boolean hurt = age % TornadoGeometry.HURT_EVERY == 0;
+			boolean hurt = age % (ctx.rank().is(SANDBLAST) ? SANDBLAST_EVERY : TornadoGeometry.HURT_EVERY) == 0;
 			boolean sync = age % SYNC_EVERY == 0;
 			int n = 0;
 			int clips = 0;
@@ -186,14 +213,16 @@ public final class Tornado implements Spell {
 				if (lifts(ctx, e)) {
 					double scale = 1;
 					if (e instanceof LivingEntity l) scale = Math.max(0, 1 - l.getAttributeValue(Attributes.KNOCKBACK_RESISTANCE));
-					Vec3 v = e.getDeltaMovement().lerp(geo.push(base, mid), scale);
+					Vec3 v = e.getDeltaMovement().lerp(geo.push(base, mid, inward), scale);
 					e.setDeltaMovement(v);
 					if (sync) {
 						e.syncVelocity = true;
 						e.needsSync = true;
 					}
 				}
-				if (hurt && e instanceof LivingEntity l && hurtBudget.admit(l)) Hurt.damage(ctx, l, TornadoGeometry.HURT * ChargeMath.size(ctx.charge()));
+				if (hurt && e instanceof LivingEntity l && hurtBudget.admit(l)) {
+					Hurt.damage(ctx, l, TornadoGeometry.HURT * ChargeMath.size(ctx.charge()) * ctx.rank().mul(Knob.DAMAGE));
+				}
 			}
 			return age < geo.life();
 		}

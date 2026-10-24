@@ -7,6 +7,7 @@ import java.util.Set;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.water.BubbleShield;
@@ -65,6 +66,8 @@ public final class BubbleShieldFx implements SpellFx {
 				popped[0] = true;
 				bubble.pop();
 				pop(kit, level, c, radius, r);
+				// Pop: run out, it bursts outward.
+				if (!gone && e.spellRank().is(BubbleShield.POP)) RankFx.blast(kit, level, c, radius, WaterFx.LIGHT, ParticleTypes.SPLASH);
 				return;
 			}
 			if (t > 0 && t % 10 == 0 && kit.budget().particles(step) < step) bubble.dim();

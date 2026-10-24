@@ -12,6 +12,7 @@ import org.jspecify.annotations.Nullable;
 import local.carter.office.OfficeMod;
 import local.carter.office.magic.core.Dir;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.tree.TreeService;
 
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -166,7 +167,66 @@ public final class MagicPayloads {
 		}
 	}
 
+	/**
+	 * The answer to a {@code RankUp} or {@code ChooseFork}: the spell, its rank now ({@code SpellRank.packed()}) and what happened.
+	 * The Skill tree plays its burst on {@code OK} and shows the reason otherwise.
+	 */
+	public record TreeResult(Identifier spell, int rank, TreeService.Outcome outcome) implements CustomPacketPayload {
+		public static final Type<TreeResult> TYPE = new Type<>(OfficeMod.id("tree_result"));
+		public static final StreamCodec<FriendlyByteBuf, TreeResult> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeIdentifier(p.spell);
+					buf.writeByte(p.rank);
+					buf.writeEnum(p.outcome);
+				},
+				buf -> {
+					Identifier spell = buf.readIdentifier();
+					int rank = buf.readUnsignedByte();
+					if (rank > 0x7F) throw new DecoderException("bad rank " + rank);
+					return new TreeResult(spell, rank, readEnum(buf, TreeService.Outcome.class));
+				});
+
+		public TreeResult {
+			rank &= 0x7F;
+		}
+
+		@Override
+		public Type<TreeResult> type() {
+			return TYPE;
+		}
+	}
+
 	// ---- Client to server ----
+
+	/** Buy the next bump (rank I, II or IV) of {@code spell}. */
+	public record RankUp(Identifier spell) implements CustomPacketPayload {
+		public static final Type<RankUp> TYPE = new Type<>(OfficeMod.id("rank_up"));
+		public static final StreamCodec<FriendlyByteBuf, RankUp> CODEC = StreamCodec.of(
+				(buf, p) -> buf.writeIdentifier(p.spell),
+				buf -> new RankUp(buf.readIdentifier()));
+
+		@Override
+		public Type<RankUp> type() {
+			return TYPE;
+		}
+	}
+
+	/** Buy rank {@code rank} (3 or 5) of {@code spell} as fork {@code option} (1 = A, 2 = B), or re-pick an owned one. */
+	public record ChooseFork(Identifier spell, int rank, int option) implements CustomPacketPayload {
+		public static final Type<ChooseFork> TYPE = new Type<>(OfficeMod.id("choose_fork"));
+		public static final StreamCodec<FriendlyByteBuf, ChooseFork> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeIdentifier(p.spell);
+					buf.writeByte(p.rank);
+					buf.writeByte(p.option);
+				},
+				buf -> new ChooseFork(buf.readIdentifier(), buf.readUnsignedByte(), buf.readUnsignedByte()));
+
+		@Override
+		public Type<ChooseFork> type() {
+			return TYPE;
+		}
+	}
 
 	/** Ask to travel to {@code target} (a click on the Friends page). */
 	public record TravelRequest(UUID target) implements CustomPacketPayload {
@@ -281,6 +341,7 @@ public final class MagicPayloads {
 		s2c.register(FxCancel.TYPE, FxCancel.CODEC);
 		s2c.register(SignChallenge.TYPE, SignChallenge.CODEC);
 		s2c.register(TravelRoster.TYPE, TravelRoster.CODEC);
+		s2c.register(TreeResult.TYPE, TreeResult.CODEC);
 
 		var c2s = PayloadTypeRegistry.serverboundPlay();
 		c2s.register(ChooseElement.TYPE, ChooseElement.CODEC);
@@ -289,5 +350,7 @@ public final class MagicPayloads {
 		c2s.register(TravelRequest.TYPE, TravelRequest.CODEC);
 		c2s.register(TravelRosterQuery.TYPE, TravelRosterQuery.CODEC);
 		c2s.register(CancelCharge.TYPE, CancelCharge.CODEC);
+		c2s.register(RankUp.TYPE, RankUp.CODEC);
+		c2s.register(ChooseFork.TYPE, ChooseFork.CODEC);
 	}
 }

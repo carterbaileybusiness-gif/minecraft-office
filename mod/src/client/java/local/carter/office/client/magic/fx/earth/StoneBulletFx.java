@@ -2,13 +2,18 @@ package local.carter.office.client.magic.fx.earth;
 
 import java.util.Optional;
 
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
+
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.earth.StoneBullet;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -19,6 +24,7 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
@@ -28,9 +34,6 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
-
-import org.joml.Quaternionf;
-import org.joml.Vector3f;
 
 /**
  * Stone Bullet: a small earth circle snaps open before the caster, a chunk of rock is torn up into the hand and flung. The
@@ -51,6 +54,24 @@ public final class StoneBulletFx implements SpellFx {
 	/** Block crumbs for the whole throw, and the share of them kept for the smash (paid at the cast, so the trail can't spend them). */
 	private static final int CRUMB_CAP = 110;
 	private static final int IMPACT_CRUMBS = 10;
+
+	/** Ricochet: a chip of the stone leaps from {@code at} to the nearest other creature this client sees within range. */
+	private static void ricochet(FxKit kit, ClientLevel level, int casterId, Vec3 at) {
+		Entity next = null;
+		double best = StoneBullet.RICOCHET_RANGE * StoneBullet.RICOCHET_RANGE;
+		for (Entity en : level.getEntities((Entity) null, new AABB(at, at).inflate(StoneBullet.RICOCHET_RANGE),
+				x -> x.getId() != casterId && TargetFilter.affects(null, x))) {
+			double d = en.getBoundingBox().getCenter().distanceToSqr(at);
+			if (d > 1.5 && d < best) {
+				best = d;
+				next = en;
+			}
+		}
+		if (next == null) return;
+		Vec3 to = next.getBoundingBox().getCenter();
+		kit.trail(at, to, EarthFx.GRIT, 8);
+		kit.motes(to, EarthFx.CLAY, 6, 0.2, Vec3.ZERO, 0.1, GlowMote.Drift.FALL, 0.14F, 10);
+	}
 
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
@@ -84,8 +105,9 @@ public final class StoneBulletFx implements SpellFx {
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.TRIDENT_THROW.value(), SoundSource.PLAYERS, 0.55F, 0.55F + 0.1F * (1 - c), false);
 		level.playLocalSound(muzzle.x, muzzle.y, muzzle.z, SoundEvents.STONE_BREAK, SoundSource.PLAYERS, 0.6F, 0.75F, false);
 
-		// As big as the server's stone (StoneBullet.radius): twice a tap's at full charge.
-		float size = 0.5F * (1F + c);
+		// As big as the server's stone (StoneBullet.radius, sent in data): twice a tap's at full charge, the rank's size on top.
+		float size = 0.5F * (float) (radius / StoneBullet.RADIUS);
+		SpellRank rank = e.spellRank();
 		// The wall is somewhere along the last tick's step: stop the rock on it, not inside it.
 		Vec3 last = StoneBullet.path(spec, flight - 1);
 		double lastStep = Math.max(1.0E-6, last.distanceTo(StoneBullet.path(spec, flight)));
@@ -126,6 +148,10 @@ public final class StoneBulletFx implements SpellFx {
 				Vec3 heading = StoneBullet.heading(spec, end[0]);
 				if (!entity && !wall && spent) crumble(kit, leash, kept, level, head, heading);
 				else impact(kit, leash, kept, level, head, heading, c, entity);
+				if (rank.is(StoneBullet.SHRAPNEL) && (entity || wall)) {
+					RankFx.blast(kit, level, head, StoneBullet.SHRAPNEL_RADIUS, EarthFx.CLAY, EarthFx.GRIT);
+				}
+				if (rank.is(StoneBullet.RICOCHET) && entity) ricochet(kit, level, e.casterId(), head);
 			}
 		});
 

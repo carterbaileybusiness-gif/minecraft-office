@@ -6,13 +6,18 @@ import org.jspecify.annotations.Nullable;
 
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
+import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
+import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
+import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
 
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -45,14 +50,29 @@ import net.minecraft.world.phys.Vec3;
  * <p><b>No world change</b>: temporary liquids are forbidden (the temp-safe ruling), so the water is the client's: ghost water
  * cells in the sphere's air cells ({@link WaterPrisonGeometry#fill}).
  *
+ * <p>Ranks grow the sphere (the size knob). Forks: III {@link #CRUSHING} (the prisoner takes {@link #CRUSH_DAMAGE}{@code × P} a
+ * second) or {@link #LONG_HOLD} (lasts {@link #LONG_HOLD_LIFE}× as long); V {@link #TWIN} (a second sphere takes the nearest other
+ * creature it may take within {@link #TWIN_RANGE} of the first) or {@link #WHIRLPOOL} (it drags other creatures within its radius
+ * + {@link #WHIRLPOOL_REACH} toward it, Slowness II).
+ *
  * <p>Fx: {@code target} = the sphere's centre, {@code duration} = its life, {@code entities} = the prisoner (none if it waits),
- * {@code data[0]} = its radius.
+ * then Twin Prison's second prisoner, {@code data} = {@code {radius}}, or {@code {radius, x, y, z}} with Twin Prison's second
+ * centre.
  */
 public final class WaterPrison implements Spell {
 	/** Slowness III. */
 	public static final int SLOWNESS_AMPLIFIER = 2;
 	/** The slowness is laid for this long and renewed each tick inside, so it ends soon after the prisoner is free. */
 	public static final int SLOWNESS_TICKS = 10;
+	public static final String CRUSHING = "crushing";
+	public static final String LONG_HOLD = "long_hold";
+	public static final String TWIN = "twin";
+	public static final String WHIRLPOOL = "whirlpool";
+	public static final float CRUSH_DAMAGE = 1.5F;
+	public static final float LONG_HOLD_LIFE = 1.6F;
+	public static final double TWIN_RANGE = 8;
+	public static final double WHIRLPOOL_REACH = 4;
+	public static final double WHIRLPOOL_PULL = 0.22;
 
 	@Override
 	public Identifier id() {
@@ -77,7 +97,7 @@ public final class WaterPrison implements Spell {
 				ClipContext.Fluid.NONE, ctx.caster()));
 		Vec3 end = wall.getType() == HitResult.Type.MISS ? eye.add(look.scale(WaterPrisonGeometry.RANGE)) : wall.getLocation();
 		LivingEntity target = foeOnRay(ctx, eye, end).orElse(null);
-		double radius = WaterPrisonGeometry.radius(ctx.charge());
+		double radius = WaterPrisonGeometry.radius(ctx.charge()) * ctx.rank().mul(Knob.SIZE);
 		Vec3 centre;
 		if (target != null) {
 			centre = target.getBoundingBox().getCenter();
@@ -85,11 +105,33 @@ public final class WaterPrison implements Spell {
 			double back = wall.getType() == HitResult.Type.MISS ? 0 : Math.min(radius, end.distanceTo(eye));
 			centre = end.subtract(look.scale(back));
 		}
-		int life = WaterPrisonGeometry.duration(ctx.charge());
+		int life = Math.round(WaterPrisonGeometry.duration(ctx.charge()) * (ctx.rank().is(LONG_HOLD) ? LONG_HOLD_LIFE : 1));
 		Prison prison = new Prison(ctx, centre, radius, life, target);
 		if (!ActiveEffects.add(ctx, prison)) return CastOutcome.fizzle("magic.office.busy");
 		int[] held = target == null ? new int[0] : new int[] {target.getId()};
-		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(life).withEntities(held).withData((float) radius));
+		FxEvent fx = ctx.fx().withTarget(centre).withDuration(life).withEntities(held).withData((float) radius);
+		if (ctx.rank().is(WHIRLPOOL)) {
+			RankKit.zone(ctx, RankKit.Zone.at(centre, radius + WHIRLPOOL_REACH, life).pulling(WHIRLPOOL_PULL)
+					.afflicting(MobEffects.SLOWNESS, 20, 1));
+		}
+		// Twin Prison: a second sphere on the nearest other creature it may take near the first.
+		LivingEntity second = target != null && ctx.rank().is(TWIN) ? second(ctx, target) : null;
+		if (second != null) {
+			Vec3 c2 = second.getBoundingBox().getCenter();
+			if (ActiveEffects.add(ctx, new Prison(ctx, c2, radius, life, second))) {
+				fx = fx.withEntities(target.getId(), second.getId()).withData((float) radius, (float) c2.x, (float) c2.y, (float) c2.z);
+			}
+		}
+		return CastOutcome.cast(fx);
+	}
+
+	/** The nearest creature other than {@code first} the prison may take within {@link #TWIN_RANGE} of it, in its sight. */
+	private static @Nullable LivingEntity second(CastContext ctx, LivingEntity first) {
+		Vec3 from = first.getBoundingBox().getCenter();
+		for (LivingEntity e : Targets.radius(ctx, from, TWIN_RANGE)) {
+			if (e != first && takes(ctx.caster(), e) && RankKit.reaches(ctx.level(), from, e.getBoundingBox())) return e;
+		}
+		return null;
 	}
 
 	/**
@@ -162,6 +204,8 @@ public final class WaterPrison implements Spell {
 				e.resetFallDistance();
 				if (e.isOnFire()) e.extinguishFire();
 				breathe(level, e);
+				// Crushing Depths: the deep presses in, once a second.
+				if (age % 20 == 0 && ctx.rank().is(CRUSHING)) Hurt.damage(ctx, e, CRUSH_DAMAGE * ctx.power());
 			}
 			return age < life;
 		}

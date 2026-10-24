@@ -1,5 +1,6 @@
 package local.carter.office.client.magic.fx.earth;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.joml.Quaternionf;
@@ -64,9 +65,15 @@ public final class EarthSpikesFx implements SpellFx {
 		int length = d.length > 0 ? Math.round(d[0]) : EarthSpikesGeometry.length(c);
 		Vec3 forward = EarthWallGeometry.flat(e.dir());
 		BlockPos start = BlockPos.containing(e.target().add(0, 0.01, 0));
-		List<BlockPos> path = EarthSpikesGeometry.path(start, forward, length, EarthSpikes.solid(level));
+		// One line, or Spike Field's fan of three from the same first cell (as the server lays them).
+		List<List<BlockPos>> paths = new ArrayList<>();
+		List<Vec3> dirs = EarthSpikes.lines(forward, e.spellRank());
+		for (Vec3 f : dirs) paths.add(EarthSpikesGeometry.path(start, f, length, EarthSpikes.solid(level)));
+		List<BlockPos> path = paths.get(dirs.size() / 2);
+		int cells = 0;
+		for (List<BlockPos> p : paths) cells += p.size();
 		EarthFx.Crumbs crumbs = new EarthFx.Crumbs(kit, CRUMB_CAP);
-		int sinkCrumbs = crumbs.reserve(SINK_CRUMBS * path.size());
+		int sinkCrumbs = crumbs.reserve(SINK_CRUMBS * cells);
 		RandomSource r = kit.random();
 
 		// The cast: a small earth seal on the ground where the line starts, a grinding crack.
@@ -76,11 +83,17 @@ public final class EarthSpikesFx implements SpellFx {
 
 		int caster = e.casterId();
 		RockLedger.Leash leash = new RockLedger.Leash(EarthStones.now());
-		int total = path.size() + LIFE + Math.round(SINK) + 2;
+		int longest = 0;
+		for (List<BlockPos> p : paths) longest = Math.max(longest, p.size());
+		int total = longest + LIFE + Math.round(SINK) + 2;
+		int lines = paths.size();
 		EarthFx.drive(kit, leash, total, t -> {
-			if (t < path.size()) burst(kit, leash, crumbs, level, path.get(t), forward, t, c, r, caster);
-			int sinking = t - LIFE;
-			if (sinking >= 0 && sinking < path.size()) sink(level, path.get(sinking), sinking, path.size(), sinkCrumbs);
+			for (int k = 0; k < lines; k++) {
+				List<BlockPos> p = paths.get(k);
+				if (t < p.size()) burst(kit, leash, crumbs, level, p.get(t), dirs.get(k), t, c, r, caster);
+				int sinking = t - LIFE;
+				if (sinking >= 0 && sinking < p.size()) sink(level, p.get(sinking), sinking, p.size(), sinkCrumbs / lines);
+			}
 		});
 	}
 

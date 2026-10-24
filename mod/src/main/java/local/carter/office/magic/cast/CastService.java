@@ -30,6 +30,8 @@ import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellCost;
 import local.carter.office.magic.spell.SpellRegistry;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -168,9 +170,27 @@ public final class CastService {
 		long left = d.cooldownLeft(spell.cooldownKey(p), p.level().getGameTime());
 		if (left > 0) return cooldownMessage(spell, left);
 		int mana = MagicAttachments.mana(p);
-		int base = spell.cost().mana();
+		int base = cost(d, spell).mana();
 		if (!p.hasInfiniteMaterials() && mana < base) return noManaMessage(mana, base);
 		return null;
+	}
+
+	/**
+	 * {@code spell}'s skill-tree rank for the player whose data is {@code d}: their stored rank if the spell is their bound
+	 * element's (Recall and other elements' spells cast at rank 0).
+	 */
+	public static SpellRank rank(MagicData d, Spell spell) {
+		if (spell.element() == null || d.element().isEmpty() || spell.element() != d.element().get()) return SpellRank.none(spell.id());
+		return d.rank(spell.id());
+	}
+
+	/** {@code spell}'s cost at the player's rank: mana × the rank's {@code MANA} knob, cooldown × its {@code COOLDOWN} knob (rounded). */
+	public static SpellCost cost(MagicData d, Spell spell) {
+		SpellCost base = spell.cost();
+		SpellRank r = rank(d, spell);
+		if (r.rank() == 0) return base;
+		return new SpellCost(Math.max(1, Math.round(base.mana() * r.mul(Knob.MANA))), Math.round(base.cooldownTicks() * r.mul(Knob.COOLDOWN)),
+				base.xp(), base.xpLevels());
 	}
 
 	/**
@@ -203,7 +223,7 @@ public final class CastService {
 		long now = level.getGameTime();
 		if (!p.hasInfiniteMaterials()) {
 			int mana = MagicAttachments.mana(p);
-			int spent = Math.min(mana, HandSigns.fizzleMana(spell.cost().mana()));
+			int spent = Math.min(mana, HandSigns.fizzleMana(cost(MagicAttachments.get(p), spell).mana()));
 			if (spent > 0) {
 				MagicAttachments.setMana(p, mana - spent);
 				LAST_CAST.put(p.getUUID(), now);
@@ -285,7 +305,7 @@ public final class CastService {
 		long left = d.cooldownLeft(spell.cooldownKey(p), p.level().getGameTime());
 		if (left > 0) return Checked.fail(Result.COOLDOWN, cooldownMessage(spell, left));
 
-		SpellCost cost = spell.cost();
+		SpellCost cost = cost(d, spell);
 		boolean ultimate = isUltimate(spell);
 		float requested = ultimate ? 1f : Math.clamp(charge, 0f, 1f);
 		if (p.hasInfiniteMaterials()) return new Checked(null, requested, 0); // creative: no mana, no XP levels
@@ -302,7 +322,8 @@ public final class CastService {
 	}
 
 	/**
-	 * Runs {@code spell.cast}. A fizzle spends nothing ({@code magic.office.busy} → BUSY, else FIZZLED; a spell that throws
+	 * Runs {@code spell.cast} with the caster's rank ({@link #rank}: its damage folded into the power, the rank on the context and
+	 * in the fx). A fizzle spends nothing ({@code magic.office.busy} → BUSY, else FIZZLED; a spell that throws
 	 * fizzles with {@code magic.office.spell_failed}). A cast spends {@code mana} and, for ultimates, XP levels (creative
 	 * players spend neither), sets the cooldown unless the spell manages its own (never lowering one),
 	 * adds grimoire xp (title on level-up), sends the one fx and starts the regen pause.
@@ -310,8 +331,9 @@ public final class CastService {
 	static Result run(ServerPlayer p, Spell spell, float charge, int mana) {
 		ServerLevel level = p.level();
 		MagicData before = MagicAttachments.get(p);
-		CastContext ctx = new CastContext(p, level, spell, charge, ChargeMath.power(charge, before.level()), before.level(),
-				level.getRandom().nextLong(), CAST_IDS.incrementAndGet(), MagicServer.kit());
+		SpellRank rank = rank(before, spell);
+		CastContext ctx = new CastContext(p, level, spell, charge, ChargeMath.power(charge, before.level()) * rank.mul(Knob.DAMAGE),
+				before.level(), level.getRandom().nextLong(), CAST_IDS.incrementAndGet(), MagicServer.kit(), rank);
 		CastOutcome outcome;
 		try {
 			outcome = spell.cast(ctx);
@@ -324,7 +346,7 @@ public final class CastService {
 			return BUSY_KEY.equals(f.messageKey()) ? Result.BUSY : Result.FIZZLED;
 		}
 		CastOutcome.Cast done = (CastOutcome.Cast) outcome;
-		SpellCost cost = spell.cost();
+		SpellCost cost = cost(before, spell);
 		long now = level.getGameTime();
 
 		if (!p.hasInfiniteMaterials()) {

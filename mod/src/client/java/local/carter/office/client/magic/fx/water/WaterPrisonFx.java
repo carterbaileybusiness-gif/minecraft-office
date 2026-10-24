@@ -6,8 +6,10 @@ import java.util.List;
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GhostBlocks;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.water.WaterPrison;
 import local.carter.office.magic.spell.water.WaterPrisonGeometry;
 
 import net.minecraft.client.Minecraft;
@@ -65,7 +67,14 @@ public final class WaterPrisonFx implements SpellFx {
 		level.playLocalSound(centre.x, centre.y, centre.z, SoundEvents.BUCKET_EMPTY, SoundSource.PLAYERS, 1F, 0.8F, false);
 		level.playLocalSound(centre.x, centre.y, centre.z, SoundEvents.BUBBLE_COLUMN_WHIRLPOOL_AMBIENT, SoundSource.PLAYERS, 0.8F, 1F, false);
 
-		// The ball: ghost water in its air cells, and the membrane.
+		ball(level, kit, r, centre, radius, life, held.length > 0 ? held[0] : -1);
+		// Twin Prison's second sphere, and Whirlpool's drag round it.
+		if (data.length >= 4 && held.length > 1) ball(level, kit, r, new Vec3(data[1], data[2], data[3]), radius, life, held[1]);
+		if (e.spellRank().is(WaterPrison.WHIRLPOOL)) RankFx.vortex(kit, level, centre, radius + WaterPrison.WHIRLPOOL_REACH, life, WaterFx.LIGHT);
+	}
+
+	/** One ball: ghost water in its air cells, the membrane, bubbles and the current; it collapses at its end or its prisoner's. */
+	private static void ball(ClientLevel level, FxKit kit, RandomSource r, Vec3 centre, float radius, int life, int heldId) {
 		List<WaterPrisonGeometry.Cell> cells = new ArrayList<>();
 		for (WaterPrisonGeometry.Cell c : WaterPrisonGeometry.fill(centre, radius)) {
 			if (open(level, c.pos())) cells.add(c);
@@ -79,8 +88,8 @@ public final class WaterPrisonFx implements SpellFx {
 		boolean[] over = new boolean[1];
 		kit.simulate(1, life + 1, t -> {
 			if (over[0]) return;
-			Entity prisoner = held.length > 0 ? level.getEntity(held[0]) : null;
-			boolean died = held.length > 0 && (prisoner == null || prisoner.isRemoved() || !prisoner.isAlive());
+			Entity prisoner = heldId >= 0 ? level.getEntity(heldId) : null;
+			boolean died = heldId >= 0 && (prisoner == null || prisoner.isRemoved() || !prisoner.isAlive());
 			if (died || t >= life) {
 				over[0] = true;
 				skin.pop();

@@ -1,5 +1,7 @@
 package local.carter.office.magic.spell.shadow;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import org.jspecify.annotations.Nullable;
@@ -17,6 +19,8 @@ import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
@@ -41,7 +45,12 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>With nothing to bind the shadows still lash out at the ray point (the cast spends as usual, as Water Prison's does).
  *
- * <p>Fx: {@code target} = the foe's feet (or the ray point), {@code entities} = {the foe, then the second foe} if any,
+ * <p>Ranks hold longer (the size knob on the root's life). Forks: III {@link #CHOKING} (rooted foes take {@link #CHOKE_DAMAGE}
+ * {@code × P} a second) or {@link #SPREADING} (one more foe: two at a tap, three from half charge); V {@link #LEECH} (rooted foes
+ * lose {@link #LEECH_HEALTH} health a second to the caster) or {@link #DREAD} (when the root ends: Blindness and Weakness for
+ * {@link #DREAD_TICKS}).
+ *
+ * <p>Fx: {@code target} = the foe's feet (or the ray point), {@code entities} = {the foe, then the other foes} if any,
  * {@code duration} = the life, {@code data} = {1 if the first is rooted else 0} (a second foe is always rooted).
  */
 public final class ShadowBind implements Spell {
@@ -49,6 +58,23 @@ public final class ShadowBind implements Spell {
 	static final int SYNC_EVERY = 2;
 	/** A velocity change smaller than this is not synced. */
 	static final double MIN_SYNC = 0.02;
+	public static final String CHOKING = "choking";
+	public static final String SPREADING = "spreading";
+	public static final String LEECH = "leech";
+	public static final String DREAD = "dread";
+	public static final float CHOKE_DAMAGE = 1;
+	public static final float LEECH_HEALTH = 1;
+	public static final int DREAD_TICKS = 100;
+
+	/** The root's life at {@code charge} and {@code rank} (the size knob). */
+	public static int life(float charge, SpellRank rank) {
+		return Math.round(BindGeometry.life(charge) * rank.mul(Knob.SIZE));
+	}
+
+	/** Foes bound at {@code charge} and {@code rank} (Spreading Dark's one more). */
+	public static int foes(float charge, SpellRank rank) {
+		return BindGeometry.foes(charge) + (rank.is(SPREADING) ? 1 : 0);
+	}
 
 	@Override
 	public Identifier id() {
@@ -67,7 +93,7 @@ public final class ShadowBind implements Spell {
 
 	@Override
 	public CastOutcome cast(CastContext ctx) {
-		int life = BindGeometry.life(ctx.charge());
+		int life = life(ctx.charge(), ctx.rank());
 		Optional<LivingEntity> target = Targets.ray(ctx, BindGeometry.RANGE, BindGeometry.FORGIVENESS)
 				.filter(e -> ShadowStep.seen(ctx.level(), ctx.eye(), e));
 		FxEvent fx = ctx.fx().withDuration(life);
@@ -77,17 +103,24 @@ public final class ShadowBind implements Spell {
 		LivingEntity e = target.get();
 		boolean roots = roots(ctx, e);
 		// The root is the caster's effect (it counts against their cap), though it holds the foe.
-		if (roots && !ActiveEffects.add(ctx.level(), ctx.caster().getUUID(), new Root(e, life))) return CastOutcome.fizzle(CastService.BUSY_KEY);
-		// A charged bind's second foe, picked before the first hit lands (a foe it kills still passes the shadows on).
-		LivingEntity second = BindGeometry.foes(ctx.charge()) > 1 ? second(ctx, e) : null;
-		bind(ctx, e, roots, life);
-		if (second != null && ActiveEffects.add(ctx.level(), ctx.caster().getUUID(), new Root(second, life))) {
-			bind(ctx, second, true, life);
-		} else {
-			second = null;
+		if (roots && !ActiveEffects.add(ctx.level(), ctx.caster().getUUID(), new Root(ctx, e, life))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		// A charged bind's other foes, picked before the first hit lands (a foe it kills still passes the shadows on).
+		List<LivingEntity> more = new ArrayList<>();
+		int foes = foes(ctx.charge(), ctx.rank());
+		while (more.size() < foes - 1) {
+			LivingEntity next = second(ctx, e, more);
+			if (next == null) break;
+			more.add(next);
 		}
-		int[] ids = second == null ? new int[] {e.getId()} : new int[] {e.getId(), second.getId()};
-		return CastOutcome.cast(fx.withTarget(e.position()).withEntities(ids).withData(roots ? 1F : 0F));
+		bind(ctx, e, roots, life);
+		List<Integer> ids = new ArrayList<>(List.of(e.getId()));
+		for (LivingEntity m : more) {
+			if (!ActiveEffects.add(ctx.level(), ctx.caster().getUUID(), new Root(ctx, m, life))) break;
+			bind(ctx, m, true, life);
+			ids.add(m.getId());
+		}
+		return CastOutcome.cast(fx.withTarget(e.position()).withEntities(ids.stream().mapToInt(Integer::intValue).toArray())
+				.withData(roots ? 1F : 0F));
 	}
 
 	/** Hurts {@code e} and, when {@code roots}, slows it and cancels the hit's knockback at once. */
@@ -99,11 +132,14 @@ public final class ShadowBind implements Spell {
 		}
 	}
 
-	/** The nearest other creature the bind can root within {@link BindGeometry#SPREAD} of {@code first}, in its sight; null if none. */
-	private static @Nullable LivingEntity second(CastContext ctx, LivingEntity first) {
+	/**
+	 * The nearest other creature (not {@code first}, none of {@code taken}) the bind can root within {@link BindGeometry#SPREAD} of
+	 * {@code first}, in its sight; null if none.
+	 */
+	private static @Nullable LivingEntity second(CastContext ctx, LivingEntity first, List<LivingEntity> taken) {
 		Vec3 from = first.getBoundingBox().getCenter();
 		for (LivingEntity e : Targets.radius(ctx, from, BindGeometry.SPREAD)) {
-			if (e == first || !roots(ctx, e)) continue;
+			if (e == first || taken.contains(e) || !roots(ctx, e)) continue;
 			if (ShadowStep.seen(ctx.level(), from, e)) return e;
 		}
 		return null;
@@ -119,12 +155,14 @@ public final class ShadowBind implements Spell {
 
 	/** The root: holds the foe where it stood for its life, or until it dies, leaves the level or is teleported. */
 	static final class Root implements LingeringEffect {
+		private final CastContext ctx;
 		private final LivingEntity foe;
 		private final int life;
 		private final ServerLevel level;
 		private Vec3 anchor;
 
-		Root(LivingEntity foe, int life) {
+		Root(CastContext ctx, LivingEntity foe, int life) {
+			this.ctx = ctx;
 			this.foe = foe;
 			this.life = life;
 			this.level = (ServerLevel) foe.level();
@@ -139,7 +177,20 @@ public final class ShadowBind implements Spell {
 			anchor = BindGeometry.hold(anchor, now);
 			if (now.distanceToSqr(anchor) > 1.0E-8) foe.setPos(anchor);
 			hold(foe, age % SYNC_EVERY == 0);
+			if (age % 20 == 0) {
+				if (ctx.rank().is(CHOKING)) Hurt.damage(ctx, foe, CHOKE_DAMAGE * ctx.power());
+				if (ctx.rank().is(LEECH) && Hurt.damage(ctx, foe, LEECH_HEALTH) && ctx.caster().isAlive()) ctx.caster().heal(LEECH_HEALTH);
+			}
 			return age < life;
+		}
+
+		@Override
+		public void end(ServerLevel level) {
+			// Dread: the dark it leaves behind.
+			if (ctx.rank().is(DREAD) && foe.isAlive() && !foe.isRemoved()) {
+				foe.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, DREAD_TICKS, 0), ctx.caster());
+				foe.addEffect(new MobEffectInstance(MobEffects.WEAKNESS, DREAD_TICKS, 0), ctx.caster());
+			}
 		}
 
 		/** Zeroes {@code e}'s velocity (keeping a fall) and stops its pathing; syncs the change when {@code sync} and it is not tiny. */

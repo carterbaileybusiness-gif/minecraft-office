@@ -7,6 +7,8 @@ import java.util.Random;
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.Projectiles;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
@@ -42,6 +44,13 @@ public final class BarrageGeometry {
 	public static final double BLAST = 2.5;
 	/** Least share of the sky drop kept under a roof. */
 	public static final double MIN_LIFT = 0.15;
+	/** Most fireballs a ranked volley throws. */
+	public static final int MAX_COUNT = 9;
+	/** Carpet's spread, Rapid Volley's interval, Heavy Shells' blast and crater. */
+	public static final double CARPET_SPREAD = 1.6;
+	public static final int RAPID_INTERVAL = 2;
+	public static final double HEAVY_BLAST = 3.5;
+	public static final double HEAVY_CRATER = 2.0;
 
 	private BarrageGeometry() {}
 
@@ -58,6 +67,29 @@ public final class BarrageGeometry {
 		return Math.round(TAP_COUNT * ChargeMath.size(charge));
 	}
 
+	/**
+	 * Fireballs at {@code charge} and {@code rank}: {@code round(3 × ChargeMath.size(charge) × the size knob) + the forks' extra},
+	 * 1 to {@link #MAX_COUNT}.
+	 */
+	public static int count(float charge, SpellRank rank) {
+		return Math.clamp(Math.round(TAP_COUNT * ChargeMath.size(charge) * rank.mul(Knob.SIZE) + rank.add(Knob.COUNT)), 1, MAX_COUNT);
+	}
+
+	/** The spread factor at {@code rank}: {@link #CARPET_SPREAD} for Carpet, else 1. */
+	public static double spreadMul(SpellRank rank) {
+		return rank.is(FireballBarrage.CARPET) ? CARPET_SPREAD : 1;
+	}
+
+	/** Ticks between fireballs at {@code rank}: {@link #RAPID_INTERVAL} for Rapid Volley, else {@link #INTERVAL}. */
+	public static int interval(SpellRank rank) {
+		return rank.is(FireballBarrage.RAPID) ? RAPID_INTERVAL : INTERVAL;
+	}
+
+	/** Each impact's blast radius at {@code rank}. */
+	public static double blast(SpellRank rank) {
+		return rank.is(FireballBarrage.HEAVY) ? HEAVY_BLAST : BLAST;
+	}
+
 	/** How far from the aim point a volley of {@code count} lands: {@link #SPREAD} for a tap's 3, in step with the count after. */
 	public static double spread(int count) {
 		return SPREAD * Math.max(1, count) / TAP_COUNT;
@@ -65,8 +97,13 @@ public final class BarrageGeometry {
 
 	/** The aim of every fireball: {@code point} plus a seeded offset within {@link #spread}, the same for the same seed. */
 	public static List<Vec3> aims(Vec3 point, long seed, int count) {
+		return aims(point, seed, count, 1);
+	}
+
+	/** As {@link #aims(Vec3, long, int)} with the spread times {@code spreadMul}. */
+	public static List<Vec3> aims(Vec3 point, long seed, int count, double spreadMul) {
 		Random r = new Random(seed);
-		double spread = spread(count);
+		double spread = spread(count) * spreadMul;
 		List<Vec3> out = new ArrayList<>(count);
 		for (int i = 0; i < count; i++) {
 			double a = r.nextDouble() * Math.PI * 2;
@@ -84,14 +121,19 @@ public final class BarrageGeometry {
 
 	/** The whole volley; {@code lifts[i]} (missing → 1) shortens fireball {@code i}'s drop, at least {@link #MIN_LIFT}. */
 	public static List<Ball> volley(Vec3 point, Vec3 dir, long seed, int count, float[] lifts) {
-		List<Vec3> aims = aims(point, seed, count);
+		return volley(point, dir, seed, count, lifts, 1, INTERVAL);
+	}
+
+	/** As {@link #volley(Vec3, Vec3, long, int, float[])} with the spread times {@code spreadMul}, one fireball every {@code interval}. */
+	public static List<Ball> volley(Vec3 point, Vec3 dir, long seed, int count, float[] lifts, double spreadMul, int interval) {
+		List<Vec3> aims = aims(point, seed, count, spreadMul);
 		Vec3 drop = drop(dir);
 		List<Ball> out = new ArrayList<>(count);
 		for (int i = 0; i < count; i++) {
 			double lift = i < lifts.length ? Mth.clamp(lifts[i], MIN_LIFT, 1) : 1;
 			Vec3 aim = aims.get(i);
 			Vec3 origin = aim.add(drop.scale(lift));
-			out.add(new Ball(aim, origin, spec(origin, aim), i * INTERVAL));
+			out.add(new Ball(aim, origin, spec(origin, aim), i * interval));
 		}
 		return out;
 	}
@@ -139,7 +181,12 @@ public final class BarrageGeometry {
 
 	/** Linear falloff of the blast: 1 at the impact, 0 at {@link #BLAST}. */
 	public static double falloff(double distance) {
-		return Mth.clamp(1 - distance / BLAST, 0, 1);
+		return falloff(distance, BLAST);
+	}
+
+	/** Linear falloff of a blast of {@code radius}. */
+	public static double falloff(double distance, double radius) {
+		return Mth.clamp(1 - distance / radius, 0, 1);
 	}
 
 	/** The flat unit direction of {@code v}, or +Z if it has none. */

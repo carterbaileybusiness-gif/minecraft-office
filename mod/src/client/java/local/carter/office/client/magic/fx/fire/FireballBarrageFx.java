@@ -7,12 +7,15 @@ import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.fire.BarrageGeometry;
+import local.carter.office.magic.spell.fire.FireballBarrage;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -51,10 +54,13 @@ public final class FireballBarrageFx implements SpellFx {
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
 		float[] data = e.data();
-		int count = data.length > 0 ? Math.max(1, Math.round(data[0])) : BarrageGeometry.count(e.charge());
+		SpellRank rank = e.spellRank();
+		int count = data.length > 0 ? Math.max(1, Math.round(data[0])) : BarrageGeometry.count(e.charge(), rank);
 		float[] lifts = new float[count];
 		for (int i = 0; i < count; i++) lifts[i] = data.length > i + 1 ? data[i + 1] : 1F;
-		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(e.target(), e.dir(), e.seed(), count, lifts);
+		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(e.target(), e.dir(), e.seed(), count, lifts, BarrageGeometry.spreadMul(rank),
+				BarrageGeometry.interval(rank));
+		boolean heavy = rank.is(FireballBarrage.HEAVY);
 		RandomSource r = kit.random();
 
 		// The sky circle: where the fireballs leave from, facing down at the spot.
@@ -89,7 +95,7 @@ public final class FireballBarrageFx implements SpellFx {
 				int k = t - b.launchTick();
 				if (k < 0 || done[i]) continue;
 				if (k == 0) leave(level, kit, b, flights[i]);
-				done[i] = fly(level, kit, r, b, k, flights[i], booms[i], casterId);
+				done[i] = fly(level, kit, r, b, k, flights[i], booms[i], casterId, heavy);
 			}
 		});
 	}
@@ -104,7 +110,7 @@ public final class FireballBarrageFx implements SpellFx {
 
 	/** One tick of a fireball's flight: true once it has landed (or flown out its time). */
 	private static boolean fly(ClientLevel level, FxKit kit, RandomSource r, BarrageGeometry.Ball b, int k, Allowance a, Allowance boom,
-			int casterId) {
+			int casterId, boolean heavy) {
 		Vec3 from = Projectiles.step(b.spec(), k);
 		Vec3 to = Projectiles.step(b.spec(), k + 1);
 		BlockHitResult block = level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
@@ -117,6 +123,8 @@ public final class FireballBarrageFx implements SpellFx {
 			Vec3 dir = to.subtract(from).normalize();
 			BlockState hit = blocked ? level.getBlockState(block.getBlockPos()) : null;
 			explode(level, kit, r, end.subtract(dir.scale(0.2)), hit, boom);
+			// Heavy Shells: a wider blast ring round each impact.
+			if (heavy) RankFx.blast(kit, level, end.subtract(dir.scale(0.2)), BarrageGeometry.HEAVY_BLAST, FireBoltFx.HOT, ParticleTypes.LAVA);
 			return true;
 		}
 		if (k + 1 >= b.spec().maxTicks()) {

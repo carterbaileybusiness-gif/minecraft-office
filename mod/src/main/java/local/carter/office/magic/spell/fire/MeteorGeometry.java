@@ -94,7 +94,31 @@ public record MeteorGeometry(Vec3 impact, Vec3 start, int radius) {
 
 	/** Linear falloff of the blast: 1 at the impact, 0 at {@link #BLAST}. */
 	public static double falloff(double distance) {
-		return Mth.clamp(1 - distance / BLAST, 0, 1);
+		return falloff(distance, BLAST);
+	}
+
+	/** Linear falloff of a blast of {@code radius}. */
+	public static double falloff(double distance, double radius) {
+		return Mth.clamp(1 - distance / radius, 0, 1);
+	}
+
+	/** Cluster's fragments: how many, how far out they land (between), and how long after the impact. */
+	public static final int FRAGMENTS = 6;
+	public static final double FRAGMENT_NEAR = 5;
+	public static final double FRAGMENT_FAR = 8;
+	public static final int FRAGMENT_TICKS = 12;
+
+	/** Where Cluster's fragments land round {@code impact} (level with it), seeded: the same on the server and every client. */
+	public static List<Vec3> fragments(Vec3 impact, long seed) {
+		Random r = new Random(seed ^ 0x5DEECE66DL);
+		List<Vec3> out = new ArrayList<>(FRAGMENTS);
+		double turn = r.nextDouble() * Math.PI * 2;
+		for (int i = 0; i < FRAGMENTS; i++) {
+			double a = turn + Math.PI * 2 * i / FRAGMENTS + (r.nextDouble() - 0.5) * 0.6;
+			double d = FRAGMENT_NEAR + r.nextDouble() * (FRAGMENT_FAR - FRAGMENT_NEAR);
+			out.add(impact.add(Math.cos(a) * d, 0, Math.sin(a) * d));
+		}
+		return out;
 	}
 
 	// ---- the crater ---------------------------------------------------------------------------------------------------------

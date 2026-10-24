@@ -17,6 +17,7 @@ import local.carter.office.magic.spell.ProjectileSpec;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.wind.BladeWind;
 import local.carter.office.magic.spell.wind.BladeWindGeometry;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -53,13 +54,15 @@ public final class BladeWindFx implements SpellFx {
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
 		float c = Mth.clamp(e.charge(), 0F, 1F);
-		List<ProjectileSpec> specs = BladeWindGeometry.specs(e.origin(), e.dir(), c);
+		SpellRank rank = e.spellRank();
+		List<ProjectileSpec> specs = BladeWindGeometry.specs(e.origin(), e.dir(), c, rank);
+		int flight = BladeWindGeometry.maxTicks(rank);
 		float[] data = e.data();
 		int n = specs.size();
 		float[] stops = new float[n];
 		float longest = 0;
 		for (int i = 0; i < n; i++) {
-			stops[i] = data.length > i + 1 ? Mth.clamp(data[i + 1], 0F, BladeWindGeometry.MAX_TICKS) : BladeWindGeometry.MAX_TICKS;
+			stops[i] = data.length > i + 1 ? Mth.clamp(data[i + 1], 0F, flight) : flight;
 			longest = Math.max(longest, stops[i]);
 		}
 		Vec3 dir = BladeWindGeometry.frame(e.dir()).forward();
@@ -73,7 +76,7 @@ public final class BladeWindFx implements SpellFx {
 		kit.shake(0.12F + 0.15F * c, 5);
 		kit.fovKick(0.03F + 0.03F * c);
 
-		double[] angles = BladeWindGeometry.angles(c);
+		double[] angles = BladeWindGeometry.angles(c, rank);
 		float size = 1.25F + 0.45F * c;
 		for (int i = 0; i < n; i++) {
 			// A spray of arcs: the outer blades tilt outward. Each pays the fx budget for the quads it draws a frame.
@@ -112,7 +115,7 @@ public final class BladeWindFx implements SpellFx {
 					if (t % 2 == 0) kit.trail(a, b, ParticleTypes.WHITE_ASH, 2);
 					hits(level, kit, a, b, struck, s);
 				}
-				if (!ended[i] && t >= stops[i] && stops[i] < BladeWindGeometry.MAX_TICKS) {
+				if (!ended[i] && t >= stops[i] && stops[i] < flight) {
 					ended[i] = true;
 					Vec3 p = BladeWindGeometry.at(s, stops[i]);
 					kit.burst(p, ParticleTypes.POOF, 3, 0.06);

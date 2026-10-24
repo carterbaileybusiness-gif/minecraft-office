@@ -9,6 +9,7 @@ import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.LightPipeline;
 import local.carter.office.client.magic.fx.MagicCircleRenderer;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.Shake;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
@@ -16,6 +17,7 @@ import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.wind.BladeWindGeometry;
 import local.carter.office.magic.spell.wind.DrillGeometry;
 import local.carter.office.magic.spell.wind.WindSphere;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -193,7 +195,11 @@ public final class WindSphereFx implements SpellFx {
 		float near = Minecraft.getInstance().gameRenderer.mainCamera().position().distanceTo(at) < 4 ? 0.4F : 1F;
 		kit.motes(at, CORE, Math.round(40 * size * near), 0.5, Vec3.ZERO, 0.6, GlowMote.Drift.COAST, 0.1F * (0.5F + 0.5F * near), 12);
 		kit.motes(at, HALO, Math.round(30 * size * near), 0.9, look.scale(0.15), 0.35, GlowMote.Drift.SWIRL, 0.1F * (0.5F + 0.5F * near), 16);
-
+		// The forks: Vortex Wake's pull, Rasen-Shuriken's wide blast, Shockwave's ring.
+		SpellRank rank = e.spellRank();
+		if (rank.is(WindSphere.VORTEX)) RankFx.vortex(kit, level, at, WindSphere.VORTEX_RADIUS, WindSphere.VORTEX_TICKS, HALO);
+		if (rank.is(WindSphere.SHURIKEN)) RankFx.blast(kit, level, at, WindSphere.blast(rank), CORE, ParticleTypes.GUST);
+		if (rank.is(WindSphere.SHOCKWAVE)) RankFx.shockRing(kit, level, at, WindSphere.SHOCKWAVE_RADIUS, WindSphere.SHOCKWAVE_TICKS, CORE, ParticleTypes.GUST);
 	}
 
 	/** The drilled rock bursting out spinning: block particles from the drill's cells, as this client sees them now. */

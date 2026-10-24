@@ -2,11 +2,15 @@ package local.carter.office.client.magic.fx.lightning;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.lightning.ChainLightning;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
@@ -57,7 +61,9 @@ public final class ChainLightningFx implements SpellFx {
 		}
 		int share = LightningLook.allowance(spent, chain.length);
 		kit.hitStop(2);
+		SpellRank rank = e.spellRank();
 		strike(kit, level, new Allowance(share), seed, chain, 0, first, c);
+		forks(kit, level, rank, chain, 0, first, seed);
 		Vec3[] last = {first};
 		kit.simulate(HOP_TICKS, chain.length * HOP_TICKS, t -> {
 			int hop = t / HOP_TICKS;
@@ -68,8 +74,18 @@ public final class ChainLightningFx implements SpellFx {
 			// The channel is paid first: whatever else a hop must drop, the lightning between targets is always drawn.
 			Volts.channel(kit, level, a, from, to, LightningLook.hopSeed(seed, hop), LightningLook.HOP, LightningLook.HOP_STRAND);
 			strike(kit, level, a, seed, chain, hop, to, c);
+			forks(kit, level, rank, chain, hop, to, seed);
 			last[0] = to;
 		});
+	}
+
+	/** The forks at hop {@code hop}: Thunderstorm's splash round each target, Overload's blast at the last. */
+	private static void forks(FxKit kit, ClientLevel level, SpellRank rank, int[] chain, int hop, Vec3 at, long seed) {
+		if (rank.is(ChainLightning.THUNDERSTORM)) RankFx.blast(kit, level, at, ChainLightning.STORM_RADIUS, LightningLook.YELLOW, ParticleTypes.ELECTRIC_SPARK);
+		if (hop == chain.length - 1 && rank.is(ChainLightning.OVERLOAD)) {
+			RankFx.blast(kit, level, at, ChainLightning.OVERLOAD_RADIUS, LightningLook.CORE, ParticleTypes.ELECTRIC_SPARK);
+			RankFx.skyBolt(kit, level, at, seed + 977, Element.LIGHTNING.argb());
+		}
 	}
 
 	/** Hop {@code hop} landing at {@code at} (the middle of {@code chain[hop]}): flash, a bolt from the sky, a scorch, a crack, a crawl. */

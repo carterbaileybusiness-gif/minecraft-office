@@ -4,10 +4,13 @@ import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.client.magic.fx.LightPipeline;
 import local.carter.office.client.magic.fx.MagicCircleRenderer;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.TargetFilter;
+import local.carter.office.magic.spell.shadow.GravityWell;
 import local.carter.office.magic.spell.shadow.WellGeometry;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -29,8 +32,8 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
-import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 
 /**
  * Gravity Well: a circle opens before the caster and a streak of portal sparks flies to the spot; there a sigil opens on the
@@ -109,6 +112,9 @@ public final class GravityWellFx implements SpellFx {
 				}
 			} else if (t == life) {
 				collapse(kit, level, centre, c);
+				SpellRank rank = e.spellRank();
+				if (rank.is(GravityWell.SINGULARITY)) RankFx.blast(kit, level, centre, GravityWell.SINGULARITY_RADIUS, ShadowFx.MAGENTA, ParticleTypes.REVERSE_PORTAL);
+				if (rank.is(GravityWell.REPULSOR)) RankFx.shockRing(kit, level, centre.subtract(0, 0.8, 0), reach, 8, ShadowFx.VIOLET, ParticleTypes.PORTAL);
 			}
 		});
 	}

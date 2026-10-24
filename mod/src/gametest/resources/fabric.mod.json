@@ -28,7 +28,8 @@
 			"local.carter.office.magic.WindGameTests",
 			"local.carter.office.magic.LightningGameTests",
 			"local.carter.office.magic.EarthGameTests",
-			"local.carter.office.magic.ShadowGameTests"
+			"local.carter.office.magic.ShadowGameTests",
+			"local.carter.office.magic.SkillTreeGameTests"
 		],
 		"fabric-client-gametest": [
 			"local.carter.office.gametest.OfficeClientGameTest",

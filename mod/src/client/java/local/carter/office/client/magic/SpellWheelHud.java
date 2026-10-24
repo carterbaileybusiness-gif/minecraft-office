@@ -7,6 +7,7 @@ import local.carter.office.OfficeMod;
 import local.carter.office.client.magic.WheelLayout.Align;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
 import local.carter.office.client.magic.screen.UiKit;
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.core.WheelMath;
@@ -245,7 +246,7 @@ public final class SpellWheelHud {
 		UiKit.glow(g, cx, cy, l.inner() * 1.7f, UiKit.alpha(0xFF000000, 0.75f * k)); // a darker spot under the text
 		Spell spell = SpellWheel.spellAt(d, slot);
 		Identifier id = spell != null ? spell.id() : SpellIds.at(e, slot);
-		SpellCost cost = spell != null ? spell.cost() : SpellCost.forSlot(slot);
+		SpellCost cost = spell != null ? CastService.cost(d, spell) : SpellCost.forSlot(slot);
 		boolean locked = SpellWheel.selectable(d, slot) == null;
 		float ts = UiKit.crisp(l.scale());
 		float line = 10f * ts;

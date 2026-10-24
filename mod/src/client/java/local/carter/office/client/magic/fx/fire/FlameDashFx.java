@@ -2,10 +2,12 @@ package local.carter.office.client.magic.fx.fire;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.fire.FireWallGeometry;
 import local.carter.office.magic.spell.fire.FlameDash;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -60,6 +62,9 @@ public final class FlameDashFx implements SpellFx {
 		level.playLocalSound(start.x, start.y, start.z, SoundEvents.BLAZE_SHOOT, SoundSource.PLAYERS, 0.7F, 1.35F, false);
 		level.playLocalSound(start.x, start.y, start.z, SoundEvents.BREEZE_WIND_CHARGE_BURST.value(), SoundSource.PLAYERS, 0.6F, 0.8F, false);
 
+		SpellRank rank = e.spellRank();
+		if (rank.is(FlameDash.PHOENIX)) RankFx.aura(kit, level, e.casterId(), FireBoltFx.HOT, FlameDash.PHOENIX_TICKS);
+		boolean comet = rank.is(FlameDash.COMET);
 		double[] carry = {SPACING * 0.5};
 		int[] sheets = {0};
 		Vec3[] last = {start};
@@ -94,6 +99,8 @@ public final class FlameDashFx implements SpellFx {
 				kit.motes(body, FireBoltFx.EMBER, 2, 0.3, new Vec3(0, 0.04, 0), 0.03, GlowMote.Drift.RISE, 0.08F, 18);
 				if ((t & 1) == 0) FireBoltFx.add(kit, level, ParticleTypes.SMOKE, last[0].add(0, 0.3, 0), new Vec3(0, 0.03, 0));
 			}
+			// Comet Finish: where the dash ends it goes off.
+			if (comet && t == FlameDash.BURN_TICKS) RankFx.blast(kit, level, now.add(0, 0.5, 0), FlameDash.COMET_RADIUS, FireBoltFx.HOT, ParticleTypes.FLAME);
 			last[0] = now;
 		});
 	}

@@ -3,6 +3,7 @@ package local.carter.office.magic.spell.earth;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -18,6 +19,7 @@ import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.Targets;
@@ -25,6 +27,8 @@ import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
 import local.carter.office.magic.terrain.TempBlockData;
 import local.carter.office.magic.terrain.WorldTerrainEdits;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -32,6 +36,8 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.BlockGetter;
@@ -68,10 +74,57 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * </ul>
  * One ULTIMATE batch, origin = the target cell (every edit is within 12 of it).
  *
+ * <p>Ranks widen the strike (the size knob). Forks: III {@link #STONE_SKIN} (Resistance II for {@link #SKIN_TICKS}) or
+ * {@link #SKYWARD} (launched {@link #SKYWARD_UP}× as high, strike +{@link #EXTRA_BLAST}); V {@link #COLOSSUS} (damage +25 %,
+ * strike +{@link #EXTRA_BLAST}, the spire 2 higher and 1 wider, up to its caps of 12 and 6) or {@link #AVALANCHE}
+ * ({@link #BOULDERS} boulders crash round it, {@link #BOULDER_DAMAGE}{@code × P} each within {@link #BOULDER_RADIUS}).
+ *
  * <p>Fx: {@code target} = bottom centre of the target cell, {@code dir} = the flat direction from the caster to it,
  * {@code duration} = {@link MountainFistGeometry#RISE}, {@code data} = {base radius, height, debris count}.
  */
 public final class MountainFist implements Spell {
+	public static final String STONE_SKIN = "stone_skin";
+	public static final String SKYWARD = "skyward";
+	public static final String COLOSSUS = "colossus";
+	public static final String AVALANCHE = "avalanche";
+	public static final int SKIN_TICKS = 200;
+	public static final double SKYWARD_UP = 1.6;
+	public static final double EXTRA_BLAST = 2;
+	public static final int BOULDERS = 8;
+	public static final double BOULDER_NEAR = 6;
+	public static final double BOULDER_FAR = 10;
+	public static final double BOULDER_RADIUS = 2;
+	public static final float BOULDER_DAMAGE = 8;
+	/** The first boulder lands on this tick of the rise, one more every tick after. */
+	public static final int BOULDER_TICK = 6;
+
+	/** The strike's reach at {@code rank}: the size knob on {@link MountainFistGeometry#BLAST}, Skyward's and Colossus's extra. */
+	public static double blast(SpellRank rank) {
+		return MountainFistGeometry.BLAST * rank.mul(Knob.SIZE) + (rank.is(SKYWARD) || rank.is(COLOSSUS) ? EXTRA_BLAST : 0);
+	}
+
+	/** The spire's base radius at {@code level} and {@code rank} (Colossus: one wider, at most 6). */
+	public static int baseRadius(int level, SpellRank rank) {
+		return Math.min(6, MountainFistGeometry.baseRadius(level) + (rank.is(COLOSSUS) ? 1 : 0));
+	}
+
+	/** The spire's height at {@code level} and {@code rank} (Colossus: two higher, at most 12). */
+	public static int height(int level, SpellRank rank) {
+		return Math.min(12, MountainFistGeometry.height(level) + (rank.is(COLOSSUS) ? 2 : 0));
+	}
+
+	/** Where Avalanche's boulders land round {@code at} (seeded: the same on the server and every client). */
+	public static List<Vec3> boulders(Vec3 at, long seed) {
+		Random r = new Random(seed ^ 0xB0B0L);
+		List<Vec3> out = new ArrayList<>(BOULDERS);
+		double turn = r.nextDouble() * Math.PI * 2;
+		for (int i = 0; i < BOULDERS; i++) {
+			double a = turn + Math.PI * 2 * i / BOULDERS + (r.nextDouble() - 0.5) * 0.4;
+			double d = BOULDER_NEAR + r.nextDouble() * (BOULDER_FAR - BOULDER_NEAR);
+			out.add(at.add(Math.cos(a) * d, 0, Math.sin(a) * d));
+		}
+		return out;
+	}
 	@Override
 	public Identifier id() {
 		return SpellIds.MOUNTAIN_FIST;
@@ -91,19 +144,19 @@ public final class MountainFist implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		ServerLevel level = ctx.level();
 		ServerPlayer p = ctx.caster();
-		int baseRadius = MountainFistGeometry.baseRadius(ctx.grimoireLevel());
+		int baseRadius = baseRadius(ctx.grimoireLevel(), ctx.rank());
 		BlockPos target = target(ctx, baseRadius);
 		// Nothing to stand a mountain on there, or the way is blocked: refuse before any side effect (nothing is spent).
 		if (target == null) return CastOutcome.fizzle(CastService.SPELL_FAILED_KEY);
 		Vec3 to = Vec3.atBottomCenterOf(target).subtract(p.position());
 		Vec3 dir = to.x * to.x + to.z * to.z < 1.0E-4 ? EarthSpikes.forward(ctx.look(), p.getYRot()) : EarthWallGeometry.flat(to);
-		int height = MountainFistGeometry.height(ctx.grimoireLevel());
+		int height = height(ctx.grimoireLevel(), ctx.rank());
 		BlockState surface = surfaceMaterial(level, target.below());
 		if (!ActiveEffects.add(ctx, new Rise(ctx, target, surface, baseRadius, height))) return CastOutcome.fizzle(CastService.BUSY_KEY);
+		if (ctx.rank().is(STONE_SKIN)) p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, SKIN_TICKS, 1), p);
 		FxEvent fx = ctx.fx();
-		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), dir, Vec3.atBottomCenterOf(target), fx.charge(),
-				fx.power(), fx.seed(), MountainFistGeometry.RISE, new int[0],
-				new float[] {baseRadius, height, MountainFistGeometry.debris(ctx.grimoireLevel())}));
+		return CastOutcome.cast(fx.withDir(dir).withTarget(Vec3.atBottomCenterOf(target)).withDuration(MountainFistGeometry.RISE)
+				.withData(baseRadius, height, MountainFistGeometry.debris(ctx.grimoireLevel())));
 	}
 
 	/**
@@ -211,6 +264,13 @@ public final class MountainFist implements Spell {
 				skirts(level);
 			}
 			if (age == MountainFistGeometry.STRIKE_TICK) strike(level);
+			// Avalanche: boulders crash down round the spire, one a tick.
+			int boulder = age - BOULDER_TICK;
+			if (ctx.rank().is(AVALANCHE) && boulder >= 0 && boulder < BOULDERS) {
+				Vec3 at = boulders(Vec3.atBottomCenterOf(target), ctx.seed()).get(boulder);
+				Vec3 ground = Targets.ground(level, at.add(0, 3, 0));
+				RankKit.blast(ctx, ground.add(0, 0.5, 0), BOULDER_RADIUS, BOULDER_DAMAGE * ctx.power(), null, 0, 0.6, 0.3);
+			}
 			for (int y = 0; y < height; y++) {
 				if (MountainFistGeometry.layerTick(y, height) == age) layer(level, y);
 			}
@@ -315,10 +375,11 @@ public final class MountainFist implements Spell {
 			Vec3 at = Vec3.atBottomCenterOf(target);
 			Vec3 core = at.add(0, 1, 0);
 			float damage = MountainFistGeometry.DAMAGE * ctx.power();
-			for (LivingEntity e : Targets.radius(ctx, at, MountainFistGeometry.BLAST)) {
+			double up = MountainFistGeometry.LAUNCH_UP * (ctx.rank().is(SKYWARD) ? SKYWARD_UP : 1);
+			for (LivingEntity e : Targets.radius(ctx, at, blast(ctx.rank()))) {
 				if (!reaches(level, core, e)) continue;
 				Hurt.damage(ctx, e, damage);
-				if (e.isAlive()) Hurt.knock(e, e.position().subtract(at), MountainFistGeometry.LAUNCH_OUT, MountainFistGeometry.LAUNCH_UP);
+				if (e.isAlive()) Hurt.knock(e, e.position().subtract(at), MountainFistGeometry.LAUNCH_OUT, up);
 			}
 		}
 

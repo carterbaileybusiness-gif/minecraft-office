@@ -23,6 +23,7 @@ import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.Motion;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
@@ -30,6 +31,8 @@ import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.spell.lightning.ChidoriGeometry.Column;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -71,6 +74,12 @@ import net.minecraft.world.phys.Vec3;
  * {@code min(12, 4 + (level − 7))}: {@link ChidoriGeometry#DEBRIS} rim blocks are {@code launch}ed outward, the rest removed, and its
  * floor scorched the same way. All of it respects claims, spawn protection and immune blocks through the batches.
  *
+ * <p>Ranks widen the strike's reach (the size knob). Forks: III {@link #RAIKIRI} (the target takes {@link #RAIKIRI_BONUS}× and
+ * Slowness V for {@link #RAIKIRI_TICKS}) or {@link #CHIRPING} (creatures within {@link #CHIRP_RADIUS} of the path take
+ * {@link #CHIRP_DAMAGE}{@code × P} as the caster passes); V {@link #KIRIN} ({@link #KIRIN_BOLTS} sky bolts round the end,
+ * {@link #KIRIN_DAMAGE}{@code × P} each within {@link #KIRIN_RADIUS}) or {@link #STORM_TRAIL} (the trench crackles for
+ * {@link #TRAIL_TICKS}: {@link #TRAIL_DAMAGE} a second and slowed).
+ *
  * <p>Fx: {@code target} = where the charge ends (feet), {@code dir} = its flat direction, {@code duration} =
  * {@link ChidoriGeometry#TICKS}, {@code entities} = {the target} if one was aimed at (else empty), {@code data} =
  * {@code {eyeHeight, radius}} (the feet started at {@code origin − (0, eyeHeight, 0)}).
@@ -87,6 +96,39 @@ public final class ChidoriStrike implements Spell {
 	public static final int SURFACE_SCAN = 4;
 	/** Moved further than this between two ticks of the charge: someone else teleported the caster, so the charge lets go. */
 	public static final double TELEPORTED = 4;
+	public static final String RAIKIRI = "raikiri";
+	public static final String CHIRPING = "chirping";
+	public static final String KIRIN = "kirin";
+	public static final String STORM_TRAIL = "storm_trail";
+	public static final float RAIKIRI_BONUS = 1.4F;
+	public static final int RAIKIRI_TICKS = 80;
+	public static final double CHIRP_RADIUS = 3;
+	public static final float CHIRP_DAMAGE = 6;
+	public static final int KIRIN_BOLTS = 5;
+	public static final double KIRIN_RING = 6;
+	public static final double KIRIN_RADIUS = 2.5;
+	public static final float KIRIN_DAMAGE = 10;
+	public static final int TRAIL_TICKS = 100;
+	public static final float TRAIL_DAMAGE = 3;
+	public static final double TRAIL_RADIUS = 1.5;
+
+	/** The strike's reach at {@code rank}: {@link ChidoriGeometry#REACH} times the size knob. */
+	public static double reach(SpellRank rank) {
+		return ChidoriGeometry.REACH * rank.mul(Knob.SIZE);
+	}
+
+	/** Kirin's bolts round {@code end} (seeded: the same on the server and every client). */
+	public static List<Vec3> kirinPoints(Vec3 end, long seed) {
+		Random r = new Random(seed ^ 0x6B1L);
+		List<Vec3> out = new ArrayList<>(KIRIN_BOLTS);
+		double turn = r.nextDouble() * Math.PI * 2;
+		for (int i = 0; i < KIRIN_BOLTS; i++) {
+			double a = turn + Math.PI * 2 * i / KIRIN_BOLTS;
+			double d = KIRIN_RING * (0.6 + 0.4 * r.nextDouble());
+			out.add(end.add(Math.cos(a) * d, 0, Math.sin(a) * d));
+		}
+		return out;
+	}
 
 	@Override
 	public Identifier id() {
@@ -119,8 +161,8 @@ public final class ChidoriStrike implements Spell {
 		if (!ActiveEffects.add(ctx, charge)) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		Motion.dash(p, Vec3.ZERO, ChidoriGeometry.TICKS + NO_FALL_TICKS);
 		int[] ids = hit.map(e -> new int[] {e.getId()}).orElse(new int[0]);
-		return CastOutcome.cast(new FxEvent(fx.spell(), fx.casterId(), fx.origin(), g.flatDir(), g.end(), fx.charge(), fx.power(), fx.seed(),
-				ChidoriGeometry.TICKS, ids, new float[] {p.getEyeHeight(), g.radius()}));
+		return CastOutcome.cast(fx.withDir(g.flatDir()).withTarget(g.end()).withDuration(ChidoriGeometry.TICKS).withEntities(ids)
+				.withData(p.getEyeHeight(), g.radius()));
 	}
 
 	/** {@link ChidoriGeometry#PASS} past {@code feet}, along the flat way from {@code start} (the facing if it is straight above or below). */
@@ -151,6 +193,8 @@ public final class ChidoriStrike implements Spell {
 		/** Cells already queued for removal or launch, and cells already scorched (no cell is queued twice). */
 		private final Set<BlockPos> removed = new HashSet<>();
 		private final Set<BlockPos> scorched = new HashSet<>();
+		/** Chirping Path: what the passing hand has struck. */
+		private final Set<Integer> chirped = new HashSet<>();
 		/**
 		 * The feet's height along the path (seen from above): where the body really stood, tick by tick ({@code walked}), and where
 		 * the cast's walk said it would ({@code planned}, for stretches it never reached). The trench is cut under these.
@@ -189,11 +233,21 @@ public final class ChidoriStrike implements Spell {
 		@Override
 		public boolean tick(ServerLevel level, int age) {
 			if (age <= ChidoriGeometry.TICKS) move(level, age);
+			if (age <= ChidoriGeometry.TICKS && ctx.rank().is(CHIRPING)) chirp(level);
 			int due = g.segmentsPassed(age);
 			while (cut < due) cutSegment(level, cut++);
 			if (age < ChidoriGeometry.TICKS) return true;
 			strike(level);
 			bowl(level);
+			if (ctx.rank().is(KIRIN)) {
+				for (Vec3 p : kirinPoints(g.end(), ctx.seed())) {
+					RankKit.blast(ctx, p.add(0, 0.5, 0), KIRIN_RADIUS, KIRIN_DAMAGE * ctx.power(), null, 0, 0.6, 0.4);
+				}
+			}
+			if (ctx.rank().is(STORM_TRAIL)) {
+				RankKit.zone(ctx, RankKit.Zone.at(g.start().add(0, 0.5, 0), TRAIL_RADIUS, TRAIL_TICKS).between(g.start().add(0, 0.5, 0),
+						g.end().add(0, 0.5, 0)).hurting(TRAIL_DAMAGE, 20).afflicting(MobEffects.SLOWNESS, 30, 1));
+			}
 			return false;
 		}
 
@@ -213,19 +267,31 @@ public final class ChidoriStrike implements Spell {
 			p.resetFallDistance();
 		}
 
+		/** Chirping Path: creatures within {@link #CHIRP_RADIUS} of where the body is now take the chirp, each once. */
+		private void chirp(ServerLevel level) {
+			Vec3 at = placed.add(0, 1, 0);
+			for (LivingEntity e : Targets.radius(ctx, at, CHIRP_RADIUS)) {
+				if (e == target || !chirped.add(e.getId()) || !Arcs.reaches(ctx, at, e.getBoundingBox())) continue;
+				Hurt.damage(ctx, e, CHIRP_DAMAGE * ctx.power());
+			}
+		}
+
 		// ---- the end ----
 
 		private void strike(ServerLevel level) {
 			Vec3 end = g.end();
 			Vec3 core = end.add(0, 1, 0);
 			int hits = 0;
-			if (target != null && target.isAlive() && target.getBoundingBox().distanceToSqr(end) <= ChidoriGeometry.REACH * ChidoriGeometry.REACH
+			double reach = reach(ctx.rank());
+			boolean raikiri = ctx.rank().is(RAIKIRI);
+			if (target != null && target.isAlive() && target.getBoundingBox().distanceToSqr(end) <= reach * reach
 					&& Arcs.reaches(ctx, core, target.getBoundingBox())) {
-				Hurt.damage(ctx, target, DAMAGE * ctx.power());
+				Hurt.damage(ctx, target, DAMAGE * ctx.power() * (raikiri ? RAIKIRI_BONUS : 1));
 				weaken(target);
+				if (raikiri && target.isAlive()) target.addEffect(new MobEffectInstance(MobEffects.SLOWNESS, RAIKIRI_TICKS, SLOW_AMPLIFIER), ctx.caster());
 				hits++;
 			}
-			for (LivingEntity e : Targets.radius(ctx, end, ChidoriGeometry.REACH)) {
+			for (LivingEntity e : Targets.radius(ctx, end, reach)) {
 				if (hits >= Targets.MAX_ENTITIES) break; // the target and the blast share the per-cast budget
 				if (e == target || !Arcs.reaches(ctx, core, e.getBoundingBox())) continue;
 				hits++;

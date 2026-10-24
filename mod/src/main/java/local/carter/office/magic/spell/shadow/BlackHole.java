@@ -19,12 +19,16 @@ import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.HitBudget;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
+import local.carter.office.magic.spell.ProjectileSpec;
+import local.carter.office.magic.spell.Projectiles;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.Targets;
 import local.carter.office.magic.spell.shadow.BlackHoleGeometry.Cell;
 import local.carter.office.magic.terrain.EditBatch;
 import local.carter.office.magic.terrain.EditTier;
+import local.carter.office.magic.tree.Knob;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
@@ -61,13 +65,47 @@ import net.minecraft.world.phys.Vec3;
  * </ul>
  * It never loads a chunk: it closes if its own goes away.
  *
+ * <p>Ranks widen the pull (the size knob). Forks: III {@link #RAVENOUS} (hurts every {@link #RAVENOUS_EVERY} ticks) or
+ * {@link #HORIZON} (pulls {@link #HORIZON_PULL}× as hard); V {@link #SUPERNOVA} (the collapse's blast twice as wide and twice as
+ * hard) or {@link #DARK_RAIN} (the collapse fires {@link #RAIN_BOLTS} shadow bolts outward, {@link #RAIN_DAMAGE}{@code × P} each).
+ *
  * <p>Fx: {@code target} = the centre, {@code duration} = {@link BlackHoleGeometry#LIFE}, {@code data} = {the sphere's final radius,
- * the pull radius}.
+ * the pull radius}. The client rebuilds Dark Rain's bolts with {@link #rain}.
  */
 public final class BlackHole implements Spell {
 	static final int MAX_CLIPS = 128;
 	static final int SYNC_EVERY = 2;
 	static final double MIN_SYNC = 0.02;
+	public static final String RAVENOUS = "ravenous";
+	public static final String HORIZON = "horizon";
+	public static final String SUPERNOVA = "supernova";
+	public static final String DARK_RAIN = "dark_rain";
+	public static final int RAVENOUS_EVERY = 5;
+	public static final double HORIZON_PULL = 1.4;
+	public static final int RAIN_BOLTS = 8;
+	public static final float RAIN_DAMAGE = 6;
+
+	/** The pull's reach at {@code rank}: {@link BlackHoleGeometry#PULL_RADIUS} times the size knob. */
+	public static double pullRadius(SpellRank rank) {
+		return BlackHoleGeometry.PULL_RADIUS * rank.mul(Knob.SIZE);
+	}
+
+	/** The collapse's blast reach at {@code rank} (Supernova's ×2). */
+	public static double blastRadius(SpellRank rank) {
+		return BlackHoleGeometry.BLAST_RADIUS * (rank.is(SUPERNOVA) ? 2 : 1);
+	}
+
+	/** Dark Rain's bolts from {@code centre}: {@link #RAIN_BOLTS} level directions, evenly round, a little down (shared with the fx). */
+	public static List<ProjectileSpec> rain(Vec3 centre, long seed) {
+		List<ProjectileSpec> out = new ArrayList<>(RAIN_BOLTS);
+		double turn = new Random(seed ^ 0xDA4CL).nextDouble() * Math.PI * 2;
+		for (int i = 0; i < RAIN_BOLTS; i++) {
+			double a = turn + Math.PI * 2 * i / RAIN_BOLTS;
+			Vec3 d = new Vec3(Math.cos(a), -0.15, Math.sin(a)).normalize();
+			out.add(new ProjectileSpec(centre.add(d.scale(1.2)), d.scale(ShadowBolt.SPEED), 0, ShadowBolt.RADIUS, ShadowBolt.MAX_TICKS, false));
+		}
+		return out;
+	}
 
 	@Override
 	public Identifier id() {
@@ -90,7 +128,7 @@ public final class BlackHole implements Spell {
 		double cap = BlackHoleGeometry.cap(ctx.grimoireLevel());
 		if (!ActiveEffects.add(ctx, new Hole(ctx, centre, cap))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 		return CastOutcome.cast(ctx.fx().withTarget(centre).withDuration(BlackHoleGeometry.LIFE)
-				.withData((float) cap, (float) BlackHoleGeometry.PULL_RADIUS));
+				.withData((float) cap, (float) pullRadius(ctx.rank())));
 	}
 
 	/**
@@ -130,7 +168,7 @@ public final class BlackHole implements Spell {
 		public boolean tick(ServerLevel level, int age) {
 			if (!level.isLoaded(origin)) return false;
 			int clips = pull(level, age);
-			if (age % BlackHoleGeometry.HURT_EVERY == 0) hurt(level, clips);
+			if (age % (ctx.rank().is(RAVENOUS) ? RAVENOUS_EVERY : BlackHoleGeometry.HURT_EVERY) == 0) hurt(level, clips);
 			devour(level, age);
 			if (age >= BlackHoleGeometry.LIFE) {
 				collapse(level);
@@ -141,9 +179,10 @@ public final class BlackHole implements Spell {
 
 		/** Sets the pull on everything in reach that the centre can see; returns the sight checks it used. */
 		private int pull(ServerLevel level, int age) {
-			double r = BlackHoleGeometry.PULL_RADIUS;
+			double r = pullRadius(ctx.rank());
+			double strength = ctx.rank().is(HORIZON) ? HORIZON_PULL : 1;
 			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, new AABB(centre, centre).inflate(r),
-					e -> GravityWell.pulls(ctx, e) && BlackHoleGeometry.inReach(centre, e.getBoundingBox().getCenter())));
+					e -> GravityWell.pulls(ctx, e) && e.getBoundingBox().getCenter().distanceToSqr(centre) <= r * r));
 			caught.sort(Comparator.comparingDouble(e -> e.getBoundingBox().getCenter().distanceToSqr(centre)));
 			int n = 0;
 			int clips = 0;
@@ -154,7 +193,7 @@ public final class BlackHole implements Spell {
 				clips++;
 				if (!GravityWell.clear(level, centre, mid)) continue;
 				n++;
-				Vec3 pull = BlackHoleGeometry.pull(centre, mid, age).scale(resistance(e));
+				Vec3 pull = BlackHoleGeometry.pull(centre, mid, age).scale(resistance(e) * strength);
 				e.setDeltaMovement(pull);
 				e.resetFallDistance();
 				if (sync && pull.length() >= MIN_SYNC) {
@@ -215,12 +254,20 @@ public final class BlackHole implements Spell {
 				if (!thrown.contains(c)) b.remove(new BlockPos(c.x(), c.y(), c.z()));
 			}
 
-			for (LivingEntity l : Targets.radius(ctx, centre, BlackHoleGeometry.BLAST_RADIUS)) {
-				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) {
-					Hurt.damage(ctx, l, BlackHoleGeometry.BLAST * ctx.power());
+			double blast = blastRadius(ctx.rank());
+			float damage = BlackHoleGeometry.BLAST * ctx.power() * (ctx.rank().is(SUPERNOVA) ? 2 : 1);
+			for (LivingEntity l : Targets.radius(ctx, centre, blast)) {
+				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) Hurt.damage(ctx, l, damage);
+			}
+			// Dark Rain: shadow bolts fly out of the collapse.
+			if (ctx.rank().is(DARK_RAIN)) {
+				for (ProjectileSpec s : rain(centre, ctx.seed())) {
+					Projectiles.launch(ctx, s, hit -> {
+						if (hit.entity() != null) Hurt.damage(ctx, hit.entity(), RAIN_DAMAGE * ctx.power());
+					});
 				}
 			}
-			double r = BlackHoleGeometry.BLAST_RADIUS;
+			double r = blast;
 			int n = 0;
 			for (Entity e : level.getEntities((Entity) null, new AABB(centre, centre).inflate(r),
 					e -> GravityWell.pulls(ctx, e) && e.getBoundingBox().distanceToSqr(centre) <= r * r)) {

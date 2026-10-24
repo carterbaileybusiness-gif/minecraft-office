@@ -2,8 +2,11 @@ package local.carter.office.client.magic.fx.shadow;
 
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
+import local.carter.office.client.magic.fx.RankFx;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.shadow.ShadowStep;
+import local.carter.office.magic.tree.SpellRank;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -29,6 +32,18 @@ public final class ShadowStepFx implements SpellFx {
 		Vec3 from = d.length >= 3 ? land.add(d[0], d[1], d[2]) : e.origin().subtract(0, 1.62, 0);
 		boolean own = mc.player != null && mc.player.getId() == e.casterId();
 		boolean firstPerson = own && mc.options.getCameraType().isFirstPerson();
+
+		// The forks: Backstab's burst on the target, Shadow Swap's pop where the target now stands, Phantom's aura.
+		SpellRank rank = e.spellRank();
+		int[] ids = e.entities();
+		if (ids.length > 0 && rank.is(ShadowStep.BACKSTAB)) {
+			RankFx.blast(kit, level, RankFx.middle(level, ids[0], land), 1.2, ShadowFx.MAGENTA, ParticleTypes.REVERSE_PORTAL);
+		}
+		if (ids.length > 0 && rank.is(ShadowStep.SWAP)) {
+			kit.burst(from.add(0, 0.9, 0), ParticleTypes.REVERSE_PORTAL, 24, 0.2);
+			kit.motes(from.add(0, 0.9, 0), ShadowFx.VIOLET, 12, 0.5, Vec3.ZERO, 0.08, GlowMote.Drift.SINK, 0.14F, 14);
+		}
+		if (rank.is(ShadowStep.PHANTOM)) RankFx.aura(kit, level, e.casterId(), ShadowFx.VIOLET, ShadowStep.PHANTOM_TICKS);
 
 		// Where they left: a pool of shadow and the column sinking into it (wider for a charged step).
 		float pool = 0.85F * (1F + Mth.clamp(e.charge(), 0F, 1F));
