@@ -18,6 +18,13 @@ public final class GrimoireLayout {
 	public static final int FRIEND_ROWS = 8;
 	/** Index tabs: Spells, Friends, How to cast (more tabs: raise this and add the page in {@code GrimoireScreen}). */
 	public static final int TABS = 3;
+	/** Tooltip lang key per tab, in tab order. */
+	public static final String[] TAB_TIPS = {"magic.office.tab_spells", "magic.office.tab_friends", "magic.office.tab_howto"};
+
+	static {
+		// A new tab needs its tooltip (and its page, icon and footer in GrimoireScreen) before the class loads at all.
+		if (TAB_TIPS.length != TABS) throw new IllegalStateException("TAB_TIPS has " + TAB_TIPS.length + " entries for " + TABS + " tabs");
+	}
 	/** How far a tab sticks out of the book, and its height, per text unit. */
 	private static final int TAB_OUT = 20;
 	private static final int TAB_H = 28;

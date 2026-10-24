@@ -125,6 +125,11 @@ class GrimoireLayoutTest {
 
 	/** Spells, Friends, How to cast: every tab on screen, apart, top to bottom, beside the book. */
 	@Test
+	void everyTabHasATooltip() {
+		assertEquals(GrimoireLayout.TABS, GrimoireLayout.TAB_TIPS.length);
+	}
+
+	@Test
 	void threeTabsFit() {
 		List<int[]> all = new java.util.ArrayList<>(List.of(SIZES));
 		all.addAll(List.of(MORE));

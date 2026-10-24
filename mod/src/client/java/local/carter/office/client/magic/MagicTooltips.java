@@ -1,7 +1,9 @@
 package local.carter.office.client.magic;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BiFunction;
 
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicAttachments;
@@ -12,6 +14,9 @@ import local.carter.office.magic.item.MagicItems;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.FormattedText;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
 
 import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
 
@@ -21,15 +26,39 @@ public final class MagicTooltips {
 
 	public static void register() {
 		ItemTooltipCallback.EVENT.register((stack, context, flag, lines) -> {
+			Minecraft mc = Minecraft.getInstance();
+			List<Component> ours;
 			if (GrimoireItem.isGrimoire(stack)) {
-				Minecraft mc = Minecraft.getInstance();
 				// Any carried book is stamped to its holder, so the local player's synced data is the right source.
 				MagicData data = mc.player == null ? MagicData.EMPTY : MagicAttachments.get(mc.player);
-				lines.addAll(grimoire(data.element(), data.level()));
+				ours = grimoire(data.element(), data.level());
 			} else if (stack.is(MagicItems.REBINDING_SEAL)) {
-				lines.addAll(seal());
+				ours = seal();
+			} else {
+				return;
 			}
+			int max = Math.min(MAX_WIDTH, mc.getWindow().getGuiScaledWidth() / 2);
+			lines.addAll(wrap(ours, max, (text, width) -> mc.font.getSplitter().splitLines(text, width, Style.EMPTY)));
 		});
+	}
+
+	/** Widest a tooltip line of ours gets (GUI pixels), so the long tips wrap instead of running off the screen. */
+	private static final int MAX_WIDTH = 200;
+
+	/** Each line split to {@code maxWidth} by {@code splitter} (the font's, in game), the pieces as styled Components. */
+	static List<Component> wrap(List<Component> lines, int maxWidth, BiFunction<FormattedText, Integer, List<FormattedText>> splitter) {
+		List<Component> out = new ArrayList<>();
+		for (Component line : lines) {
+			for (FormattedText piece : splitter.apply(line, maxWidth)) {
+				MutableComponent c = Component.empty();
+				piece.visit((style, text) -> {
+					c.append(Component.literal(text).withStyle(style));
+					return Optional.empty();
+				}, Style.EMPTY);
+				out.add(c);
+			}
+		}
+		return out;
 	}
 
 	/** Unbound: one line. Bound: "Element · Level n" in the element's colour, then how to cast. */
