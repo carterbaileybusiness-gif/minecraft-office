@@ -5,6 +5,8 @@ server. Marks: **(Carter)** = Carter decided; **(my call)** = Claude's default, 
 
 ## 0. Carter's final changes (override anything below)
 
+- **See also "Carter's play-test rulings (2026-10-24)" at the end of this doc; they override everything too.**
+
 - **Recipe:** book + feather + **iron ingot** — everyone should get it early.
 - **Casting (Carter: B, off hand):** grimoire in the **off hand**; with an **empty main hand**, **tap right-click** = quick
   cast of the selected spell, **hold right-click** = the summoning circle grows (charge) and **release** fires a stronger
