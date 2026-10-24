@@ -52,6 +52,10 @@ public final class MagicClient {
 		LightningFx.register();
 		EarthFx.register();
 		ShadowFx.register();
+
+		// Task 8: R spell wheel and Shift + scroll selection (input precedence: MagicInputGate).
+		MagicKeys.register();
+		SpellWheelHud.register();
 	}
 
 	/**

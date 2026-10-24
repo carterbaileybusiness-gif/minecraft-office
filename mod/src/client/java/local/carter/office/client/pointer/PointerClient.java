@@ -510,7 +510,7 @@ public final class PointerClient {
 	}
 
 	/** The hologram under the crosshair when it is in front of what vanilla aims at (any owner). */
-	static Optional<Picked> inFront(final Minecraft mc, final float partial) {
+	public static Optional<Picked> inFront(final Minecraft mc, final float partial) {
 		LocalPlayer player = mc.player;
 		if (player == null || mc.level == null) {
 			return Optional.empty();

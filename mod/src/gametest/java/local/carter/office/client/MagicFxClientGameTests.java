@@ -57,8 +57,11 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 	@Override
 	public void runTest(ClientGameTestContext context) {
 		context.getInput().resizeWindow(1600, 900);
-		AutoCloseable probe = SpellRegistry.overrideForTesting(MagicTestKit.probe("fx_probe", Element.FIRE, 0));
+		AutoCloseable probe = null;
 		try (TestSingleplayerContext sp = context.worldBuilder().create()) {
+			// Scoped to the singleplayer player, whose UUID the client player shares (client code looks up with it).
+			java.util.UUID self = sp.getServer().computeOnServer(server -> player(server).getUUID());
+			probe = SpellRegistry.overrideForTesting(MagicTestKit.probe("fx_probe", Element.FIRE, 0), self::equals);
 			sp.getConnection().waitForChunksRender();
 			BlockPos stand = setUpStage(context, sp);
 			chargeCircleGrowsRingByRing(context);
@@ -74,7 +77,7 @@ public class MagicFxClientGameTests implements FabricClientGameTest {
 			context.getInput().pressKey(o -> o.keyToggleGui); // the HUD back
 		} finally {
 			try {
-				probe.close();
+				if (probe != null) probe.close();
 			} catch (Exception e) {
 				throw new RuntimeException(e);
 			}
