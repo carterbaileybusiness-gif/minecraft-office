@@ -85,6 +85,16 @@ Builder numbers (spec §7 left them to us; one source each):
 - Budgets per cast: ≤ 64 entities affected, ≤ 48 falling blocks. Medium edits ≤ 256 blocks, ultimate ≤ 1500. Global applier
   ≤ 256 block changes per tick. ≤ 12 lingering effects per caster and ≤ 128 server-wide (teleport channels exempt from the server-wide cap) (projectiles have their own cap of 64). Client fx ≤ 400 particles
   (ultimate ≤ 1500) and ≤ 128 ghost blocks.
+  The entity budget is per cast: at most 64 **different** creatures hurt over the whole cast, a lingering effect's life and every
+  blast of a volley included (`HitBudget`; Task 24), as well as at most 64 per query. Bosses (`#c:bosses`, Wither, Ender Dragon,
+  Warden) take spell damage but are never pulled, lifted, rooted or chained onto (`TargetFilter.isBoss` / `controllable`).
+- Balance pass (Task 24) final values: the cost table above, every spell's damage and the Global numbers are unchanged; nothing
+  needed tuning. Measured (`BalanceGameTests`): casts to kill a 20-hp zombie at level 1, charge 0: Fire Bolt 5, Water Bullet 7,
+  Spark 7, Stone Bullet 4, Shadow Bolt 5 (band 3–8). Level 10, full charge, into a 66-zombie crowd: at most 64 hurt per cast for
+  every spell; logged edits (one run; debris makes them vary a little) Meteor ≈ 1270 (40 launched), Black Hole ≈ 860 (32),
+  Mountain Fist ≈ 560 (18), Chidori ≈ 520 (16), Water Dragon ≈ 290, mediums ≤ 40 permanent (Quake 37, Barrage 22, Thunder Spear 18;
+  Fire Wall, Earth Wall and Tidal Push are temporary only); small spells change no block. FX: Shadow Bind coils 64 pieces each
+  (was 96), piece width `0.21 − 0.13 s` (was `0.2 − 0.13 s`).
 - `CastFx` range: 64 blocks (128 for ultimates).
 - Element colours (ARGB), defined once in `Element.java`; the texture script parses them: Fire `FFFF6A1A`, Water `FF2F8CFF`,
   Wind `FF9CF2C8`, Lightning `FFFFE94A`, Earth `FFB0814A`, Shadow `FF8A3CFF`. Recall gold `FFFFD27A`; circle core white.

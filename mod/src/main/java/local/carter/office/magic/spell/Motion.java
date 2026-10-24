@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import org.jspecify.annotations.Nullable;
+
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -54,6 +56,20 @@ public final class Motion {
 	 * @return where the player ended up
 	 */
 	public static Vec3 teleportSafe(ServerPlayer p, Vec3 target) {
+		Vec3 at = fit(p, target);
+		if (at == null) return p.position();
+		ServerLevel level = p.level();
+		if (p.isPassenger()) p.stopRiding();
+		p.teleportTo(level, at.x, at.y, at.z, Set.of(), p.getYRot(), p.getXRot(), true);
+		p.resetFallDistance();
+		return at;
+	}
+
+	/**
+	 * Where {@link #teleportSafe} would put the player, without moving them: {@code target}, or the nearest point stepping back
+	 * along the path toward where they stand where their box fits inside the world border; null if nothing fits (they stay put).
+	 */
+	public static @Nullable Vec3 fit(ServerPlayer p, Vec3 target) {
 		ServerLevel level = p.level();
 		Vec3 from = p.position();
 		Vec3 path = target.subtract(from);
@@ -62,14 +78,9 @@ public final class Motion {
 		for (double d = 0; d <= len; d += STEP_BACK) {
 			Vec3 at = target.add(back.scale(d));
 			AABB box = p.getDimensions(p.getPose()).makeBoundingBox(at);
-			if (level.getWorldBorder().isWithinBounds(at) && level.noCollision(p, box)) {
-				if (p.isPassenger()) p.stopRiding();
-				p.teleportTo(level, at.x, at.y, at.z, Set.of(), p.getYRot(), p.getXRot(), true);
-				p.resetFallDistance();
-				return at;
-			}
+			if (level.getWorldBorder().isWithinBounds(at) && level.noCollision(p, box)) return at;
 		}
-		return from;
+		return null;
 	}
 
 	/** {@code ServerLivingEntityEvents.ALLOW_DAMAGE}: false for fall damage inside a dash's no-fall window. */

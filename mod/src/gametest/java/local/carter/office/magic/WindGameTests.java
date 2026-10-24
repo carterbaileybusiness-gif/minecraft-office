@@ -9,6 +9,7 @@ import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
 import local.carter.office.magic.spell.Motion;
 import local.carter.office.magic.spell.SpellIds;
+import local.carter.office.magic.spell.wind.AirStep;
 import local.carter.office.magic.spell.wind.DrillGeometry;
 import local.carter.office.magic.spell.wind.TornadoGeometry;
 import local.carter.office.magic.spell.wind.WindSphere;
@@ -20,6 +21,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.animal.cow.Cow;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -613,6 +615,53 @@ public class WindGameTests {
 			h.assertValueEqual(z.getHealth(), 20f, "the zombie ahead of the teleported caster");
 			h.assertTrue(zq.isDeadOrDying(), "the control caster's zombie is struck " + zq.getHealth());
 			h.assertTrue(p.getDeltaMovement().horizontalDistance() < 1.0E-9, "the teleported caster is not dashed " + p.getDeltaMovement());
+			h.succeed();
+		});
+	}
+
+	/**
+	 * Chained Air Steps never add up to flight: trying a full-charge cast every tick for 400 ticks (level 10, the most mana and
+	 * regen), the cooldown lets one through every 40 ticks, and each one starts lower than the last. The server never moves a
+	 * mock player, so its height is integrated here as the client does it: each tick it moves by its velocity, then gravity
+	 * (the player's own attribute) and the 0.98 drag apply; a cast sets the velocity.
+	 */
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 440)
+	public void airStepChainNeverGivesEndlessFlight(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.WIND, 10);
+		MagicTestKit.teleportTo(p, new BlockPos(16, 12, 16));
+		double gravity = p.getAttributeValue(Attributes.GRAVITY);
+		// One jump's apex, from the spell's own numbers.
+		double top = 0;
+		for (double y = 0, v = AirStep.velocity(new Vec3(0, 0, 1), 0f, 1f).y; v > 0; y += v, v = (v - gravity) * 0.98) top = Math.max(top, y + v);
+		double apex = top;
+		double[] y = {0};
+		double[] v = {0};
+		double[] peak = {0};
+		List<Double> startHeights = new ArrayList<>();
+		List<Long> castTicks = new ArrayList<>();
+		h.onEachTick(() -> {
+			long t = h.getTick();
+			if (t > 400) return;
+			Result r = MagicTestKit.cast(p, SpellIds.AIR_STEP, 1f);
+			if (r == Result.CAST) {
+				startHeights.add(y[0]);
+				castTicks.add(t);
+				v[0] = p.getDeltaMovement().y;
+			} else {
+				h.assertTrue(r == Result.COOLDOWN, "only the cooldown holds it back at tick " + t + ": " + r);
+			}
+			y[0] += v[0];
+			v[0] = (v[0] - gravity) * 0.98;
+			peak[0] = Math.max(peak[0], y[0]);
+		});
+		h.runAtTickTime(405, () -> {
+			h.assertTrue(castTicks.size() >= 9 && castTicks.size() <= 11, "one cast per 40-tick cooldown: " + castTicks);
+			for (int i = 1; i < castTicks.size(); i++) {
+				h.assertTrue(castTicks.get(i) - castTicks.get(i - 1) >= 40, "casts 40 apart: " + castTicks);
+				h.assertTrue(startHeights.get(i) < startHeights.get(i - 1) - 1, "each step starts lower than the last: " + startHeights);
+			}
+			h.assertTrue(peak[0] <= apex + 1.0E-6, "never higher than one jump (" + apex + "): " + peak[0]);
+			h.assertTrue(y[0] < -50, "falls in the end: " + y[0]);
 			h.succeed();
 		});
 	}

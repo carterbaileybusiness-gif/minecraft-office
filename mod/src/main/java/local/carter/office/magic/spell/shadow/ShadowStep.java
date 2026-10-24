@@ -13,14 +13,18 @@ import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.Targets;
 
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -35,7 +39,8 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * {@link #BEHIND} behind it, on the far side from where they stood, facing it; with its back to a wall, beside it
  * instead ({@link #behind}); behind something not on the ground, on the ground under that spot ({@link Targets#ground}). With no target the caster steps {@link #AHEAD} along their flat facing, stopping short of a wall. Either way
  * the move is {@link Motion#teleportSafe}: it never ends inside a block (it steps back along the path until the body fits).
- * Then the caster is invisible for {@link #INVISIBLE_TICKS} ticks. No block changes, no damage.
+ * It never lands on lava or deep water ({@link #unsafe}): then it fizzles ({@link #UNSAFE_KEY}) before anything happens, so it
+ * costs nothing and starts no cooldown. Then the caster is invisible for {@link #INVISIBLE_TICKS} ticks. No block changes, no damage.
  *
  * <p>Fx: {@code origin} = the caster's eye before the step, {@code dir} = the look, {@code target} = where their feet landed,
  * {@code entities} = {the target} if there was one, {@code duration} = {@link #INVISIBLE_TICKS}, {@code data} = {where the feet were
@@ -49,6 +54,8 @@ public final class ShadowStep implements Spell {
 	public static final int INVISIBLE_TICKS = 20;
 	/** How far a landing keeps off a wall (a little over half a player's width). */
 	static final double CLEARANCE = 0.35;
+	/** The fizzle message when the only landing is lava or deep water. */
+	public static final String UNSAFE_KEY = "magic.office.step_unsafe";
 
 	@Override
 	public Identifier id() {
@@ -74,6 +81,9 @@ public final class ShadowStep implements Spell {
 		Vec3 dest = target.map(e -> behind(level, from, e)).orElseGet(() -> ahead(level, p, ctx.look()));
 		// Behind something airborne (a phantom, a mob mid-jump or knocked up), land on the ground under that spot, not in the air.
 		if (target.isPresent() && !target.get().onGround()) dest = Targets.ground(level, dest);
+		// Lava or deep water where it would land (or under it): no step, and nothing spent.
+		Vec3 spot = Motion.fit(p, dest);
+		if (unsafe(level, spot != null ? spot : from)) return CastOutcome.fizzle(UNSAFE_KEY);
 		if (target.isPresent()) face(p, dest, target.get());
 		Vec3 at = Motion.teleportSafe(p, dest);
 		if (target.isPresent() && at.distanceToSqr(dest) > 1.0E-4 && at.distanceToSqr(from) > 1.0E-4) {
@@ -86,6 +96,24 @@ public final class ShadowStep implements Spell {
 		Vec3 back = from.subtract(at);
 		FxEvent fx = ctx.fx().withTarget(at).withDuration(INVISIBLE_TICKS).withData((float) back.x, (float) back.y, (float) back.z);
 		return CastOutcome.cast(target.isPresent() ? fx.withEntities(target.get().getId()) : fx);
+	}
+
+	/**
+	 * Whether standing at {@code feet} means lava or deep water: lava in the body's two cells, or, under the feet, lava or water at
+	 * least two blocks deep before the first block with a collider (searched down at most {@link Targets#GROUND_SCAN} blocks; one
+	 * block of water over a floor is fine).
+	 */
+	static boolean unsafe(ServerLevel level, Vec3 feet) {
+		BlockPos cell = BlockPos.containing(feet);
+		if (level.getFluidState(cell).is(FluidTags.LAVA) || level.getFluidState(cell.above()).is(FluidTags.LAVA)) return true;
+		BlockPos.MutableBlockPos m = cell.mutable();
+		for (int i = 0; i < Targets.GROUND_SCAN && m.getY() >= level.getMinY(); i++, m.move(Direction.DOWN)) {
+			BlockState s = level.getBlockState(m);
+			if (s.getFluidState().is(FluidTags.LAVA)) return true;
+			if (s.getFluidState().is(FluidTags.WATER)) return level.getFluidState(m.below()).is(FluidTags.WATER);
+			if (!s.getCollisionShape(level, m).isEmpty()) return false;
+		}
+		return false;
 	}
 
 	/** Whether the caster's eye can see any of {@code e}'s middle, eyes or feet (no block collider in between). */

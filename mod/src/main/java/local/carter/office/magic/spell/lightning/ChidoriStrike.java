@@ -217,13 +217,17 @@ public final class ChidoriStrike implements Spell {
 		private void strike(ServerLevel level) {
 			Vec3 end = g.end();
 			Vec3 core = end.add(0, 1, 0);
+			int hits = 0;
 			if (target != null && target.isAlive() && target.getBoundingBox().distanceToSqr(end) <= ChidoriGeometry.REACH * ChidoriGeometry.REACH
 					&& Arcs.reaches(ctx, core, target.getBoundingBox())) {
 				Hurt.damage(ctx, target, DAMAGE * ctx.power());
 				weaken(target);
+				hits++;
 			}
 			for (LivingEntity e : Targets.radius(ctx, end, ChidoriGeometry.REACH)) {
+				if (hits >= Targets.MAX_ENTITIES) break; // the target and the blast share the per-cast budget
 				if (e == target || !Arcs.reaches(ctx, core, e.getBoundingBox())) continue;
+				hits++;
 				Hurt.damage(ctx, e, BLAST_DAMAGE * ctx.power());
 				if (e instanceof Enemy) weaken(e);
 			}

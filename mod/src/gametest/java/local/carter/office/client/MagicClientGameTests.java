@@ -3,11 +3,15 @@ package local.carter.office.client;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import javax.imageio.ImageIO;
+
+import org.joml.Matrix4f;
+import org.joml.Vector4f;
 
 import com.mojang.blaze3d.platform.InputConstants;
 
@@ -15,11 +19,16 @@ import local.carter.office.client.magic.MagicInputGate;
 import local.carter.office.client.magic.MagicKeys;
 import local.carter.office.client.magic.SpellWheel;
 import local.carter.office.client.magic.WheelLayout;
+import local.carter.office.client.magic.fx.ChargeCircles;
+import local.carter.office.client.magic.fx.MagicCircleRenderer;
 import local.carter.office.client.magic.hud.ManaBarHud;
 import local.carter.office.client.magic.hud.ManaBarLayout;
 import local.carter.office.client.magic.screen.ChoiceLayout;
 import local.carter.office.client.magic.screen.ElementChoiceScreen;
+import local.carter.office.client.magic.screen.GrimoireLayout;
 import local.carter.office.client.magic.screen.GrimoireScreen;
+import local.carter.office.client.magic.screen.HandSignScreen;
+import local.carter.office.client.magic.screen.SignLayout;
 import local.carter.office.client.magic.screen.SignLayout.Rect;
 import local.carter.office.client.pointer.PointerClient;
 import local.carter.office.client.render.HologramPlacement;
@@ -32,17 +41,24 @@ import local.carter.office.hologram.HologramEmitterBlock;
 import local.carter.office.hologram.OfficeBlocks;
 import local.carter.office.magic.MagicTestKit;
 import local.carter.office.magic.cast.CastService;
+import local.carter.office.magic.core.ChargeMath;
+import local.carter.office.magic.core.Dir;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.HandSigns;
 import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.item.MagicItems;
+import local.carter.office.magic.net.MagicPayloads.SignChallenge;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.SpellCost;
 import local.carter.office.magic.spell.SpellRegistry;
 
+import net.minecraft.client.Camera;
+import net.minecraft.client.CameraType;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
@@ -51,6 +67,8 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Util;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -58,6 +76,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.Vec3;
 
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -87,6 +106,7 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			rebindingSealRebindsOnChoice(context, sp);
 			friendsPageAsksToTravel(context, sp);
 			castingInputPrecedence(context, sp);
+			castingFeel(context, sp);
 		} finally {
 			setGuiScale(context, savedScale);
 		}
@@ -962,6 +982,351 @@ public class MagicClientGameTests implements FabricClientGameTest {
 			mc.player.yRotO = yaw;
 			mc.player.xRotO = pitch;
 		});
+	}
+
+	// ---- Task 24: charging, tapping, hand signs, screens at GUI scale 4 ----
+
+	/** Probes (no real spell's fx): a slot-0 tap spell and a slot-4 ultimate, both Fire. */
+	private static final Identifier TAP_PROBE = Identifier.fromNamespaceAndPath("office-test", "tap_probe");
+	private static final Identifier ULT_PROBE = Identifier.fromNamespaceAndPath("office-test", "ultimate_probe");
+	private static final int FEEL_LEVEL = 7; // the ultimate unlocks at 7
+	private static final int FEEL_MANA = ManaMath.max(FEEL_LEVEL);
+
+	/**
+	 * Casting stance at level 7 with the tap and ultimate probes: a held right-click grows the circle and spends nothing until
+	 * released; a tap casts at once for the base 8; the ultimate opens the hand-sign prompt and, typed right, costs 60; and every
+	 * magic screen and the HUD fit an 854 × 480 window at GUI scale 4.
+	 */
+	private static void castingFeel(ClientGameTestContext context, TestSingleplayerContext sp) {
+		setGuiScale(context, 4);
+		AutoCloseable[] probes = new AutoCloseable[2];
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			probes[0] = SpellRegistry.overrideForTesting(probe(TAP_PROBE, Slots.SMALL_A), p.getUUID()::equals);
+			probes[1] = SpellRegistry.overrideForTesting(probe(ULT_PROBE, Slots.ULTIMATE), p.getUUID()::equals);
+			p.getInventory().clearContent();
+			p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
+			p.setExperienceLevels(10);
+			MagicAttachments.set(p, MagicData.EMPTY.withElement(Optional.of(Element.FIRE)).withLevel(FEEL_LEVEL)
+					.withSelected(Optional.of(TAP_PROBE)));
+			MagicAttachments.setMana(p, FEEL_MANA);
+		});
+		try {
+			context.waitFor(mc -> ManaBarHud.active(mc) && MagicAttachments.get(mc.player).selected().equals(Optional.of(TAP_PROBE)), 40);
+			lookEast(context);
+			context.waitTicks(3);
+			tapCastsQuickly(context, sp);
+			chargeCircleGrowsWhileHeld(context, sp);
+			handSignPromptAppearsForUltimate(context, sp);
+			screensFitAtGuiScale4(context, sp);
+		} finally {
+			context.runOnClient(mc -> mc.options.setCameraType(CameraType.FIRST_PERSON));
+			sp.getServer().runOnServer(server -> {
+				for (AutoCloseable c : probes) {
+					try {
+						if (c != null) c.close();
+					} catch (Exception e) {
+						throw new IllegalStateException(e);
+					}
+				}
+			});
+		}
+	}
+
+	private static int mana(TestSingleplayerContext sp) {
+		return sp.getServer().computeOnServer(server -> MagicAttachments.mana(player(server)));
+	}
+
+	/** Waits until {@code spell} went on cooldown on the server (it was cast). */
+	private static void waitCast(TestSingleplayerContext sp, Identifier spell) {
+		sp.getConnection().waitForServerboundPackets();
+		sp.getServer().waitFor(server -> MagicAttachments.get(player(server)).readyAt().containsKey(spell), 60);
+	}
+
+	/** Sets full mana and no cooldowns on the server, and waits for the client to see it. */
+	private static void refill(ClientGameTestContext context, TestSingleplayerContext sp, Identifier selected) {
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			MagicAttachments.set(p, MagicAttachments.get(p).withReadyAt(Map.of()).withSelected(Optional.of(selected)));
+			MagicAttachments.setMana(p, FEEL_MANA);
+		});
+		context.waitFor(mc -> MagicAttachments.get(mc.player).selected().equals(Optional.of(selected)) && MagicAttachments.mana(mc.player) == FEEL_MANA, 40);
+		context.waitTicks(2);
+	}
+
+	/** Press and release within 5 ticks: a quick cast for the base cost (8). */
+	private static void tapCastsQuickly(ClientGameTestContext context, TestSingleplayerContext sp) {
+		refill(context, sp, TAP_PROBE);
+		context.getInput().holdMouseFor(MOUSE_RIGHT, 3);
+		waitCast(sp, TAP_PROBE);
+		int left = mana(sp); // read inside the 20-tick regen pause after the cast
+		if (left != FEEL_MANA - 8) throw new AssertionError("a tap costs 8: mana " + FEEL_MANA + " -> " + left);
+	}
+
+	/**
+	 * Hold right-click 40 ticks: no mana is spent while held, and the circle (seen from behind the caster) changes at least 20 % of
+	 * the pixels in its projected rect against the same frame before charging. The release casts at full charge (8 × 1.5 = 12).
+	 */
+	private static void chargeCircleGrowsWhileHeld(ClientGameTestContext context, TestSingleplayerContext sp) {
+		refill(context, sp, TAP_PROBE);
+		context.runOnClient(mc -> mc.options.setCameraType(CameraType.THIRD_PERSON_BACK));
+		quietHud(context);
+		context.waitTicks(4);
+		BufferedImage before = read(context.takeScreenshot("magic-charge-before"));
+		context.getInput().holdMouse(MOUSE_RIGHT);
+		try {
+			context.waitFor(mc -> mc.player.getTicksUsingItem() >= ChargeMath.FULL_TICKS + 4, 120);
+			int held = mana(sp);
+			if (held != FEEL_MANA) throw new AssertionError("no mana is spent while charging: " + FEEL_MANA + " -> " + held);
+			if (context.computeOnClient(mc -> ChargeCircles.showing()) != 1) throw new AssertionError("one charging circle expected");
+			BufferedImage full = read(context.takeScreenshot("magic-charge-full"));
+			int[] r = context.computeOnClient(MagicClientGameTests::circleRect);
+			int n = 0, diff = 0;
+			for (int y = r[1]; y < r[3]; y++) {
+				for (int x = r[0]; x < r[2]; x++) {
+					n++;
+					if (dist(full.getRGB(x, y), before.getRGB(x, y)) > 36) diff++;
+				}
+			}
+			System.out.println(String.format(Locale.ROOT, "[magic] charge circle rect %s: %d/%d pixels changed (%.3f)", java.util.Arrays.toString(r), diff, n,
+					n == 0 ? 0.0 : diff / (double) n));
+			if (n == 0 || diff < 0.20 * n) {
+				throw new AssertionError("the full charge circle changed only " + diff + "/" + n + " pixels of its rect " + java.util.Arrays.toString(r));
+			}
+		} finally {
+			context.getInput().releaseMouse(MOUSE_RIGHT);
+		}
+		waitCast(sp, TAP_PROBE);
+		int left = mana(sp);
+		if (left != FEEL_MANA - 12) throw new AssertionError("a full charge costs 8 × 1.5 = 12: mana " + FEEL_MANA + " -> " + left);
+		context.runOnClient(mc -> mc.options.setCameraType(CameraType.FIRST_PERSON));
+		context.waitTicks(2);
+	}
+
+	/**
+	 * The full-charge circle's rect on screen, in pixels {x0, y0, x1, y1} (clamped to the screen): its rim (radius of 5 rings,
+	 * {@link ChargeCircles#AHEAD} ahead of the eye and {@link ChargeCircles#BELOW} below it, facing along the look) projected
+	 * through the camera.
+	 */
+	private static int[] circleRect(Minecraft mc) {
+		Camera cam = mc.gameRenderer.mainCamera();
+		Matrix4f vp = cam.getViewRotationProjectionMatrix(new Matrix4f());
+		Vec3 look = mc.player.getViewVector(1F);
+		Vec3 centre = mc.player.getEyePosition(1F).add(look.scale(ChargeCircles.AHEAD)).add(0, -ChargeCircles.BELOW, 0);
+		Vec3 right = look.cross(new Vec3(0, 1, 0)).normalize();
+		Vec3 up = right.cross(look).normalize();
+		double radius = MagicCircleRenderer.ringRadius(MagicCircleRenderer.MAX_RINGS);
+		int w = mc.getWindow().getWidth(), h = mc.getWindow().getHeight();
+		double x0 = w, y0 = h, x1 = 0, y1 = 0;
+		for (int i = 0; i < 32; i++) {
+			double a = i * Math.PI * 2 / 32;
+			Vec3 p = centre.add(right.scale(Math.cos(a) * radius)).add(up.scale(Math.sin(a) * radius)).subtract(cam.position());
+			Vector4f clip = vp.transform(new Vector4f((float) p.x, (float) p.y, (float) p.z, 1F));
+			if (clip.w <= 0.01F) continue;
+			double sx = (clip.x / clip.w * 0.5 + 0.5) * w;
+			double sy = (1 - (clip.y / clip.w * 0.5 + 0.5)) * h;
+			x0 = Math.min(x0, sx);
+			y0 = Math.min(y0, sy);
+			x1 = Math.max(x1, sx);
+			y1 = Math.max(y1, sy);
+		}
+		return new int[] {(int) Math.max(0, Math.floor(x0)), (int) Math.max(0, Math.floor(y0)), (int) Math.min(w, Math.ceil(x1)),
+				(int) Math.min(h, Math.ceil(y1))};
+	}
+
+	/** Level 7, the ultimate selected, a tap: the hand-sign prompt opens; typed right, the ultimate costs 60 mana and 3 levels. */
+	private static void handSignPromptAppearsForUltimate(ClientGameTestContext context, TestSingleplayerContext sp) {
+		refill(context, sp, ULT_PROBE);
+		int levels = sp.getServer().computeOnServer(server -> player(server).experienceLevel);
+		context.getInput().holdMouseFor(MOUSE_RIGHT, 3);
+		context.waitForScreen(HandSignScreen.class);
+		SignChallenge c = context.computeOnClient(mc -> ((HandSignScreen) mc.gui.screen()).challenge());
+		if (!c.spell().equals(ULT_PROBE)) throw new AssertionError("the prompt is for the ultimate, got " + c.spell());
+		if (c.length() != HandSigns.length(FEEL_LEVEL)) throw new AssertionError("6 signs at level 7, got " + c.length());
+		int held = mana(sp);
+		if (held != FEEL_MANA) throw new AssertionError("nothing is spent before the signs: mana " + held);
+		context.waitTicks(4);
+		context.takeScreenshot("magic-signs-open-gui4");
+		for (Dir d : HandSigns.sequence(c.seed(), c.length())) {
+			context.getInput().pressKey(switch (d) {
+				case UP -> InputConstants.KEY_UP;
+				case DOWN -> InputConstants.KEY_DOWN;
+				case LEFT -> InputConstants.KEY_LEFT;
+				case RIGHT -> InputConstants.KEY_RIGHT;
+			});
+		}
+		waitCast(sp, ULT_PROBE);
+		int left = mana(sp);
+		if (left != FEEL_MANA - 60) throw new AssertionError("the ultimate costs 60: mana " + FEEL_MANA + " -> " + left);
+		int levelsLeft = sp.getServer().computeOnServer(server -> player(server).experienceLevel);
+		if (levelsLeft != levels - 3) throw new AssertionError("the ultimate costs 3 levels: " + levels + " -> " + levelsLeft);
+		context.waitFor(mc -> mc.gui.screen() == null, 40);
+	}
+
+	/** Fails unless {@code r} lies inside a {@code w} × {@code h} screen. */
+	private static void assertInside(Rect r, int w, int h, String what) {
+		if (r.x() < 0 || r.y() < 0 || r.right() > w || r.bottom() > h) {
+			throw new AssertionError(what + " " + r + " is off the " + w + " × " + h + " screen");
+		}
+	}
+
+	/** Fails unless at least 20 % of the pixels in {@code r} (GUI units) differ from the background colour {@code bg}. */
+	private static void assertDrawn(BufferedImage img, Rect r, int scale, int bg, String what) {
+		int n = 0, hit = 0;
+		for (int y = r.y() * scale; y < r.bottom() * scale; y++) {
+			for (int x = r.x() * scale; x < r.right() * scale; x++) {
+				if (x < 0 || y < 0 || x >= img.getWidth() || y >= img.getHeight()) continue;
+				n++;
+				if (dist(img.getRGB(x, y), bg) > 36) hit++;
+			}
+		}
+		if (n == 0 || hit < 0.20 * n) {
+			throw new AssertionError(what + " " + r + ": only " + hit + "/" + n + " non-background pixels (bg " + Integer.toHexString(bg) + ")");
+		}
+	}
+
+	/**
+	 * An 854 × 480 window with the GUI scale set to 4 (the game caps it at the largest that window allows): the mana bar, the
+	 * wheel, the hand-sign prompt, the grimoire and the element choice all lie inside the screen, and each of their widgets is
+	 * drawn (at least 20 % non-background pixels in its rect). The background is one plain bright face filling the view (a white
+	 * concrete wall, night vision, FOV 30), sampled in each screenshot's corner, so a dark panel or tile counts as drawn.
+	 */
+	private static void screensFitAtGuiScale4(ClientGameTestContext context, TestSingleplayerContext sp) {
+		int fov = context.computeOnClient(mc -> mc.options.fov().get());
+		wallTo(sp, Blocks.CONCRETE.white());
+		sp.getServer().runOnServer(server -> player(server).addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, 20 * 120, 0, false, false)));
+		context.runOnClient(mc -> mc.options.fov().set(30));
+		context.getInput().resizeWindow(854, 480);
+		try {
+			setGuiScale(context, 4);
+			context.waitTicks(3);
+			int scale = context.computeOnClient(mc -> mc.getWindow().getGuiScale());
+			int w = context.computeOnClient(mc -> mc.getWindow().getGuiScaledWidth());
+			int h = context.computeOnClient(mc -> mc.getWindow().getGuiScaledHeight());
+			System.out.println("[magic] 854 x 480 at GUI scale option 4: scale " + scale + ", " + w + " x " + h + " GUI units");
+			lookEast(context);
+			quietHud(context);
+			refill(context, sp, TAP_PROBE);
+			BufferedImage world = read(context.takeScreenshot("magic-fit-world"));
+			int bg = world.getRGB(2, 2);
+			int[] hue = {(bg >> 16) & 0xFF, (bg >> 8) & 0xFF, bg & 0xFF};
+			if (hue[0] < 150 || hue[1] < 150 || hue[2] < 150) throw new AssertionError("the backdrop should be the lit white wall: " + Integer.toHexString(bg));
+
+			// The mana bar (stance: off-hand grimoire, empty main hand).
+			ManaBarLayout.Layout bar = ManaBarLayout.layout(w, h);
+			assertInside(bar.bar(), w, h, "mana bar");
+			assertInside(bar.offhandSlot(false), w, h, "off-hand slot");
+			assertDrawn(world, bar.bar(), scale, bg, "mana bar");
+
+			// The wheel.
+			context.getInput().holdKey(MagicKeys.WHEEL);
+			try {
+				context.waitFor(mc -> SpellWheel.isOpen(), 20);
+				context.waitTicks(SpellWheel.OPEN_TICKS + 3);
+				BufferedImage open = read(context.takeScreenshot("magic-fit-wheel"));
+				int wheelBg = open.getRGB(2, 2);
+				WheelLayout.Layout l = WheelLayout.layout(w, h);
+				int r = (int) Math.ceil(l.outer());
+				Rect ring = new Rect(l.cx() - r, l.cy() - r, 2 * r, 2 * r);
+				assertInside(ring, w, h, "wheel ring");
+				for (int i = 0; i < l.labels().size(); i++) assertInside(l.labels().get(i), w, h, "wheel label " + i);
+				assertDrawn(open, ring, scale, wheelBg, "wheel ring");
+			} finally {
+				context.getInput().releaseKey(MagicKeys.WHEEL);
+			}
+			context.waitFor(mc -> !SpellWheel.visible(), 20);
+
+			// The hand-sign prompt (given up with Esc afterwards).
+			refill(context, sp, ULT_PROBE);
+			context.getInput().holdMouseFor(MOUSE_RIGHT, 3);
+			context.waitForScreen(HandSignScreen.class);
+			context.waitTicks(16); // the arrows pop in one by one
+			BufferedImage signs = read(context.takeScreenshot("magic-fit-signs"));
+			int signsBg = signs.getRGB(2, 2);
+			SignLayout.Layout sl = context.computeOnClient(mc -> ((HandSignScreen) mc.gui.screen()).layout());
+			assertInside(sl.panel(), w, h, "sign panel");
+			assertInside(sl.timer(), w, h, "sign timer");
+			for (int i = 0; i < sl.arrows().size(); i++) {
+				assertInside(sl.arrows().get(i), w, h, "sign arrow " + i);
+				assertDrawn(signs, sl.arrows().get(i), scale, signsBg, "sign arrow " + i);
+			}
+			assertDrawn(signs, sl.panel(), scale, signsBg, "sign panel");
+			context.getInput().pressKey(InputConstants.KEY_ESCAPE);
+			context.waitFor(mc -> mc.gui.screen() == null, 40);
+
+			// The grimoire (in the main hand: right-click opens it).
+			sp.getServer().runOnServer(server -> {
+				ServerPlayer p = player(server);
+				p.setItemInHand(InteractionHand.MAIN_HAND, p.getOffhandItem().copy());
+				p.setItemInHand(InteractionHand.OFF_HAND, ItemStack.EMPTY);
+			});
+			context.waitFor(mc -> mc.player.getMainHandItem().is(MagicItems.GRIMOIRE), 20);
+			context.waitTicks(2);
+			context.getInput().pressMouse(MOUSE_RIGHT);
+			context.waitForScreen(GrimoireScreen.class);
+			context.waitFor(mc -> mc.gui.screen() instanceof GrimoireScreen s && s.introDone(), 60);
+			context.waitTicks(2);
+			BufferedImage book = read(context.takeScreenshot("magic-fit-grimoire"));
+			int bookBg = book.getRGB(2, 2);
+			GrimoireLayout.Layout gl = context.computeOnClient(mc -> ((GrimoireScreen) mc.gui.screen()).layout());
+			assertInside(gl.book(), w, h, "grimoire book");
+			assertInside(gl.footer(), w, h, "grimoire footer");
+			assertDrawn(book, gl.book(), scale, bookBg, "grimoire book");
+			for (int i = 0; i < gl.rows().size(); i++) {
+				assertInside(gl.rows().get(i), w, h, "grimoire row " + i);
+				assertDrawn(book, gl.rows().get(i), scale, bookBg, "grimoire row " + i);
+			}
+			for (int i = 0; i < gl.tabs().size(); i++) {
+				assertInside(gl.tabs().get(i), w, h, "grimoire tab " + i);
+				assertDrawn(book, gl.tabs().get(i), scale, bookBg, "grimoire tab " + i);
+			}
+			context.runOnClient(mc -> mc.gui.setScreen(null));
+			context.waitTicks(2);
+
+			// The element choice (a Rebinding Seal opens it; closing it spends nothing).
+			sp.getServer().runOnServer(server -> player(server).setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(MagicItems.REBINDING_SEAL)));
+			context.waitFor(mc -> mc.player.getMainHandItem().is(MagicItems.REBINDING_SEAL), 20);
+			context.waitTicks(2);
+			context.getInput().pressMouse(MOUSE_RIGHT);
+			context.waitForScreen(ElementChoiceScreen.class);
+			centreCursor(context);
+			context.waitFor(mc -> mc.gui.screen() instanceof ElementChoiceScreen s && s.introDone(), 60);
+			context.waitTicks(4);
+			BufferedImage choice = read(context.takeScreenshot("magic-fit-choice"));
+			int choiceBg = choice.getRGB(2, 2);
+			ChoiceLayout.Layout cl = context.computeOnClient(mc -> ((ElementChoiceScreen) mc.gui.screen()).layout());
+			assertInside(cl.book(), w, h, "choice book");
+			assertDrawn(choice, cl.book(), scale, choiceBg, "choice book");
+			for (int i = 0; i < ChoiceLayout.SIGILS; i++) {
+				assertInside(cl.sigils().get(i), w, h, "sigil " + Element.values()[i]);
+				assertDrawn(choice, cl.sigils().get(i), scale, choiceBg, "sigil " + Element.values()[i]);
+			}
+			context.runOnClient(mc -> mc.gui.setScreen(null));
+			context.waitTicks(2);
+		} finally {
+			sp.getServer().runOnServer(server -> {
+				ServerPlayer p = player(server);
+				p.getInventory().clearContent();
+				p.setItemInHand(InteractionHand.OFF_HAND, new ItemStack(MagicItems.GRIMOIRE));
+				p.removeEffect(MobEffects.NIGHT_VISION);
+			});
+			wallTo(sp, Blocks.OBSIDIAN);
+			context.runOnClient(mc -> mc.options.fov().set(fov));
+			context.getInput().resizeWindow(1920, 1080);
+			setGuiScale(context, 4);
+		}
+	}
+
+	/** Sets the room's east wall (the one {@link #lookEast} faces) to {@code b}. */
+	private static void wallTo(TestSingleplayerContext sp, net.minecraft.world.level.block.Block b) {
+		sp.getServer().runOnServer(server -> {
+			ServerPlayer p = player(server);
+			BlockPos stand = p.blockPosition();
+			for (int dy = -1; dy <= 4; dy++) {
+				for (int dz = -3; dz <= 3; dz++) p.level().setBlockAndUpdate(stand.offset(3, dy, dz), b.defaultBlockState());
+			}
+		});
+		sp.getConnection().waitForChunksRender();
 	}
 
 	// ---- helpers ----
