@@ -40,10 +40,10 @@ Until then the pack has no Office mod; do not look for it.
 World (server side only, clients do not need them): Tectonic, Terralith, Lithostitched, Incendium, Nullscape, Dungeons and
 Taverns, Towns and Towers (+ Cristel Lib), Structory, Sparse Structures (spread factor 2 = structures twice as rare, left
 at the mod's default), Cloth Config API.
-Magic: Grimoire comes with the Office mod (not a separate pack mod; Wizards, Spell Engine and Spell Power were removed in pack 0.2.0).
-Travel: the grimoire's Recall spell (in the Office mod). Waystones was removed in pack 0.3.0.
+Magic: Grimoire comes with the Office mod (not a separate pack mod; Wizards, Spell Engine and Spell Power are removed as of release 0.2.0, the first public release).
+Travel: the grimoire's Recall spell (in the Office mod). Waystones is removed as of release 0.2.0.
 Hanging out (both): Simple Voice Chat, Open Parties and Claims (+ Forge Config API Port).
-QoL (both): Jade, AppleSkin. Client: Mod Menu (+ Text Placeholder API). JEI was removed in pack 0.3.0.
+QoL (both): Jade, AppleSkin. Client: Mod Menu (+ Text Placeholder API). JEI is removed as of release 0.2.0.
 Performance: Lithium, FerriteCore (both); Sodium, ImmediatelyFast, Entity Culling, Dynamic FPS (client).
 Optional client, off by default (Prism shows a checkbox): Iris, Distant Horizons, LambDynamicLights.
 Server tools (server only): Chunky (pregen), spark (`/spark tps`, profiler).
@@ -62,9 +62,9 @@ client-optional on Modrinth but kept `both` so friends get its claim UI (key `'`
 If a friend reports a missing-registry or "unknown biome" problem when joining, the first thing to try is changing the
 server-side world mods back to `both`.
 
-## Deploying pack 0.3.0 (Waystones and JEI removed)
+## Deploying release 0.2.0 (Wizards, Waystones and JEI removed)
 
-The server does not update itself from the pack. When this pack version is deployed, delete these jars from the Bloom
+The server does not update itself from the pack. When release 0.2.0 is deployed, delete these jars from the Bloom
 server's `/mods` (exact filenames), then restart:
 
 - `waystones-fabric-26.3-26.3.0.1.jar` (Waystones; Recall in the grimoire replaces it)
