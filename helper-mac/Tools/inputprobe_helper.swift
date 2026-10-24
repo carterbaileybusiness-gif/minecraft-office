@@ -193,6 +193,25 @@ extension Probe {
         if ProcessInfo.processInfo.environment["PROBE_ONLY_WORK"] != nil { // just the work-mode checks (W0-W4)
             await runWork(client: client, inbox: { inbox }, clearInbox: { inbox.removeAll() }, waitFor: waitFor, px: px, with: with,
                           te: te, win: win, homeOnMain: homeOnMain, idA: idA, mainBounds: mainBounds)
+            if let mid = probeMonitorID {
+                // W7: the user moves the monitor while the Office displays are up (below the laptop screen); removing
+                // the displays must leave it there — no "restore" to where it was when they were created.
+                placeDisplay(mid, at: CGPoint(x: mainBounds.minX, y: mainBounds.maxY))
+                await sleep(1.0)
+                let placed = CGDisplayBounds(mid).origin
+                // display 2 goes: the helper re-arranges (display 1 stays) and must not put the monitor "back"
+                client.send(.removeDisplay(SlotPayload(slot: 2)))
+                await sleep(1.5)
+                let afterOne = CGDisplayBounds(mid).origin
+                check("W7 a monitor moved while the Office displays are up stays where the user put it when one is removed",
+                      afterOne == placed && placed.y == mainBounds.maxY,
+                      "moved to \(placed), after removing display 2: \(afterOne)")
+                client.send(.removeDisplay(SlotPayload(slot: 1)))
+                await sleep(1.5)
+                let afterAll = CGDisplayBounds(mid).origin
+                check("W7 …and when the last one is removed (macOS's remembered layout would carry it back; the helper keeps it put)",
+                      afterAll == placed, "after removing display 1 too: \(afterAll)")
+            }
             return
         }
 

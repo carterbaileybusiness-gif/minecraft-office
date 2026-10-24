@@ -240,6 +240,37 @@ enum PointerTests {
                         "a monitor above doesn't block the right side")
         }
 
+        run("monitor homes: a monitor macOS shoved aside goes back; one the user moved stays; the record is used once") {
+            let size = CGSize(width: 1920, height: 1080)
+            var h = MonitorHomes()
+            h.beforeCreate([7: CGPoint(x: 1440, y: 0)], at: 0)
+            let shoved = h.forArrange([7: CGRect(origin: CGPoint(x: 3360, y: 0), size: size)])
+            expectEqual(shoved.rects, [CGRect(origin: CGPoint(x: 1440, y: 0), size: size)], "arranged around where it was")
+            expectEqual(shoved.restores.map(\.id), [7], "and put back")
+            expectEqual(shoved.restores.first?.to, CGPoint(x: 1440, y: 0))
+            // the user moves it while the displays are up; a remove's arrange keeps it there
+            let afterRemove = h.forArrange([7: CGRect(origin: CGPoint(x: 0, y: 900), size: size)])
+            expectEqual(afterRemove.restores.count, 0, "nothing put back after a remove")
+            expectEqual(afterRemove.rects, [CGRect(origin: CGPoint(x: 0, y: 900), size: size)])
+            // a later create records afresh (overwrites)
+            h.beforeCreate([7: CGPoint(x: 0, y: 900)], at: 100)
+            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "fresh positions before each create")
+            // a second create before the first one's arrange: the first record stands (the monitor may be shoved already)
+            h.beforeCreate([7: CGPoint(x: 1920, y: 900)], at: 101)
+            expectEqual(h.homes, [7: CGPoint(x: 0, y: 900)], "pending create: earlier record kept")
+            h.beforeCreate([7: CGPoint(x: 1920, y: 900)], at: 100 + MonitorHomes.pendingLimit + 1)
+            expectEqual(h.homes, [7: CGPoint(x: 1920, y: 900)], "a create whose arrange never came goes stale")
+            // nothing left (failed create, window server ended them, removed): forgotten
+            h.noneLeft()
+            expectEqual(h.homes.count, 0)
+            expectEqual(h.forArrange([7: CGRect(origin: CGPoint(x: 5, y: 5), size: size)]).restores.count, 0)
+            // after a remove: only a monitor that moved since just before it goes back, to that place; gone ones are left
+            let back = MonitorHomes.movedSince([7: CGPoint(x: 0, y: 900), 8: CGPoint(x: -1280, y: 0), 9: CGPoint(x: 9, y: 9)],
+                                               now: [7: CGPoint(x: 1440, y: 0), 8: CGPoint(x: -1280, y: 0)])
+            expectEqual(back.map(\.id), [7], "the moved one only (8 stayed, 9 is unplugged)")
+            expectEqual(back.first?.to, CGPoint(x: 0, y: 900), "back where the user had it")
+        }
+
         run("secure input: each change is reported once, a new typing session starts from off") {
             var w = SecureInputWatch()
             expectEqual(w.sample(false), nil as Bool?, "off at the start: nothing to say")

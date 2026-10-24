@@ -253,6 +253,60 @@ enum CursorLocator {
     }
 }
 
+/// Where the other monitors were just before an Office display was created (pure). macOS shoves a monitor aside to fit a
+/// new display in; the arrange that follows that create arranges around, and puts back, the monitor as it was — and only
+/// that arrange: the record is used once. So a monitor the user moves while Office displays are up stays where they put
+/// it (a later remove or arrange never "restores" it to an old place).
+struct MonitorHomes {
+    private(set) var homes: [UInt32: CGPoint] = [:]
+    /// Since when a create's arrange is still to come (its display not yet online): a second create in that window sees
+    /// monitors the first may already have shoved, so the first record stands. Stale after `pendingLimit` seconds.
+    private var pendingSince: Double?
+    static let pendingLimit = 5.0
+
+    /// Just before creating a display, at time `t` (seconds): the monitors' positions now, overwriting any record.
+    mutating func beforeCreate(_ now: [UInt32: CGPoint], at t: Double) {
+        if let since = pendingSince, t - since < Self.pendingLimit { return }
+        homes = now
+        pendingSince = t
+    }
+
+    /// For arrange: each monitor's rect to arrange around (where it was before the create, else where it is) and the
+    /// monitors to put back. Uses the record up.
+    mutating func forArrange(_ now: [UInt32: CGRect]) -> (rects: [CGRect], restores: [(id: UInt32, to: CGPoint)]) {
+        var rects: [CGRect] = []
+        var restores: [(id: UInt32, to: CGPoint)] = []
+        for id in now.keys.sorted() {
+            let r = now[id]!
+            if let home = homes[id], home != r.origin {
+                rects.append(CGRect(origin: home, size: r.size))
+                restores.append((id, home))
+            } else {
+                rects.append(r)
+            }
+        }
+        homes = [:]
+        pendingSince = nil
+        return (rects, restores)
+    }
+
+    /// No Office display left (removed, failed to create, ended by the window server): nothing is to be put back.
+    mutating func noneLeft() {
+        homes = [:]
+        pendingSince = nil
+    }
+
+    /// After a remove: macOS re-applies the layout it remembers for the remaining set of displays, which can carry a
+    /// monitor back to where it was long ago. The monitors (still online) that moved since `before` — the positions
+    /// just before the remove — and where they go back to.
+    static func movedSince(_ before: [UInt32: CGPoint], now: [UInt32: CGPoint]) -> [(id: UInt32, to: CGPoint)] {
+        before.keys.sorted().compactMap { id in
+            guard let was = before[id], let is_ = now[id], is_ != was else { return nil }
+            return (id, was)
+        }
+    }
+}
+
 /// Where the Office displays sit in the display arrangement (pure): in slot order in a row along the main display's top
 /// edge, starting at its right edge — so moving the cursor off the Mirror's right edge carries it onto display 1, like a
 /// laptop and its monitors. If another display (a real monitor) already touches the main display's right edge, the row

@@ -55,17 +55,15 @@ public final class CaptureRate {
 	}
 
 	/**
-	 * Own screens: zoomed in (Windows) → 60; visible → 60 when the real cursor is on it while working, else 30; not
-	 * visible → 0 (also with the cursor on it: nobody sees it). Only one screen at a time runs at 60.
+	 * Own screens: zoomed in (Windows) or the real cursor on it while working → 60, even before it is in view (the view
+	 * follows the cursor there, so it must not show a picture a second old when it arrives); else visible → 30, not
+	 * visible → 0. Only one screen at a time runs at 60.
 	 */
 	public static int fps(final boolean visible, final boolean zoomed, final boolean cursorHere) {
-		if (zoomed) {
-			return ZOOMED_FPS;
+		if (zoomed || cursorHere) {
+			return ZOOMED_FPS; // the cursor's screen even before it is in view: the view follows the cursor there at once
 		}
-		if (!visible) {
-			return 0;
-		}
-		return cursorHere ? ZOOMED_FPS : VISIBLE_FPS;
+		return visible ? VISIBLE_FPS : 0;
 	}
 
 	/**

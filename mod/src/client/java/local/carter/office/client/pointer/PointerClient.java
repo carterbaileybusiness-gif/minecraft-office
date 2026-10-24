@@ -118,6 +118,7 @@ public final class PointerClient {
 	private long followNanos;
 	/** Work mode as Dynamic FPS was last told about it. */
 	private boolean dynamicFpsWorking;
+	private long workSince; // Util.getMillis() when work mode began (Dynamic FPS hook check)
 	/** Tests: Minecraft's window focus as the mod sees it (null = the real one). */
 	private @Nullable Boolean focusOverride;
 	private boolean regrabWhenFocused;
@@ -581,6 +582,7 @@ public final class PointerClient {
 		// Minecraft's window lets clicks through, then the helper puts the real cursor at the point and presses there.
 		typing.enter(Util.getMillis());
 		dynamicFpsWorking = true;
+		workSince = Util.getMillis();
 		DynamicFps.recheck(); // Dynamic FPS: "focused" from now on, so the game keeps rendering at its normal rate
 		secureInput = false;
 		cursor = null;
@@ -606,6 +608,10 @@ public final class PointerClient {
 		if (typing.active() != dynamicFpsWorking) {
 			dynamicFpsWorking = typing.active();
 			DynamicFps.recheck(); // full frame rate while working, its own rules again after
+		}
+		if (typing.active() && DynamicFps.checkHook(now - workSince)) {
+			mc.gui.hud.getChat().addClientSystemMessage(Component.literal("[Office] ").withStyle(net.minecraft.ChatFormatting.DARK_AQUA)
+					.append(Component.literal(DynamicFps.BROKEN_CHAT).withStyle(net.minecraft.ChatFormatting.YELLOW)));
 		}
 		boolean active = focused(mc);
 		typing.focus(active, now); // focus left → typing; came back (the player clicked Minecraft) → back to the game

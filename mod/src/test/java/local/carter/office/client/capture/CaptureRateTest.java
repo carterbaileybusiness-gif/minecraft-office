@@ -23,7 +23,9 @@ class CaptureRateTest {
 	void sixtyOnlyForTheVisibleScreenTheCursorIsOn() {
 		assertEquals(60, CaptureRate.fps(true, false, true), "the screen the real cursor is on");
 		assertEquals(30, CaptureRate.fps(true, false, false), "the other visible screens");
-		assertEquals(0, CaptureRate.fps(false, false, true), "not visible: nothing, even with the cursor there");
+		assertEquals(60, CaptureRate.fps(false, false, true),
+				"the cursor's screen even while not (yet) visible: the view follows the cursor there, no stale second");
+		assertEquals(0, CaptureRate.fps(false, false, false), "not visible, no cursor: nothing");
 		assertEquals(60, CaptureRate.fps(false, true, false), "zoomed in (Windows)");
 	}
 

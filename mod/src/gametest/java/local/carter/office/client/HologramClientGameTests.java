@@ -144,7 +144,12 @@ public class HologramClientGameTests implements FabricClientGameTest {
 			double off = measurePhase(context, "working, Minecraft inactive, Dynamic FPS integration OFF", 5_000);
 			context.runOnClient(mc -> PointerClient.setDynamicFpsAwakeOffForTesting(false));
 			measurePhase(context, "working, Minecraft inactive, integration ON again", 4_000);
-			System.out.println("[measure] realHelper=" + realHelper + " dynamicFps=" + dynamicFps + " fps on=" + on + " off=" + off);
+			boolean hookRan = context.computeOnClient(mc -> local.carter.office.client.pointer.DynamicFps.hookHasRun());
+			System.out.println("[measure] realHelper=" + realHelper + " dynamicFps=" + dynamicFps + " hookRan=" + hookRan + " fps on=" + on
+					+ " off=" + off);
+			if (dynamicFps && !hookRan) {
+				throw new AssertionError("Dynamic FPS is installed but its focus hook never ran");
+			}
 			if (dynamicFps && on < 20) {
 				throw new AssertionError("with Dynamic FPS installed the game must keep rendering in work mode: " + on + " fps");
 			}
