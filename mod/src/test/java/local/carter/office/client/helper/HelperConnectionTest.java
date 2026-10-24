@@ -99,7 +99,8 @@ class HelperConnectionTest {
 		assertNotNull(w, "connected");
 		assertTrue(w.screenRecording());
 		assertFalse(w.accessibility());
-		assertEquals(new Hello(TOKEN, HelperProtocol.VERSION, 4242), helper.hellos.get(0));
+		assertEquals(new Hello(TOKEN, HelperProtocol.VERSION, 4242, java.util.List.of("screens")), helper.hellos.get(0),
+				"HELLO always announces the display map");
 		assertTrue(connection.isConnected());
 	}
 

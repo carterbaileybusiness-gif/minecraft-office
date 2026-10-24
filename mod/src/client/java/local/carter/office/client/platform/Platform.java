@@ -2,11 +2,14 @@ package local.carter.office.client.platform;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
 import local.carter.office.client.capture.CaptureSource;
 import local.carter.office.client.pointer.PointerPort;
+import local.carter.office.client.screens.Origin;
+import local.carter.office.client.screens.ScreenList;
 import local.carter.office.core.HologramSpec;
 
 /**
@@ -45,6 +48,30 @@ public interface Platform {
 	/** In-world use: the crosshair as the mouse on your own Extend holograms (Mac), or null where it isn't available. */
 	default @Nullable PointerPort pointer() {
 		return null;
+	}
+
+	/**
+	 * The player's screens for the settings screen's display map (client thread): real monitors and Office displays, and
+	 * what can be done with them. Without a way to list them: one main box "A".
+	 */
+	default ScreenList screens() {
+		return ScreenList.mainOnly();
+	}
+
+	/** Asks for a fresh screen list; {@link #onScreensChanged} listeners run when it arrives. */
+	default void refreshScreens() {}
+
+	/** Runs {@code r} on the client thread whenever {@link #screens} may have changed. */
+	default void onScreensChanged(final Runnable r) {}
+
+	/** Moves Office displays (the map's Apply); false when this computer can't. */
+	default boolean applyOrigins(final List<Origin> origins) {
+		return false;
+	}
+
+	/** Identify: shows each label on its real screen (screen id → "A" / "1") for 3 s; false when this computer can't. */
+	default boolean identifyScreens(final Map<String, String> labelsById) {
+		return false;
 	}
 
 	/** The player starts working on {@code spec}'s screen; {@code mcWindow} is Minecraft's window frame. */

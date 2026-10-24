@@ -28,6 +28,8 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 public final class OfficePayloads {
 	public static final int MAX_WINDOW_KEY = 512;
 	public static final int MAX_ALLOWED = 64;
+	/** Max characters of a monitor id (CGDisplay UUID string on a Mac, a device name such as {@code \\.\DISPLAY2} on Windows). */
+	public static final int MAX_MONITOR_ID = 64;
 	/** Max bytes of a stream datagram carried in a fallback payload (either direction). */
 	public static final int MAX_FALLBACK_DATAGRAM = 30 * 1024;
 
@@ -84,6 +86,92 @@ public final class OfficePayloads {
 
 		@Override
 		public Type<MoveHologram> type() {
+			return TYPE;
+		}
+	}
+
+	/**
+	 * Owner-only: which real monitor a Mirror copies ({@code display} = its opaque id; null = the main display). Its own
+	 * payload rather than an {@link UpdateHologram} field, so an older server never sees a longer packet it can't decode;
+	 * clients send it only when the server registered it. Monitor names never travel, only the id.
+	 */
+	public record SetMirrorDisplay(BlockPos pos, @Nullable String display) implements CustomPacketPayload {
+		public static final Type<SetMirrorDisplay> TYPE = new Type<>(OfficeMod.id("set_mirror_display"));
+		public static final StreamCodec<FriendlyByteBuf, SetMirrorDisplay> CODEC = StreamCodec.of(
+				(buf, p) -> {
+					buf.writeBlockPos(p.pos);
+					buf.writeNullable(p.display, (b, s) -> b.writeUtf(s, MAX_MONITOR_ID));
+				},
+				buf -> new SetMirrorDisplay(buf.readBlockPos(), buf.readNullable(b -> b.readUtf(MAX_MONITOR_ID))));
+
+		@Override
+		public Type<SetMirrorDisplay> type() {
+			return TYPE;
+		}
+	}
+
+	/** Max holograms in one Identify. */
+	public static final int MAX_IDENTIFY = 32;
+
+	/**
+	 * One hologram's Identify label: a real monitor's letter ({@code A-Z}) or an Office display's number ({@code 1-4}).
+	 * Never a monitor name.
+	 */
+	public record HologramLabel(BlockPos pos, String label) {
+		public static boolean validLabel(final String label) {
+			return label.length() == 1 && (label.charAt(0) >= 'A' && label.charAt(0) <= 'Z' || label.charAt(0) >= '1' && label.charAt(0) <= '4');
+		}
+	}
+
+	private static void writeLabels(final FriendlyByteBuf buf, final List<HologramLabel> labels) {
+		List<HologramLabel> list = labels.size() > MAX_IDENTIFY ? labels.subList(0, MAX_IDENTIFY) : labels;
+		buf.writeVarInt(list.size());
+		for (HologramLabel l : list) {
+			buf.writeBlockPos(l.pos());
+			buf.writeUtf(l.label(), 2);
+		}
+	}
+
+	private static List<HologramLabel> readLabels(final FriendlyByteBuf buf) {
+		int n = buf.readVarInt();
+		if (n < 0 || n > MAX_IDENTIFY) {
+			throw new DecoderException("too many identify labels: " + n);
+		}
+		List<HologramLabel> list = new ArrayList<>(n);
+		for (int i = 0; i < n; i++) {
+			list.add(new HologramLabel(buf.readBlockPos(), buf.readUtf(2)));
+		}
+		return List.copyOf(list);
+	}
+
+	/** C2S, owner's Identify: show these labels on these of my holograms to the players who may see them. */
+	public record IdentifyHolograms(List<HologramLabel> labels) implements CustomPacketPayload {
+		public static final Type<IdentifyHolograms> TYPE = new Type<>(OfficeMod.id("identify_holograms"));
+		public static final StreamCodec<FriendlyByteBuf, IdentifyHolograms> CODEC = StreamCodec.of(
+				(buf, p) -> writeLabels(buf, p.labels), buf -> new IdentifyHolograms(readLabels(buf)));
+
+		public IdentifyHolograms {
+			labels = List.copyOf(labels);
+		}
+
+		@Override
+		public Type<IdentifyHolograms> type() {
+			return TYPE;
+		}
+	}
+
+	/** S2C: another player pressed Identify; draw these labels on these holograms for 3 s. */
+	public record IdentifyShown(List<HologramLabel> labels) implements CustomPacketPayload {
+		public static final Type<IdentifyShown> TYPE = new Type<>(OfficeMod.id("identify_shown"));
+		public static final StreamCodec<FriendlyByteBuf, IdentifyShown> CODEC = StreamCodec.of(
+				(buf, p) -> writeLabels(buf, p.labels), buf -> new IdentifyShown(readLabels(buf)));
+
+		public IdentifyShown {
+			labels = List.copyOf(labels);
+		}
+
+		@Override
+		public Type<IdentifyShown> type() {
 			return TYPE;
 		}
 	}
@@ -293,6 +381,7 @@ public final class OfficePayloads {
 		s2c.register(StreamEnded.TYPE, StreamEnded.CODEC);
 		s2c.register(StreamFallbackTile.TYPE, StreamFallbackTile.CODEC);
 		s2c.register(WorkingPlayers.TYPE, WorkingPlayers.CODEC);
+		s2c.register(IdentifyShown.TYPE, IdentifyShown.CODEC);
 
 		var c2s = PayloadTypeRegistry.serverboundPlay();
 		c2s.register(FallbackTile.TYPE, FallbackTile.CODEC);
@@ -302,5 +391,7 @@ public final class OfficePayloads {
 		c2s.register(MoveHologram.TYPE, MoveHologram.CODEC);
 		c2s.register(SetWorking.TYPE, SetWorking.CODEC);
 		c2s.register(RemoveHologram.TYPE, RemoveHologram.CODEC);
+		c2s.register(SetMirrorDisplay.TYPE, SetMirrorDisplay.CODEC);
+		c2s.register(IdentifyHolograms.TYPE, IdentifyHolograms.CODEC);
 	}
 }

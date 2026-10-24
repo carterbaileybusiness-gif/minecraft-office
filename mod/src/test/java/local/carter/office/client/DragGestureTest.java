@@ -1,12 +1,21 @@
 package local.carter.office.client;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.UUID;
+
+import local.carter.office.client.interact.CornerDrag;
 import local.carter.office.client.interact.DragArming;
+import local.carter.office.client.interact.MoveDrag;
 import local.carter.office.client.interact.SendThrottle;
+import local.carter.office.core.HologramSpec;
+import local.carter.office.core.Mode;
+import local.carter.office.core.Privacy;
+import local.carter.office.core.Shape;
 
 /** Tap-vs-drag arming and the 100 ms send throttle for live resizing. */
 class DragGestureTest {
@@ -25,6 +34,18 @@ class DragGestureTest {
 		DragArming moved = new DragArming(1000);
 		assertTrue(moved.update(1020, 0.05), "moved more than 0.04 blocks");
 		assertTrue(moved.update(1030, 0.0), "stays armed");
+	}
+
+	@Test
+	void dragsKeepMirrorDisplay() {
+		HologramSpec lg = new HologramSpec(UUID.randomUUID(), Shape.WIDE_16_9, Mode.MIRROR, Privacy.PRIVATE, 1, null, 2.0, 0, 1.2, 0,
+				0f, "LG-UUID");
+		HologramSpec resized = new CornerDrag.Result(3.0, 0.5, 1.4, 0.1).apply(lg);
+		assertEquals("LG-UUID", resized.mirrorDisplay(), "corner drag preview");
+		assertEquals(3.0, resized.width(), 1e-9);
+		HologramSpec moved = MoveDrag.moved(lg, 1, 2, 3, 45f);
+		assertEquals("LG-UUID", moved.mirrorDisplay(), "move drag result");
+		assertEquals(45f, moved.yaw());
 	}
 
 	@Test

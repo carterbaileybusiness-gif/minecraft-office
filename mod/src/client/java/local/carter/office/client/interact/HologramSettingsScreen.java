@@ -15,16 +15,19 @@ import local.carter.office.client.platform.NoPlatform;
 import local.carter.office.client.platform.Platform;
 import local.carter.office.client.platform.WindowsPlatform;
 import local.carter.office.client.render.HologramLook;
+import local.carter.office.client.screens.DisplayMapModel;
+import local.carter.office.client.screens.DisplayMapModel.Choice;
+import local.carter.office.client.screens.ScreenList;
 import local.carter.office.client.stream.StreamClient;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.core.Privacy;
 import local.carter.office.core.Shape;
 import local.carter.office.hologram.HologramBlockEntity;
-import local.carter.office.net.HologramActions;
 import local.carter.office.net.OfficePayloads;
 
 import net.minecraft.ChatFormatting;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
@@ -43,7 +46,10 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
  * Show to… with paged online-player checkboxes), Pick up, Done. A Public Mirror carries a one-line warning that friends
  * nearby see the whole screen.
  * Every change is sent at once ({@code UpdateHologram}); the server keeps the bottom edge when the shape changes.
- * Non-owners get the same screen read-only with "Owned by <name>".
+ * Mirror and Extend show the owner's screens as a {@link DisplayMap} (real monitors A, B…, Office displays 1-4): a click
+ * picks what the hologram shows (Extend: an Office display; Mirror: a monitor, {@code SetMirrorDisplay}), an Office
+ * display dragged and Applied moves for real. Drags not Applied are dropped on close.
+ * Non-owners get the same screen read-only with "Owned by <name>" and no map (the owner's screens aren't theirs).
  */
 public class HologramSettingsScreen extends Screen {
 	private static final int COL_W = 160;
@@ -56,6 +62,14 @@ public class HologramSettingsScreen extends Screen {
 	private static final int TEXT_COLOR = 0xFFFFFFFF;
 	private static final int SELECTED_FRAME = 0xFFFFFFFF;
 	private static final int WARNING_COLOR = 0xFFFFD060;
+	/** The display map's panel height: it and its button row end above the line a Mirror's warning may take. */
+	private static final int MAP_H = 56;
+	/** The map's button row: under the panel, two half-column buttons. */
+	private static final int MAP_BUTTON_W = (COL_W - 4) / 2;
+	private static final String MOVE_HINT = "Drag an Office display, then Apply";
+	private static final String IDENTIFY_HINT = "Show each screen's letter or number for 3 s";
+	private static final String OLD_SERVER_HINT = "This server can't remember a monitor yet";
+	private static boolean screensHooked;
 
 	private final HologramBlockEntity be;
 	private final BlockPos pos;
@@ -75,6 +89,13 @@ public class HologramSettingsScreen extends Screen {
 	private final Set<UUID> allowed;
 	private int displaySlot;
 	private @Nullable String windowKey;
+	/** Mirror: the chosen monitor (null = the main display). */
+	private @Nullable String mirrorDisplay;
+	/** The display map's state (owners only), kept across widget rebuilds while the screen is open. */
+	private final @Nullable DisplayMapModel mapModel;
+	private @Nullable DisplayMap map;
+	private @Nullable Button apply;
+	private @Nullable Button identify;
 	private int playerPage;
 	private int windowPage;
 
@@ -98,6 +119,7 @@ public class HologramSettingsScreen extends Screen {
 		this.allowed = new HashSet<>(spec == null ? Set.of() : spec.privacy().allowed());
 		this.displaySlot = spec == null ? 1 : spec.displaySlot();
 		this.windowKey = spec == null ? null : spec.windowKey();
+		this.mirrorDisplay = spec == null ? null : spec.mirrorDisplay();
 		Platform platform = Platform.current();
 		// Greyed only where own screens work but whole displays don't (Windows beta). Without own-screen support at all
 		// (NoPlatform: Linux, dev) nothing is greyed; the hologram itself says screens aren't set up.
@@ -105,8 +127,67 @@ public class HologramSettingsScreen extends Screen {
 		if (editable) {
 			WindowListProvider.get().refresh(); // Mac: asks the helper (LIST_WINDOWS); its reply calls refreshWindows()
 			loadWindows();
+			hookScreens();
+			platform.refreshScreens(); // Mac: LIST_DISPLAYS; the answer calls screensChanged()
+			this.mapModel = new DisplayMapModel(screenList(), mode, displaySlot, mirrorDisplay, shape);
 		} else {
 			this.windows = List.of();
+			this.mapModel = null;
+		}
+	}
+
+	/** One listener for the whole game (the platform keeps its listeners): it updates whichever settings screen is open. */
+	private static void hookScreens() {
+		if (!screensHooked) {
+			screensHooked = true;
+			Platform.current().onScreensChanged(() -> {
+				if (Minecraft.getInstance().gui.screen() instanceof HologramSettingsScreen s) {
+					s.screensChanged();
+				}
+			});
+		}
+	}
+
+	/** This computer's screens; a server too old for {@code SetMirrorDisplay} can't keep a Mirror's monitor (greyed). */
+	private static ScreenList screenList() {
+		ScreenList list = ScreenList.current();
+		ScreenList.Abilities a = list.abilities();
+		if (a.canPickMirror() && !ClientPlayNetworking.canSend(OfficePayloads.SetMirrorDisplay.TYPE)) {
+			return new ScreenList(list.screens(), new ScreenList.Abilities(a.live(), a.canMove(), false, a.canIdentifyScreens(),
+					a.hint() != null ? a.hint() : OLD_SERVER_HINT));
+		}
+		return list;
+	}
+
+	/** The screens changed (DISPLAYS, the helper came or went): the map redraws, a pending Apply resolves. Client thread. */
+	public void screensChanged() {
+		if (mapModel != null) {
+			mapModel.update(screenList());
+			mapChanged();
+		}
+	}
+
+	/** The display map widget while it is shown (client GameTests), else null. */
+	public @Nullable DisplayMap displayMap() {
+		return map;
+	}
+
+	public @Nullable Button applyButton() {
+		return apply;
+	}
+
+	public @Nullable Button identifyButton() {
+		return identify;
+	}
+
+	private void mapChanged() {
+		Button b = apply;
+		if (b != null && mapModel != null) {
+			b.active = mapModel.canApply();
+		}
+		Button i = identify;
+		if (i != null && mapModel != null) {
+			i.active = DisplayMap.canIdentify(mapModel.list());
 		}
 	}
 
@@ -121,6 +202,9 @@ public class HologramSettingsScreen extends Screen {
 	protected void init() {
 		selected.clear();
 		labels.clear();
+		map = null;
+		apply = null;
+		identify = null;
 
 		int left = (width - (2 * COL_W + GAP)) / 2;
 		int right = left + COL_W + GAP;
@@ -157,24 +241,19 @@ public class HologramSettingsScreen extends Screen {
 		choice(left + 2 * (bw + 4), y, bw, "Window", mode == Mode.WINDOW, () -> setMode(Mode.WINDOW));
 		y += ROW + 4;
 
-		if (mode == Mode.MIRROR) {
+		if (mode == Mode.MIRROR && !editable) {
+			note(left, y, "Shows the owner's screen");
+		} else if (mode == Mode.MIRROR) {
 			note(left, y, "Your screen, minus Minecraft");
-			note(left, y + LABEL, Platform.current().supportsZoom() ? "Zoom in to use your real desktop" : "Your laptop screen: click, type and drag here");
+			addMap(left, y + LABEL, Platform.current().supportsZoom() ? "Zoom in to use your real desktop" : "Your laptop screen: click, type and drag here");
 		} else if (mode == Mode.EXTEND && extendUnavailable) {
 			note(left, y, "Extend is coming soon here:");
 			note(left, y + LABEL, "pick Mirror or Window");
+		} else if (mode == Mode.EXTEND && !editable) {
+			note(left, y, "Shows display " + displaySlot);
 		} else if (mode == Mode.EXTEND) {
 			label(left, y, "Display");
-			y += LABEL;
-			int sw = (COL_W - 12) / 4;
-			for (int slot = 1; slot <= HologramActions.MAX_DISPLAY_SLOT; slot++) {
-				int s = slot;
-				choice(left + (slot - 1) * (sw + 4), y, sw, Integer.toString(slot), displaySlot == slot, () -> {
-					displaySlot = s;
-					send();
-					rebuildWidgets();
-				});
-			}
+			addMap(left, y + LABEL, null);
 		} else {
 			label(left, y, "Window");
 			y += LABEL;
@@ -265,6 +344,67 @@ public class HologramSettingsScreen extends Screen {
 	}
 
 	/**
+	 * The display map at {@code (x, mapTop)}, one column wide, and its button row under it: Identify on the left, Apply
+	 * (Extend) on the right.
+	 * {@code note}: the platform's line, the map's status line while it has nothing else to say.
+	 */
+	private void addMap(final int x, final int mapTop, final @Nullable String note) {
+		DisplayMapModel model = mapModel;
+		if (model == null) {
+			return;
+		}
+		model.reset(mode, displaySlot, mirrorDisplay, shape);
+		DisplayMap m = new DisplayMap(x, mapTop, COL_W, MAP_H, model, this::chose, this::mapChanged, note);
+		map = addRenderableWidget(m);
+		int rowY = mapTop + MAP_H + 4;
+		ScreenList list = model.list();
+		Button identify = Button.builder(Component.literal("Identify"), btn -> DisplayMap.identify(model.list()))
+				.bounds(x, rowY, MAP_BUTTON_W, 20).build();
+		identify.active = DisplayMap.canIdentify(list);
+		String why = list.abilities().hint();
+		identify.setTooltip(Tooltip.create(Component.literal(identify.active || why == null ? IDENTIFY_HINT : why)));
+		this.identify = addRenderableWidget(identify);
+		if (mode == Mode.EXTEND) {
+			Button b = Button.builder(Component.literal("Apply"), btn -> applyMoves())
+					.bounds(x + COL_W - MAP_BUTTON_W, rowY, MAP_BUTTON_W, 20).build();
+			String hint = model.list().abilities().hint();
+			b.setTooltip(Tooltip.create(Component.literal(model.list().abilities().canMove() || hint == null ? MOVE_HINT : hint)));
+			apply = addRenderableWidget(b);
+			mapChanged();
+		}
+	}
+
+	/** A click on the map picked something: show it (Extend: that Office display; Mirror: that monitor). */
+	private void chose(final Choice c) {
+		switch (c) {
+			case Choice.Slot s -> {
+				displaySlot = s.slot();
+				send();
+				rebuildWidgets();
+			}
+			case Choice.Monitor m -> {
+				if (ClientPlayNetworking.canSend(OfficePayloads.SetMirrorDisplay.TYPE)) {
+					mirrorDisplay = m.id();
+					ClientPlayNetworking.send(new OfficePayloads.SetMirrorDisplay(pos, m.id()));
+					if (mapModel != null) {
+						mapModel.reset(mode, displaySlot, mirrorDisplay, shape);
+					}
+				}
+			}
+			case Choice.None n -> {}
+		}
+	}
+
+	/** Apply: the helper moves the Office displays for real; its next screen list (moved, or not) replaces the drags. */
+	private void applyMoves() {
+		DisplayMapModel model = mapModel;
+		if (model != null && model.canApply() && Platform.current().applyOrigins(model.pending())) {
+			model.applied();
+			mapChanged();
+		}
+	}
+
+	/**
 	 * Fetches the window list on a background thread (Windows: listing is slow and loads natives the first time; Mac:
 	 * the helper's cached list) and redraws the picker on the client thread when it arrives and changed.
 	 */
@@ -290,13 +430,13 @@ public class HologramSettingsScreen extends Screen {
 	private void setMode(final Mode m) {
 		mode = m;
 		send();
-		rebuildWidgets();
+		rebuildWidgets(); // the map (if shown) picks up the new mode; pending drags of another mode are dropped
 	}
 
 	private void setShape(final Shape s) {
 		shape = s;
 		send();
-		rebuildWidgets();
+		rebuildWidgets(); // dashed Office display slots take the new shape's size
 	}
 
 	private void setPrivacy(final Privacy.Level level) {

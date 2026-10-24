@@ -34,6 +34,8 @@ import local.carter.office.client.interact.WindowListProvider;
 import local.carter.office.client.interact.WindowListProvider.WindowChoice;
 import local.carter.office.client.render.HologramLook;
 import local.carter.office.client.render.ScreenTexture;
+import local.carter.office.client.screens.Screen;
+import local.carter.office.client.screens.ScreenList;
 import local.carter.office.core.HologramSpec;
 import local.carter.office.core.Mode;
 import local.carter.office.hologram.HologramBlockEntity;
@@ -253,6 +255,23 @@ public final class WindowsPlatform implements Platform {
 	@Override
 	public boolean supportsExtend() {
 		return false;
+	}
+
+	/**
+	 * The real monitors (no Office displays: Extend is Mac-only). A Mirror can pick one when the capture natives load;
+	 * nothing moves and Identify numbers only the holograms.
+	 */
+	@Override
+	public ScreenList screens() {
+		try {
+			List<Screen> monitors = Win32.get().monitors();
+			if (!monitors.isEmpty()) {
+				return new ScreenList(monitors, new ScreenList.Abilities(true, false, WebRtcNatives.supported(), false, null));
+			}
+		} catch (RuntimeException | LinkageError e) {
+			LOGGER.debug("Office: monitor list failed: {}", e.toString());
+		}
+		return ScreenList.mainOnly();
 	}
 
 	/** {@link #windowChoices} as {@link Platform.WindowInfo}s: program name only (never window titles), size unknown. */

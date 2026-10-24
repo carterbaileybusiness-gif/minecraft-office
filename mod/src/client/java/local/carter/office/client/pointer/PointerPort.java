@@ -29,6 +29,16 @@ public interface PointerPort {
 		return null;
 	}
 
+	/** The monitor of a slot-0 {@link #workCursor} when it isn't the main display ("screens" helpers), or null. */
+	default @Nullable String workCursorDisplay() {
+		return null;
+	}
+
+	/** The monitor a Mirror that wants {@code wanted} shows right now (null = the main display). */
+	default @Nullable String mirrorShown(final @Nullable String wanted) {
+		return null;
+	}
+
 	/** Scroll there, pixels of content motion (dy &gt; 0 = up). */
 	default void scroll(final PointerPoint p, final int dx, final int dy) {}
 
