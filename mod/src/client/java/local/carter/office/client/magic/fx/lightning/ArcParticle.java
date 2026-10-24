@@ -15,38 +15,25 @@ import net.minecraft.client.particle.SingleQuadParticle;
 import net.minecraft.client.renderer.state.level.QuadParticleRenderState;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.util.LightCoordsUtil;
-import net.minecraft.util.Mth;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The Lightning lane's arc of lightning: a jagged channel {@code from} → {@code to} (midpoint displacement from the seed, re-struck
- * every two ticks, so every client draws the same arc) with forks, drawn in three passes: a wide soft halo of round glows in the
- * colour, a crisp line in the colour and a white-hot core, each piece of line turned to face the camera along its own direction
- * (Wildercord's {@code Facing.along}, as {@code BoltParticle} does). Thickness is set per arc; it flashes, flickers and fades over its
- * life. {@link #quads} says how many quads it draws, so callers charge the fx budget for them.
+ * The Lightning lane's arc of lightning: a jagged channel {@code from} → {@code to} ({@link ArcPath}: midpoint displacement from the
+ * seed, re-struck every two ticks, so every client draws the same arc) with forks, drawn in three passes: a wide soft halo of round
+ * glows in the colour, a crisp line in the colour and a white-hot core, each piece of line turned to face the camera along its own
+ * direction (Wildercord's {@code Facing.along}, as {@code BoltParticle} does). It flashes, flickers and fades over its life.
+ * {@link #quads()} is exactly what a frame lays (the heaviest strike), so callers charge the fx budget for it.
  */
 final class ArcParticle extends SingleQuadParticle implements LightPipeline.Extent {
-	/** Points on the main path (2^k + 1) and on each fork. */
-	private static final int PATH = 17;
-	private static final int FORK = 5;
-	/** Pieces of line are this share of their width long; halo blobs are spaced this share of the halo width. */
-	private static final float BAND = 0.75F;
-	private static final float HALO_STEP = 0.55F;
-
-	private final Vec3 from;
-	private final Vec3 to;
-	private final long seed;
 	private final int rgb;
 	private final float width;
-	private final float roughness;
+	private final boolean core;
 	private final double reach;
 	private final TextureAtlasSprite line;
-	private final TextureAtlasSprite core;
+	private final TextureAtlasSprite coreSprite;
 	private final TextureAtlasSprite glow;
-	private final Vec3[] path = new Vec3[PATH];
-	private final Vec3[][] forks;
-	private int struck = -1;
+	private final ArcPath.Strike[] strikes;
+	private final int quads;
 
 	private QuadParticleRenderState state;
 	private final Vector3f dir = new Vector3f();
@@ -57,77 +44,33 @@ final class ArcParticle extends SingleQuadParticle implements LightPipeline.Exte
 	private final Quaternionf q = new Quaternionf();
 
 	/**
-	 * @param width thickness of the crisp line (blocks; the halo is 3.5 × that, the core 0.45 ×)
-	 * @param roughness how far each midpoint may be pushed sideways, as a share of its span (0.2 = a bolt, 0.3 = a wild crackle)
+	 * @param width thickness of the crisp line (blocks; the halo is {@link ArcPath#HALO} × that, the core {@link ArcPath#CORE} ×)
+	 * @param roughness how far each midpoint may be pushed sideways, as a share of its span (at most {@link ArcPath#MAX_OFFSET})
 	 * @param forks short side branches (0..3)
+	 * @param core whether a white-hot core is drawn down the middle (thin secondary strands go without)
 	 */
-	ArcParticle(ClientLevel level, Vec3 from, Vec3 to, long seed, int rgb, float width, float roughness, int forks, int life) {
+	ArcParticle(ClientLevel level, Vec3 from, Vec3 to, long seed, int rgb, float width, float roughness, int forks, int life, boolean core) {
 		super(level, (from.x + to.x) / 2, (from.y + to.y) / 2, (from.z + to.z) / 2, MagicCircleRenderer.sprite("line"));
-		this.from = from;
-		this.to = to;
-		this.seed = seed;
 		this.rgb = rgb & 0xFFFFFF;
 		this.width = width;
-		this.roughness = roughness;
-		this.forks = new Vec3[Mth.clamp(forks, 0, 3)][FORK];
-		this.reach = from.distanceTo(to) / 2 + 1.5 + width * 2;
+		this.core = core;
+		this.reach = from.distanceTo(to) / 2 + 2.5 + width * 2;
 		this.lifetime = Math.max(2, life);
+		this.strikes = ArcPath.strikes(from, to, seed, roughness, forks, lifetime);
+		this.quads = ArcPath.quads(strikes, width, core);
 		this.line = MagicCircleRenderer.sprite("line");
-		this.core = MagicCircleRenderer.sprite("core");
+		this.coreSprite = MagicCircleRenderer.sprite("core");
 		this.glow = MagicCircleRenderer.sprite("glow");
 		this.hasPhysics = false;
 		this.gravity = 0;
 		this.xd = 0;
 		this.yd = 0;
 		this.zd = 0;
-		strike(0);
 	}
 
-	/**
-	 * Quads one frame of an arc of {@code length} draws at most: the path runs about 1.25 × the straight length, each pass laying
-	 * pieces along it, plus the forks (about a quarter of the length each, thinner).
-	 */
-	static int quads(double length, float width, int forks) {
-		double path = 1.25 * length;
-		double lines = 2 * (path / (width / BAND) + PATH);
-		double halo = path / (width * 3.5F * HALO_STEP) + PATH;
-		double fork = forks * 3 * (0.3 * length / (width * 0.5F / BAND) + FORK);
-		return (int) Math.ceil(lines + halo + fork);
-	}
-
-	private void strike(int n) {
-		if (n == struck) return;
-		struck = n;
-		RandomSource r = RandomSource.create(seed * 31 + n);
-		MagicCircleRenderer.Basis b = MagicCircleRenderer.basis(to.subtract(from));
-		displace(path, from, to, b, r, roughness);
-		Vec3 d = to.subtract(from);
-		double length = d.length();
-		for (Vec3[] fork : forks) {
-			Vec3 start = path[2 + r.nextInt(PATH - 4)];
-			double sx = r.nextDouble() * 2 - 1;
-			double sy = r.nextDouble() * 2 - 1;
-			Vec3 side = new Vec3(b.right().x() * sx + b.up().x() * sy, b.right().y() * sx + b.up().y() * sy, b.right().z() * sx + b.up().z() * sy);
-			Vec3 end = start.add(d.scale(0.1 + 0.1 * r.nextDouble())).add(side.scale(Math.min(1.6, length * 0.14)));
-			displace(fork, start, end, MagicCircleRenderer.basis(end.subtract(start)), r, 0.3);
-		}
-	}
-
-	private static void displace(Vec3[] pts, Vec3 a, Vec3 b, MagicCircleRenderer.Basis basis, RandomSource r, double rough) {
-		int last = pts.length - 1;
-		pts[0] = a;
-		pts[last] = b;
-		for (int span = last; span > 1; span /= 2) {
-			for (int i = 0; i + span <= last; i += span) {
-				Vec3 p = pts[i];
-				Vec3 q = pts[i + span];
-				double off = p.distanceTo(q) * rough;
-				double ox = (r.nextDouble() * 2 - 1) * off;
-				double oy = (r.nextDouble() * 2 - 1) * off;
-				pts[i + span / 2] = p.add(q).scale(0.5).add(basis.right().x() * ox + basis.up().x() * oy,
-						basis.right().y() * ox + basis.up().y() * oy, basis.right().z() * ox + basis.up().z() * oy);
-			}
-		}
+	/** Quads a frame of this arc lays at most. */
+	int quads() {
+		return quads;
 	}
 
 	@Override
@@ -142,35 +85,36 @@ final class ArcParticle extends SingleQuadParticle implements LightPipeline.Exte
 		// A hard flash, a flicker on every third tick, then gone.
 		float a = (1F - t * t) * (age % 3 == 1 ? 0.6F : 1F);
 		if (a <= 0.02F) return;
-		strike(age / 2);
+		ArcPath.Strike s = strikes[Math.min(strikes.length - 1, age / 2)];
 		this.state = state;
 		Vec3 cam = camera.position();
-		pass(path, width * 3.5F, HALO_STEP, glow, rgb, a * 0.3F, cam);
-		pass(path, width, BAND, line, rgb, a * 0.95F, cam);
-		pass(path, width * 0.45F, BAND, core, 0xFFFFFF, a, cam);
-		for (Vec3[] fork : forks) {
-			pass(fork, width * 0.5F, BAND, line, rgb, a * 0.8F, cam);
-			pass(fork, width * 0.22F, BAND, core, 0xFFFFFF, a * 0.8F, cam);
+		pass(s.path(), width * ArcPath.HALO, ArcPath.haloStep(width), glow, rgb, a * 0.3F, cam);
+		pass(s.path(), width, ArcPath.lineStep(width), line, rgb, a * 0.95F, cam);
+		if (core) pass(s.path(), width * ArcPath.CORE, ArcPath.lineStep(width * ArcPath.CORE), coreSprite, 0xFFFFFF, a, cam);
+		for (Vec3[] fork : s.forks()) {
+			pass(fork, width * ArcPath.FORK_WIDTH, ArcPath.lineStep(width * ArcPath.FORK_WIDTH), line, rgb, a * 0.8F, cam);
+			if (core) pass(fork, width * ArcPath.FORK_CORE, ArcPath.lineStep(width * ArcPath.FORK_CORE), coreSprite, 0xFFFFFF, a * 0.8F, cam);
 		}
 		this.state = null;
 	}
 
-	/** Pieces of {@code sprite}, {@code w} wide, along {@code pts}, spaced {@code step} × {@code w}. */
+	/**
+	 * Pieces of {@code sprite}, {@code w} wide, along {@code pts}, one every {@code step} ({@link ArcPath#pieces} per segment, the
+	 * count the budget was charged for). Line pieces are as long as their share of the segment; glow blobs are {@code w} square.
+	 */
 	private void pass(Vec3[] pts, float w, float step, TextureAtlasSprite sprite, int colour, float a, Vec3 cam) {
 		int c = LightPipeline.light(a, colour);
-		float piece = w / step;
 		for (int i = 0; i + 1 < pts.length; i++) {
 			Vec3 p0 = pts[i];
 			Vec3 p1 = pts[i + 1];
+			float length = ArcPath.segment(p0, p1);
+			int n = ArcPath.pieces(length, step);
+			if (n == 0) continue;
 			float x0 = (float) (p0.x - cam.x);
 			float y0 = (float) (p0.y - cam.y);
 			float z0 = (float) (p0.z - cam.z);
-			dir.set((float) (p1.x - p0.x), (float) (p1.y - p0.y), (float) (p1.z - p0.z));
-			float length = dir.length();
-			if (length < 1.0E-4F) continue;
-			dir.div(length);
-			int n = Math.max(1, Mth.ceil(length / piece));
-			float half = sprite == glow ? w / 2 : length / n / 2;
+			dir.set((float) (p1.x - p0.x), (float) (p1.y - p0.y), (float) (p1.z - p0.z)).div(length);
+			float half = sprite == glow ? w / 2 : Math.max(w / 2, length / n / 2);
 			for (int k = 0; k < n; k++) {
 				float s = (k + 0.5F) / n * length;
 				float mx = x0 + dir.x * s;

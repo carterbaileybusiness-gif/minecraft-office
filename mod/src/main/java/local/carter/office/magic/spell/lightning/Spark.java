@@ -20,8 +20,8 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * Spark (Lightning, slot 0, small): a hitscan zap along the look, range 16 with 0.5 of aim forgiveness, stopping at the first solid
- * block. The target takes {@code 3 × P}; the spark then arcs to the nearest other target within 4 of it (centre to centre, in its
- * sight) for 60 % of that. No block changes.
+ * block. The target takes {@code 3 × P}; the spark then arcs to the nearest hostile mob within 4 of it (centre to centre, in its
+ * sight; {@link Arcs}) for 60 % of that. No block changes.
  *
  * <p>Fx: {@code target} = the end of the zap (the struck target's middle, else where the look meets a block or the range ends);
  * {@code entities} = the struck target, then the arc's target if any (empty on a miss); no {@code data}.

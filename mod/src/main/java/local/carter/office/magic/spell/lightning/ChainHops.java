@@ -2,6 +2,7 @@ package local.carter.office.magic.spell.lightning;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.IntPredicate;
 
 import net.minecraft.world.phys.Vec3;
 
@@ -38,6 +39,25 @@ public final class ChainHops {
 		return (float) (DAMAGE * power * Math.pow(FALLOFF, hop));
 	}
 
+	/**
+	 * One hop: the index of the point nearest {@code from} (centre distance, at most {@code range}) that {@code ok} accepts; ties go
+	 * to the lower index. -1 if none.
+	 */
+	public static int next(Vec3 from, List<Vec3> points, double range, IntPredicate ok) {
+		double r2 = range * range;
+		int best = -1;
+		double bestD = Double.MAX_VALUE;
+		for (int i = 0; i < points.size(); i++) {
+			double d = from.distanceToSqr(points.get(i));
+			// Strictly nearer wins, so equal distances keep the lower index.
+			if (d <= r2 && d < bestD && ok.test(i)) {
+				best = i;
+				bestD = d;
+			}
+		}
+		return best;
+	}
+
 	/** {@link #select(List, int, int, double, Link)} with every link allowed. */
 	public static int[] select(List<Vec3> points, int start, int hops, double range) {
 		return select(points, start, hops, range, (a, b) -> true);
@@ -56,21 +76,9 @@ public final class ChainHops {
 		order[0] = start;
 		hit[start] = true;
 		int count = 1;
-		double r2 = range * range;
 		while (count < order.length) {
 			int last = order[count - 1];
-			Vec3 from = points.get(last);
-			int best = -1;
-			double bestD = Double.MAX_VALUE;
-			for (int i = 0; i < n; i++) {
-				if (hit[i]) continue;
-				double d = from.distanceToSqr(points.get(i));
-				// Strictly nearer wins, so equal distances keep the lower index.
-				if (d <= r2 && d < bestD && link.allows(last, i)) {
-					best = i;
-					bestD = d;
-				}
-			}
+			int best = next(points.get(last), points, range, i -> !hit[i] && link.allows(last, i));
 			if (best < 0) break;
 			hit[best] = true;
 			order[count++] = best;

@@ -11,7 +11,9 @@ import local.carter.office.magic.spell.lightning.ChainHops;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.animal.wolf.Wolf;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.npc.villager.Villager;
@@ -32,6 +34,14 @@ public class LightningGameTests {
 
 	private static void assertUnhurt(GameTestHelper h, LivingEntity e, String what) {
 		h.assertValueEqual(e.getHealth(), e.getMaxHealth(), what + " health");
+	}
+
+	/** A still bystander mob (no AI, persistent): a sheep or a snow golem, neither of them hostile. */
+	private static Mob bystander(GameTestHelper h, net.minecraft.world.entity.EntityType<? extends Mob> type, BlockPos rel) {
+		Mob m = h.spawn(type, rel);
+		m.setNoAi(true);
+		m.setPersistenceRequired();
+		return m;
 	}
 
 	private static int[] ids(LivingEntity... es) {
@@ -112,6 +122,25 @@ public class LightningGameTests {
 		h.assertValueEqual(pet.getHealth(), petHealth, "tamed wolf health");
 		assertUnhurt(h, hidden, "zombie behind the wall");
 		assertIds(h, rec.fx(p).getFirst().entities(), ids(first, open), "fx entities");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void sparkArcsOnlyToEnemies(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.LIGHTNING, 1);
+		Zombie first = MagicTestKit.dummy(h, new BlockPos(16, 4, 10));
+		// 1.4 away, a step behind the first so the zap itself still strikes the zombie.
+		Mob sheep = bystander(h, EntityTypes.SHEEP, new BlockPos(17, 4, 11));
+		Mob golem = bystander(h, EntityTypes.SNOW_GOLEM, new BlockPos(15, 4, 11));
+		Zombie foe = MagicTestKit.dummy(h, new BlockPos(16, 4, 13)); // 3 away: the only hostile one
+		MagicTestKit.aim(p, new BlockPos(16, 5, 10));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.SPARK, 0f), Result.CAST, "result");
+		assertHealth(h, first, 20 - 3 * P1, "first");
+		assertHealth(h, foe, 20 - 3 * P1 * 0.6F, "hostile arc target");
+		assertUnhurt(h, sheep, "sheep");
+		assertUnhurt(h, golem, "snow golem");
+		assertIds(h, rec.fx(p).getFirst().entities(), ids(first, foe), "fx entities");
 		h.succeed();
 	}
 
@@ -219,6 +248,42 @@ public class LightningGameTests {
 		FxEvent fx = rec.fx(p).getFirst();
 		assertIds(h, fx.entities(), ids(first, open), "fx chain order");
 		h.assertValueEqual(fx.data()[0], 2f, "fx count");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void chainNeverHopsToSheepOrSnowGolem(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.LIGHTNING, 2);
+		Zombie a = MagicTestKit.dummy(h, new BlockPos(16, 4, 7));
+		Mob sheep = bystander(h, EntityTypes.SHEEP, new BlockPos(16, 4, 9)); // 2 from a
+		Mob golem = bystander(h, EntityTypes.SNOW_GOLEM, new BlockPos(18, 4, 7)); // 2 from a
+		Zombie b = MagicTestKit.dummy(h, new BlockPos(16, 4, 12)); // 5 from a
+		MagicTestKit.aim(p, new BlockPos(16, 5, 7));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.CHAIN_LIGHTNING, 1f), Result.CAST, "result");
+		assertUnhurt(h, sheep, "sheep");
+		assertUnhurt(h, golem, "snow golem");
+		assertHealth(h, a, 20 - ChainHops.damage(0, 2 * P2), "first zombie");
+		assertHealth(h, b, 20 - ChainHops.damage(1, 2 * P2), "zombie past the bystanders");
+		assertIds(h, rec.fx(p).getFirst().entities(), ids(a, b), "fx chain order");
+		h.succeed();
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA)
+	public void chainStartsOnAnyFoeButHopsOnlyToEnemies(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.LIGHTNING, 2);
+		// The look strikes a sheep first: that is allowed. The hop then skips the snow golem for the zombie.
+		Mob sheep = bystander(h, EntityTypes.SHEEP, new BlockPos(16, 4, 7));
+		Mob golem = bystander(h, EntityTypes.SNOW_GOLEM, new BlockPos(18, 4, 8)); // 2.2 from the sheep
+		Zombie z = MagicTestKit.dummy(h, new BlockPos(13, 4, 8)); // 3.2 from the sheep
+		MagicTestKit.aim(p, new BlockPos(16, 4, 7));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		float sheepHealth = sheep.getHealth();
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.CHAIN_LIGHTNING, 0f), Result.CAST, "result");
+		h.assertTrue(sheep.getHealth() < sheepHealth, "the struck sheep is hurt " + sheep.getHealth());
+		assertUnhurt(h, golem, "snow golem");
+		assertHealth(h, z, 20 - ChainHops.damage(1, P2), "zombie");
+		assertIds(h, rec.fx(p).getFirst().entities(), ids(sheep, z), "fx chain order");
 		h.succeed();
 	}
 

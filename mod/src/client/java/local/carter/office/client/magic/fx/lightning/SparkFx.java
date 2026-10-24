@@ -13,16 +13,13 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Spark's visuals: a small lightning circle snaps open at the caster's off hand and a two-strand bolt (yellow and electric blue)
- * cracks from it to where the zap ended ({@code target}). A struck target ({@code entities[0]}) flashes and crackles with small
- * arcs for half a second; a tick later a second bolt leaps from it to the arc's target ({@code entities[1]}), which crackles too.
- * A miss grounds in a spray of sparks.
+ * Spark's visuals: a small lightning circle snaps open at the caster's off hand, a few tiny arcs crackle there, and a bolt (yellow,
+ * crossed by a thinner electric-blue strand) cracks from it to where the zap ended ({@code target}). A struck target
+ * ({@code entities[0]}) flashes and crackles with crawling arcs; a tick later a second bolt leaps from it to the arc's target
+ * ({@code entities[1]}), which crackles too. A miss grounds in a spray of sparks. Small enough that it never needs more than the
+ * event's budget.
  */
 public final class SparkFx implements SpellFx {
-	/** How long struck bodies crackle, and how often a crawling arc appears. */
-	private static final int CRAWL_TICKS = 10;
-	private static final int CRAWL_EVERY = 2;
-
 	@Override
 	public void play(FxEvent e, ClientLevel level, FxKit kit) {
 		Vec3 dir = Volts.dir(e);
@@ -30,25 +27,28 @@ public final class SparkFx implements SpellFx {
 		Vec3 hand = Volts.hand(e, level);
 		int[] struck = e.entities();
 		Vec3 end = struck.length > 0 ? Volts.centre(level, struck[0], e.target()) : e.target();
+		Allowance all = Allowance.unlimited();
 
 		kit.circle(hand, dir.reverse(), Element.LIGHTNING.argb(), 0.32F + 0.12F * c, 2 + Math.round(c), 6);
-		kit.motes(hand, Volts.CORE, 5, 0.08, dir.scale(0.08), 0.06, GlowMote.Drift.FLICKER, 0.08F, 5);
-		Volts.channel(kit, level, hand, end, e.seed(), 6, c >= 0.5F);
-		Volts.zap(kit, level, end, struck.length > 0 ? 1F + 0.3F * c : 0.7F);
+		kit.motes(hand, LightningLook.CORE, 5, 0.08, dir.scale(0.08), 0.06, GlowMote.Drift.FLICKER, 0.08F, 5);
+		Volts.crackle(kit, level, all, hand, e.seed() + 5);
+		Volts.channel(kit, level, all, hand, end, e.seed(), c >= 0.5F ? LightningLook.SPARK_CHARGED : LightningLook.SPARK,
+				LightningLook.SPARK_STRAND);
+		Volts.zap(kit, level, all, end, struck.length > 0 ? 1F + 0.3F * c : 0.7F);
 		level.playLocalSound(hand.x, hand.y, hand.z, SoundEvents.FIREWORK_ROCKET_TWINKLE, SoundSource.PLAYERS, 0.55F, 1.7F + 0.2F * c, false);
 		level.playLocalSound(end.x, end.y, end.z, SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.PLAYERS, 0.35F + 0.15F * c, 1.9F, false);
 
 		if (struck.length == 0) return;
-		Volts.crawl(kit, level, struck[0], e.seed() + 1, CRAWL_EVERY, CRAWL_TICKS);
+		Volts.crawl(kit, level, all, struck[0], e.seed() + 1);
 		if (struck.length < 2) return;
 		int arcId = struck[1];
 		kit.simulate(1, 2, t -> {
 			if (t != 1) return;
 			Vec3 from = Volts.centre(level, struck[0], end);
 			Vec3 to = Volts.centre(level, arcId, from);
-			Volts.channel(kit, level, from, to, e.seed() + 2, 5, false);
-			Volts.zap(kit, level, to, 0.75F);
-			Volts.crawl(kit, level, arcId, e.seed() + 3, CRAWL_EVERY, CRAWL_TICKS - 2);
+			Volts.channel(kit, level, all, from, to, e.seed() + 2, LightningLook.SPARK, LightningLook.SPARK_STRAND);
+			Volts.zap(kit, level, all, to, 0.75F);
+			Volts.crawl(kit, level, all, arcId, e.seed() + 3);
 			level.playLocalSound(to.x, to.y, to.z, SoundEvents.LIGHTNING_BOLT_IMPACT, SoundSource.PLAYERS, 0.3F, 2F, false);
 		});
 	}

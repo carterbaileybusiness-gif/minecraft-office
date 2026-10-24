@@ -1,38 +1,29 @@
 package local.carter.office.client.magic.fx.lightning;
 
+import static local.carter.office.client.magic.fx.lightning.LightningLook.BLOOM;
+import static local.carter.office.client.magic.fx.lightning.LightningLook.BLUE;
+import static local.carter.office.client.magic.fx.lightning.LightningLook.CORE;
+import static local.carter.office.client.magic.fx.lightning.LightningLook.YELLOW;
+
 import local.carter.office.client.magic.fx.FxKit;
 import local.carter.office.client.magic.fx.GlowMote;
 import local.carter.office.magic.net.FxEvent;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ParticleStatus;
-import net.minecraft.util.Mth;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The Lightning lane's shared look: element yellow with a white-hot core and a haze of light round it, a thinner electric-blue
- * strand crossing it, impact zaps, strikes from above and the crawling arcs that leave a struck body crackling. Every call draws
- * from the event's {@code FxBudget}; arcs pay for the quads they draw ({@link #QUADS_PER_PARTICLE} to one budget particle).
+ * The Lightning lane's drawing helpers, in {@link LightningLook}'s numbers: arcs and channels, zaps, strikes from the sky, the
+ * crackle at the hand, the crawl over a struck body and the scorch at its feet. Everything asks an {@link Allowance} first and the
+ * event's {@code FxBudget} second; arcs pay for the quads they really draw ({@link ArcParticle#quads()}).
  */
 final class Volts {
-	/** Element yellow (Lightning {@code FFFFE94A}), a white-hot core and an electric blue for the second strand. */
-	static final int YELLOW = 0xFFE94A;
-	static final int CORE = 0xFFF7D6;
-	static final int BLUE = 0x8CCFFF;
-	/** A soft yellow for wide blooms (additive light: the colour is the brightness). */
-	static final int BLOOM = 0x8A7420;
-
-	/** Quads one budget particle pays for (as {@code WindRibbon} does). */
-	static final int QUADS_PER_PARTICLE = 50;
-
 	private Volts() {}
 
 	/** {@code e.dir()} normalised (straight ahead if it has none). */
@@ -65,97 +56,75 @@ final class Volts {
 	}
 
 	/**
-	 * An {@link ArcParticle} {@code from} → {@code to}: {@code width} thick (its halo 3.5 × that), {@code roughness} jagged, with
-	 * {@code forks} branches, flashing over {@code life} ticks, struck from {@code seed} (the same on every client). It pays the budget
-	 * for the quads it draws; nothing is drawn if the budget can't.
+	 * An {@link ArcParticle} {@code from} → {@code to} in {@code style}, struck from {@code seed} (the same on every client). It pays
+	 * for the quads it draws, from {@code a} and the event's budget; nothing is drawn if either can't pay.
 	 */
-	static void arc(FxKit kit, ClientLevel level, Vec3 from, Vec3 to, long seed, int rgb, float width, float roughness, int forks, int life) {
-		double l = from.distanceTo(to);
-		if (l < 0.05) return;
-		int cost = Mth.ceil(ArcParticle.quads(l, width, forks) / (double) QUADS_PER_PARTICLE);
-		if (kit.budget().particlesLeft() < cost) return;
+	static void arc(FxKit kit, ClientLevel level, Allowance a, Vec3 from, Vec3 to, long seed, LightningLook.Style style) {
+		if (from.distanceTo(to) < LightningLook.MIN_ARC) return;
+		ArcParticle p = new ArcParticle(level, from, to, seed, style.rgb(), style.width(), (float) style.roughness(), style.forks(), style.life(),
+				style.core());
+		int cost = ArcPath.cost(p.quads());
+		if (kit.budget().particlesLeft() < cost || !a.pay(cost)) return;
 		kit.budget().particles(cost);
-		Minecraft.getInstance().particleEngine.add(new ArcParticle(level, from, to, seed, rgb, width, roughness, forks, life));
+		Minecraft.getInstance().particleEngine.add(p);
 	}
 
-	/**
-	 * A lightning channel {@code from} → {@code to}: a yellow bolt with a white-hot core and a haze, and a thinner electric-blue
-	 * strand struck from another seed that crosses and parts from it; {@code thick} makes both heavier, with more forks.
-	 */
-	static void channel(FxKit kit, ClientLevel level, Vec3 from, Vec3 to, long seed, int life, boolean thick) {
-		arc(kit, level, from, to, seed, YELLOW, thick ? 0.21F : 0.16F, 0.2F, thick ? 3 : 2, life);
-		arc(kit, level, from, to, seed * 7 + 3, BLUE, thick ? 0.09F : 0.065F, 0.28F, 1, Math.max(3, life - 2));
+	/** A lightning channel: the {@code main} bolt and a thinner {@code strand} struck from another seed, crossing and parting from it. */
+	static void channel(FxKit kit, ClientLevel level, Allowance a, Vec3 from, Vec3 to, long seed, LightningLook.Style main,
+			LightningLook.Style strand) {
+		arc(kit, level, a, from, to, seed, main);
+		arc(kit, level, a, from, to, LightningLook.strandSeed(seed), strand);
 	}
 
-	/** A bolt from the sky onto {@code at}: {@code height} above it, leaning a little, thin and quick. */
-	static void skyStrike(FxKit kit, ClientLevel level, Vec3 at, double height, long seed) {
-		RandomSource r = RandomSource.create(seed);
-		Vec3 top = at.add((r.nextDouble() - 0.5) * height * 0.4, height, (r.nextDouble() - 0.5) * height * 0.4);
-		arc(kit, level, top, at, seed, CORE, 0.12F, 0.22F, 1, 5);
+	/** A thin bolt from the sky onto {@code at}. */
+	static void skyStrike(FxKit kit, ClientLevel level, Allowance a, Vec3 at, double height, long seed) {
+		arc(kit, level, a, LightningLook.skyTop(at, height, seed), at, seed, LightningLook.SKY);
 	}
 
-	/**
-	 * A strike landing at {@code at}: a white-hot flash in a yellow bloom, sparks flying, motes flickering out, scaled by {@code size}
-	 * (1 = Spark's).
-	 */
-	static void zap(FxKit kit, ClientLevel level, Vec3 at, float size) {
-		glow(kit, level, at, Vec3.ZERO, CORE, 0.6F * size, 3, GlowMote.Drift.COAST);
-		glow(kit, level, at, Vec3.ZERO, BLOOM, 0.95F * size, 4, GlowMote.Drift.COAST);
-		kit.motes(at, YELLOW, Math.round(10 * size), 0.12, Vec3.ZERO, 0.32 * size, GlowMote.Drift.COAST, 0.07F, 6);
-		kit.motes(at, BLUE, Math.round(5 * size), 0.3, Vec3.ZERO, 0.08, GlowMote.Drift.FLICKER, 0.09F, 9);
-		kit.burst(at, ParticleTypes.ELECTRIC_SPARK, Math.round(8 * size), 0.35 * size);
+	/** A strike landing at {@code at}: a white-hot flash in a yellow bloom, motes flying, blue flickers and sparks, scaled by {@code size}. */
+	static void zap(FxKit kit, ClientLevel level, Allowance a, Vec3 at, float size) {
+		if (a.take(1) == 1) glow(kit, level, at, CORE, 0.6F * size, 3);
+		if (a.take(1) == 1) glow(kit, level, at, BLOOM, 0.95F * size, 4);
+		kit.motes(at, YELLOW, a.take(LightningLook.zapMotes(size)), 0.12, Vec3.ZERO, 0.32 * size, GlowMote.Drift.COAST, 0.075F, 6);
+		kit.motes(at, BLUE, a.take(LightningLook.zapFlickers(size)), 0.3, Vec3.ZERO, 0.08, GlowMote.Drift.FLICKER, 0.09F, 9);
+		kit.burst(at, ParticleTypes.ELECTRIC_SPARK, a.take(LightningLook.zapSparks(size)), 0.35 * size);
 	}
 
-	/**
-	 * Sparks crackling over a struck body: every {@code every} ticks for {@code ticks}, a short wild arc skating between two points
-	 * on entity {@code id}'s hitbox and a flickering mote. Follows the body as it moves; stops if it is gone.
-	 */
-	static void crawl(FxKit kit, ClientLevel level, int id, long seed, int every, int ticks) {
-		RandomSource r = RandomSource.create(seed);
-		kit.simulate(every, ticks, t -> {
-			Entity en = level.getEntity(id);
-			if (en == null || en.isRemoved()) return;
-			AABB box = en.getBoundingBox().inflate(0.06);
-			Vec3 a = onBox(box, r);
-			Vec3 b = onBox(box, r);
-			if (a.distanceToSqr(b) < 0.25) b = box.getCenter().add(box.getCenter().subtract(a));
-			arc(kit, level, a, b, seed + 31L * t, (t / every & 1) == 0 ? BLUE : YELLOW, 0.045F, 0.35F, 0, 3);
-			kit.motes(a, CORE, 1, 0.05, Vec3.ZERO, 0.02, GlowMote.Drift.FLICKER, 0.07F, 5);
+	/** The crackle at the caster's hand as it fires: a few tiny arcs jumping round {@code hand} for a moment (Chidori). */
+	static void crackle(FxKit kit, ClientLevel level, Allowance a, Vec3 hand, long seed) {
+		kit.simulate(LightningLook.CRACKLE_EVERY, LightningLook.CRACKLE_TICKS, t -> {
+			int step = t / LightningLook.CRACKLE_EVERY;
+			Vec3[] arcs = LightningLook.crackle(hand, seed, step);
+			for (int i = 0; i < arcs.length; i += 2) arc(kit, level, a, arcs[i], arcs[i + 1], seed + 97L * step + i, LightningLook.CRACKLE);
 		});
 	}
 
-	/** A random point on a side face of {@code box}, so arcs skate over the skin rather than through the middle. */
-	private static Vec3 onBox(AABB box, RandomSource r) {
-		double x = Mth.lerp(r.nextDouble(), box.minX, box.maxX);
-		double y = Mth.lerp(r.nextDouble(), box.minY, box.maxY);
-		double z = Mth.lerp(r.nextDouble(), box.minZ, box.maxZ);
-		switch (r.nextInt(4)) {
-			case 0 -> x = box.minX;
-			case 1 -> x = box.maxX;
-			case 2 -> z = box.minZ;
-			default -> z = box.maxZ;
-		}
-		return new Vec3(x, y, z);
+	/**
+	 * Sparks crackling over a struck body: every {@link LightningLook#CRAWL_EVERY} ticks, a short wild arc skating between two points
+	 * on entity {@code id}'s hitbox and a flickering mote. Follows the body as it moves; stops if it is gone.
+	 */
+	static void crawl(FxKit kit, ClientLevel level, Allowance a, int id, long seed) {
+		kit.simulate(LightningLook.CRAWL_EVERY, LightningLook.CRAWL_TICKS, t -> {
+			Entity en = level.getEntity(id);
+			if (en == null || en.isRemoved()) return;
+			int step = t / LightningLook.CRAWL_EVERY;
+			Vec3[] ab = LightningLook.crawl(en.getBoundingBox().inflate(0.06), seed, step);
+			arc(kit, level, a, ab[0], ab[1], seed + 31L * step, (step & 1) == 0 ? LightningLook.CRAWL : LightningLook.CRAWL_GOLD);
+			kit.motes(ab[0], CORE, a.take(1), 0.05, Vec3.ZERO, 0.02, GlowMote.Drift.FLICKER, 0.07F, 5);
+		});
 	}
 
-	/** A scorch where lightning meets the ground: a flat ring of sparks, low flickers and a puff of smoke. */
-	static void ground(FxKit kit, Vec3 at, float size) {
-		kit.ring(at, 0.6 * size, ParticleTypes.ELECTRIC_SPARK, Math.round(10 * size));
-		kit.motes(at, YELLOW, Math.round(4 * size), 0.35 * size, new Vec3(0, 0.02, 0), 0.03, GlowMote.Drift.FLICKER, 0.08F, 8);
-		kit.burst(at, ParticleTypes.SMOKE, Math.round(3 * size), 0.03);
+	/** A scorch where lightning meets the ground: a flat ring of sparks and low flickers. */
+	static void ground(FxKit kit, Allowance a, Vec3 at) {
+		kit.ring(at, 0.5, ParticleTypes.ELECTRIC_SPARK, a.take(LightningLook.GROUND_SPARKS));
+		kit.motes(at, YELLOW, a.take(LightningLook.GROUND_MOTES), 0.3, new Vec3(0, 0.02, 0), 0.03, GlowMote.Drift.FLICKER, 0.08F, 8);
 	}
 
 	/** One round glow mote, if the budget grants it and particles are not on Minimal. */
-	static void glow(FxKit kit, ClientLevel level, Vec3 at, Vec3 v, int rgb, float size, int life, GlowMote.Drift drift) {
+	static void glow(FxKit kit, ClientLevel level, Vec3 at, int rgb, float size, int life) {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.options.particles().get() == ParticleStatus.MINIMAL || kit.budget().particles(1) == 0) return;
-		mc.particleEngine.add(new GlowMote(level, at, v, rgb, size, life, drift, false));
-	}
-
-	/** One vanilla particle with its own velocity, if the budget grants it. */
-	static void add(FxKit kit, ClientLevel level, ParticleOptions p, Vec3 at, Vec3 v) {
-		if (kit.budget().particles(1) == 0) return;
-		level.addParticle(p, at.x, at.y, at.z, v.x, v.y, v.z);
+		mc.particleEngine.add(new GlowMote(level, at, Vec3.ZERO, rgb, size, life, GlowMote.Drift.COAST, false));
 	}
 
 	/** Whether this client is {@code casterId} looking out of their own eyes. */
