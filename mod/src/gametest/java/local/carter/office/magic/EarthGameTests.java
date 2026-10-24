@@ -2,23 +2,26 @@ package local.carter.office.magic;
 
 import java.util.Map;
 
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.cast.CastService.Result;
+import local.carter.office.magic.command.MagicCommand;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.net.FxEvent;
-import local.carter.office.magic.spell.SpellIds;
-import local.carter.office.magic.core.Slots;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellCost;
+import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.SpellRegistry;
 import local.carter.office.magic.spell.earth.EarthSpikes;
+import local.carter.office.magic.spell.earth.EarthWall;
+import local.carter.office.magic.spell.earth.EarthWallGeometry;
 import local.carter.office.magic.spell.earth.MountainFist;
 import local.carter.office.magic.spell.earth.MountainFistGeometry;
 import local.carter.office.magic.spell.earth.Quake;
 import local.carter.office.magic.spell.earth.QuakeGeometry;
-import local.carter.office.magic.spell.earth.EarthWall;
-import local.carter.office.magic.spell.earth.EarthWallGeometry;
 import local.carter.office.magic.spell.earth.StoneBullet;
+import local.carter.office.magic.terrain.EditLog.UndoReport;
 import local.carter.office.magic.terrain.TempBlockData;
 
 import net.minecraft.core.BlockPos;
@@ -29,14 +32,14 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ambient.Bat;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
@@ -242,15 +245,17 @@ public class EarthGameTests {
 		});
 	}
 
-	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 640)
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 680)
 	public void earthWallFallsAfterThirtySeconds(GameTestHelper h) {
 		ServerPlayer p = wallCaster(h);
 		int before = stoneAndTuff(h);
 		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.EARTH_WALL, 0f), Result.CAST, "result");
-		h.runAtTickTime(590, () -> {
+		// Still standing just before it expires (600 ticks after the cast)...
+		h.runAtTickTime(EarthWallGeometry.DURATION - 5, () -> {
 			for (int x = 14; x <= 18; x++) for (int y = 4; y <= 6; y++) assertWall(h, cell(x, y), Blocks.STONE);
 		});
-		h.runAtTickTime(601, () -> {
+		// ...and gone by 20 ticks after: a margin for the shared block applier when other lanes' terrain tests load it.
+		h.runAtTickTime(EarthWallGeometry.DURATION + 20, () -> {
 			for (int x = 14; x <= 18; x++) for (int y = 4; y <= 6; y++) h.assertBlockPresent(Blocks.AIR, cell(x, y));
 			h.assertValueEqual(stoneAndTuff(h), before, "only what was there before");
 			h.succeed();
@@ -724,12 +729,16 @@ public class EarthGameTests {
 		Vec3 at = friend.position();
 		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.CAST, "result");
 		h.runAfterDelay(MountainFistGeometry.RISE + 4, () -> {
-			h.assertBlockPresent(Blocks.AIR, FIST_AT.offset(1, 0, 0));
-			h.assertBlockPresent(Blocks.AIR, FIST_AT.offset(1, 1, 0));
+			// The friend's column and the 8 round it stay open all the way up: never left standing in a one-block shaft.
+			for (BlockPos q : BlockPos.betweenClosed(FIST_AT.offset(0, 0, -1), FIST_AT.offset(2, 7, 1))) {
+				h.assertFalse(spire(h.getBlockState(q)), "spire block round the friend at " + q);
+			}
 			h.assertValueEqual(friend.getHealth(), friend.getMaxHealth(), "the player is unhurt");
 			h.assertTrue(friend.position().distanceTo(at) < 0.01, "and unmoved");
 			h.assertTrue(friend.getDeltaMovement().y < 0.5, "and never launched");
-			h.assertTrue(spire(h.getBlockState(FIST_AT)) && spire(h.getBlockState(FIST_AT.offset(-1, 0, 0))), "the rest of the spire stands");
+			// Positive control: the rest of the spire stands.
+			h.assertTrue(spire(h.getBlockState(FIST_AT.offset(-1, 0, 0))) && spire(h.getBlockState(FIST_AT.offset(-2, 0, 0)))
+					&& spire(h.getBlockState(FIST_AT.offset(0, 0, 2))), "the rest of the spire stands");
 			h.succeed();
 		});
 	}
@@ -767,6 +776,118 @@ public class EarthGameTests {
 			h.assertBlockPresent(Blocks.AIR, MagicTestKit.STAND);
 			h.assertBlockPresent(Blocks.AIR, MagicTestKit.STAND.above());
 			h.assertTrue(spire(h.getLevel().getBlockState(BlockPos.containing(target))), "the spire stands at the moved target");
+			h.succeed();
+		});
+	}
+
+	// ---- Fix round 1: refusals, undo, claims ----
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 80)
+	public void mountainFistNeverBuildsInsideAHouse(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 7);
+		// A house wall 2 blocks ahead of the caster; looking at the ground just in front of it pushes the target out past it.
+		MagicTestKit.fill(h, new BlockPos(10, 4, 6), new BlockPos(22, 9, 6), Blocks.GLASS);
+		lookAt(h, p, Vec3.atBottomCenterOf(MagicTestKit.STAND.south()));
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		long hash = MagicTestKit.blockHash(h);
+		int mana = MagicAttachments.mana(p);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.FIZZLED, "refused behind the wall");
+		h.assertTrue(rec.fx(p).isEmpty(), "no fx");
+		h.assertTrue(rec.messageKeys(p).contains(CastService.SPELL_FAILED_KEY), "told it failed: " + rec.messageKeys(p));
+		h.assertValueEqual(MagicAttachments.mana(p), mana, "nothing spent");
+		h.runAfterDelay(MountainFistGeometry.RISE + 4, () -> {
+			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "no block changed in or out of the house");
+			// Positive control: with the wall gone the same cast raises the spire out there.
+			MagicTestKit.fill(h, new BlockPos(10, 4, 6), new BlockPos(22, 9, 6), Blocks.AIR);
+			h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.CAST, "no wall: cast");
+			h.runAfterDelay(MountainFistGeometry.RISE + 4, () -> {
+				h.assertTrue(spireBlocks(h, 12) >= 50, "the spire stands: " + spireBlocks(h, 12));
+				h.succeed();
+			});
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 60)
+	public void mountainFistRefusesACliffFace(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 7);
+		// A cliff 13 high, 12 ahead: pointing high up its face would drop the target 10 below the aim.
+		MagicTestKit.fill(h, new BlockPos(12, 4, 16), new BlockPos(20, 16, 18), Blocks.STONE);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		lookAt(h, p, new Vec3(16.5, 14.5, 16.0));
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.FIZZLED, "refused: a drop of about 10");
+		h.assertTrue(rec.fx(p).isEmpty(), "no fx");
+		// Positive control: the foot of the same face (a drop of about 1) casts, in front of the cliff.
+		lookAt(h, p, new Vec3(16.5, 5.0, 16.0));
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.CAST, "the cliff's foot: cast");
+		h.assertValueEqual(BlockPos.containing(rec.fx(p).get(0).target()), h.absolutePos(new BlockPos(16, 4, 15)), "in front of the face");
+		h.runAfterDelay(MountainFistGeometry.RISE + 4, h::succeed);
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 40)
+	public void mountainFistRefusesTheSky(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 7);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		long hash = MagicTestKit.blockHash(h);
+		// Looking up into the sky: a miss refuses (here the arena's barrier roof catches the ray, 20 above the floor: refused too).
+		lookAt(h, p, new Vec3(16.5, 22, 16.5));
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.FIZZLED, "refused: nothing to stand on");
+		h.assertTrue(rec.fx(p).isEmpty(), "no fx");
+		h.runAfterDelay(10, () -> {
+			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "no block changed");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 120)
+	public void mountainFistIsLoggedAndUndone(GameTestHelper h) {
+		ServerPlayer p = fistCaster(h, 7);
+		long hash = MagicTestKit.blockHash(h);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.CAST, "result");
+		h.runAfterDelay(80, () -> {
+			int spire = spireBlocks(h, 3);
+			h.assertTrue(spire >= 50, "positive control: the spire stands before the undo (" + spire + ")");
+			UndoReport r = MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
+			h.assertTrue(r.casts() == 1 && r.restored() >= spire, "undo restores the spire and the debris: " + r);
+			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "the arena is as it was");
+			h.succeed();
+		});
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 60)
+	public void quakeCracksAreLoggedAndUndone(GameTestHelper h) {
+		ServerPlayer p = quakeCaster(h);
+		long hash = MagicTestKit.blockHash(h);
+		h.assertValueEqual(MagicTestKit.cast(p, SpellIds.QUAKE, 1f), Result.CAST, "result");
+		h.runAfterDelay(30, () -> {
+			int cracked = MagicTestKit.count(h, Blocks.COBBLESTONE);
+			h.assertTrue(cracked > 0, "positive control: cracks before the undo");
+			UndoReport r = MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
+			h.assertValueEqual(r, new UndoReport(cracked, 1, 0), "undo report");
+			h.assertValueEqual(MagicTestKit.count(h, Blocks.COBBLESTONE), 0, "no cracks after the undo");
+			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "the floor is as it was");
+			h.succeed();
+		});
+	}
+
+	/** The terrain tests that place a hologram emitter (the fallback claim rule protects 32 round it). */
+	private static final String ENV_EMITTER = "office-test:magic_terrain_emitter";
+
+	@GameTest(structure = MagicTestKit.ARENA, environment = ENV_EMITTER, maxTicks = 80)
+	public void mountainFistRespectsClaimFallback(GameTestHelper h) {
+		ServerPlayer p = fistCaster(h, 7);
+		// An emitter about 20 from the target: the fallback claim rule protects everything within 32 of it.
+		MagicTestKit.emitter(h, new BlockPos(4, 4, 0), p);
+		Zombie z = MagicTestKit.movableDummy(h, FIST_AT.offset(0, 0, 2));
+		z.getAttribute(Attributes.MAX_HEALTH).setBaseValue(200);
+		z.setHealth(200);
+		MagicTestKit.Recorder rec = MagicTestKit.recorder(h);
+		long hash = MagicTestKit.blockHash(h);
+		h.assertValueEqual(MagicTestKit.castUltimate(p, SpellIds.MOUNTAIN_FIST), Result.CAST, "result");
+		h.runAfterDelay(MountainFistGeometry.RISE + 20, () -> {
+			h.assertValueEqual(MagicTestKit.blockHash(h), hash, "no spire, no debris: the land is protected");
+			h.assertTrue(rec.messageKeys(p).contains("magic.office.protected"), "told the land is protected: " + rec.messageKeys(p));
+			// Positive control: the strike itself still lands.
+			h.assertTrue(z.getHealth() <= 200 - MountainFistGeometry.DAMAGE, "the zombie is still hurt: " + z.getHealth());
 			h.succeed();
 		});
 	}

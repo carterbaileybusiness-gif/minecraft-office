@@ -166,7 +166,8 @@ public final class Quake implements Spell {
 				if (d > ring) continue;
 				passed.add(e);
 				if (!e.onGround() || !reaches(level, e)) continue;
-				if (struck++ >= Targets.MAX_ENTITIES) return;
+				// Only creatures count toward the per-cast entity budget (items and orbs are just thrown).
+				if (e instanceof LivingEntity && struck++ >= Targets.MAX_ENTITIES) continue;
 				if (e instanceof LivingEntity l) Hurt.damage(ctx, l, DAMAGE * ctx.power());
 				if (pushes(caster, e) && !e.isRemoved()) {
 					Vec3 out = e.position().subtract(stamp);

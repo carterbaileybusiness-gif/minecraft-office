@@ -119,6 +119,11 @@ public final class EarthStones {
 		return LIVE.size();
 	}
 
+	/** How many more rocks {@code casterId} may add right now (a visual made of many rocks checks first, all or nothing). */
+	public static int room(int casterId) {
+		return LEDGER.room(casterId);
+	}
+
 	/** Rocks live for {@code casterId}. */
 	public static int live(int casterId) {
 		return LEDGER.of(casterId);

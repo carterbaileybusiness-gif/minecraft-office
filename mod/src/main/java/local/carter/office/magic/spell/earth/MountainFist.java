@@ -27,6 +27,7 @@ import local.carter.office.magic.terrain.TempBlockData;
 import local.carter.office.magic.terrain.WorldTerrainEdits;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -92,6 +93,8 @@ public final class MountainFist implements Spell {
 		ServerPlayer p = ctx.caster();
 		int baseRadius = MountainFistGeometry.baseRadius(ctx.grimoireLevel());
 		BlockPos target = target(ctx, baseRadius);
+		// Nothing to stand a mountain on there, or the way is blocked: refuse before any side effect (nothing is spent).
+		if (target == null) return CastOutcome.fizzle(CastService.SPELL_FAILED_KEY);
 		Vec3 to = Vec3.atBottomCenterOf(target).subtract(p.position());
 		Vec3 dir = to.x * to.x + to.z * to.z < 1.0E-4 ? EarthSpikes.forward(ctx.look(), p.getYRot()) : EarthWallGeometry.flat(to);
 		int height = MountainFistGeometry.height(ctx.grimoireLevel());
@@ -104,33 +107,45 @@ public final class MountainFist implements Spell {
 	}
 
 	/**
-	 * The open cell on the ground at the look ray's point within range (the ground under its end on a miss). Never closer to the
-	 * caster than {@code baseRadius + }{@link MountainFistGeometry#CLEAR} (looking at their own feet, it moves out along the look),
-	 * so the spire never rises round the caster.
+	 * The open cell on the ground at the look ray's point within range, or null (refused). Never closer to the caster than
+	 * {@code baseRadius + }{@link MountainFistGeometry#CLEAR}: looking at their own feet, the aim moves out along the look, and the
+	 * moved aim must be in plain sight of the eye (never through a house wall). A target is refused, never snapped elsewhere
+	 * ({@link MountainFistGeometry#refused}): a ray that meets nothing, no solid ground under the target, a drop of more than
+	 * {@link MountainFistGeometry#MAX_DROP} from the aim (a cliff), or a target out of reach.
 	 */
-	static BlockPos target(CastContext ctx, int baseRadius) {
-		BlockPos t = rayTarget(ctx);
-		Vec3 feet = ctx.caster().position();
-		double dx = t.getX() + 0.5 - feet.x;
-		double dz = t.getZ() + 0.5 - feet.z;
-		double min = baseRadius + MountainFistGeometry.CLEAR;
-		if (dx * dx + dz * dz >= min * min) return t;
-		Vec3 aim = feet.add(EarthSpikes.forward(ctx.look(), ctx.caster().getYRot()).scale(min)).add(0, 1, 0);
-		Vec3 ground = Targets.ground(ctx.level(), aim);
-		return BlockPos.containing(aim.x, ground.y + 0.01, aim.z);
-	}
-
-	private static BlockPos rayTarget(CastContext ctx) {
+	static @Nullable BlockPos target(CastContext ctx, int baseRadius) {
 		ServerLevel level = ctx.level();
 		Vec3 eye = ctx.eye();
 		Vec3 look = ctx.look().normalize();
 		BlockHitResult hit = level.clip(new ClipContext(eye, eye.add(look.scale(MountainFistGeometry.RANGE)), ClipContext.Block.COLLIDER,
 				ClipContext.Fluid.NONE, ctx.caster()));
+		// A miss refuses: there is no ground to point at. So does a ceiling (the underside of a roof, a cave's top, the sky's
+		// barrier): stepping "up off its face" would land inside it.
+		if (hit.getType() == HitResult.Type.MISS || hit.getDirection() == Direction.DOWN) return null;
 		// Just off the face it struck (a wall's face → the ground in front of the wall), then down to the ground.
-		Vec3 aim = hit.getType() == HitResult.Type.MISS ? eye.add(look.scale(MountainFistGeometry.RANGE))
-				: hit.getLocation().subtract(look.scale(0.3)).add(0, 0.5, 0);
+		Vec3 aim = hit.getLocation().subtract(look.scale(0.3)).add(0, 0.5, 0);
+		BlockPos t = grounded(level, eye, aim);
+		if (t == null) return null;
+		Vec3 feet = ctx.caster().position();
+		double dx = t.getX() + 0.5 - feet.x;
+		double dz = t.getZ() + 0.5 - feet.z;
+		double min = baseRadius + MountainFistGeometry.CLEAR;
+		if (dx * dx + dz * dz >= min * min) return t;
+		Vec3 moved = feet.add(EarthSpikes.forward(look, ctx.caster().getYRot()).scale(min)).add(0, 1, 0);
+		// Pushed out past something (a house wall two blocks away): refuse, never build behind it.
+		if (level.clip(new ClipContext(eye, moved, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, ctx.caster())).getType()
+				!= HitResult.Type.MISS) return null;
+		return grounded(level, eye, moved);
+	}
+
+	/** The open cell on the ground under {@code aim}, or null when {@link MountainFistGeometry#refused}. */
+	private static @Nullable BlockPos grounded(ServerLevel level, Vec3 eye, Vec3 aim) {
 		Vec3 ground = Targets.ground(level, aim);
-		return BlockPos.containing(aim.x, ground.y + 0.01, aim.z);
+		BlockPos t = BlockPos.containing(aim.x, ground.y + 0.01, aim.z);
+		boolean solid = level.isLoaded(t.below()) && EarthSpikes.solidAt(level, t.below());
+		double drop = aim.y - ground.y;
+		double reach = eye.distanceTo(Vec3.atBottomCenterOf(t));
+		return MountainFistGeometry.refused(solid, drop, reach) ? null : t;
 	}
 
 	/**
@@ -220,6 +235,7 @@ public final class MountainFist implements Spell {
 		/** Base columns over a dip reach down to the ground first (bottom-up), so the spire never floats. */
 		private void skirts(ServerLevel level) {
 			Predicate<BlockPos> solid = EarthSpikes.solid(level);
+			spare(level, 0, -MountainFistGeometry.SKIRT);
 			for (Cell c : spire) {
 				if (c.y() != 0) break;
 				BlockPos top = target.offset(c.x(), 0, c.z());
@@ -233,14 +249,40 @@ public final class MountainFist implements Spell {
 		}
 
 		private void layer(ServerLevel level, int y) {
+			spare(level, y, y);
 			for (Cell c : spire) {
 				if (c.y() == y) place(level, target.offset(c.x(), c.y(), c.z()), c);
 			}
 		}
 
+		/**
+		 * Before layer {@code y} (and the skirt, {@code y0}..{@code y}) goes in: a player or protected entity in any of its cells
+		 * closes that column and the 8 round it, so nobody is ever left standing in a one-block shaft.
+		 */
+		private void spare(ServerLevel level, int y, int y0) {
+			int lo = Math.min(y, y0);
+			int hi = Math.max(y, y0);
+			AABB area = new AABB(target.getX() - baseRadius, target.getY() + lo, target.getZ() - baseRadius, target.getX() + baseRadius + 1,
+					target.getY() + hi + 1, target.getZ() + baseRadius + 1);
+			for (Entity e : level.getEntities((Entity) null, area, e -> !e.isSpectator() && EarthWall.keepsCellOpen(e))) {
+				AABB b = e.getBoundingBox();
+				for (int x = (int) Math.floor(b.minX); x <= (int) Math.floor(b.maxX - 1.0E-6); x++) {
+					for (int z = (int) Math.floor(b.minZ); z <= (int) Math.floor(b.maxZ - 1.0E-6); z++) {
+						for (int ox = -1; ox <= 1; ox++) {
+							for (int oz = -1; oz <= 1; oz++) closed.add(column(x + ox - target.getX(), z + oz - target.getZ()));
+						}
+					}
+				}
+			}
+		}
+
+		private static long column(int x, int z) {
+			return ((long) x << 32) ^ (z & 0xFFFFFFFFL);
+		}
+
 		private void place(ServerLevel level, BlockPos pos, Cell c) {
 			if (placed >= MountainFistGeometry.MAX_BLOCKS) return;
-			long column = ((long) c.x() << 32) ^ (c.z() & 0xFFFFFFFFL);
+			long column = column(c.x(), c.z());
 			if (closed.contains(column) || !level.isLoaded(pos)) return;
 			if (!TempBlockData.canReplace(level.getBlockState(pos))) return;
 			if (!makeRoom(level, pos)) {

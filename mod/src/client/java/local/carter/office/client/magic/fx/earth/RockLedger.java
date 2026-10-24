@@ -41,6 +41,11 @@ public final class RockLedger {
 		return live;
 	}
 
+	/** How many more rocks {@code casterId} may have right now (both caps). */
+	public int room(int casterId) {
+		return Math.max(0, Math.min(MAX_LIVE - live, MAX_PER_CASTER - of(casterId)));
+	}
+
 	public int of(int casterId) {
 		return perCaster.getOrDefault(casterId, 0);
 	}

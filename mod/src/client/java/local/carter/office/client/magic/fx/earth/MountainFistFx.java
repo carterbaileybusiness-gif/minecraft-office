@@ -71,6 +71,8 @@ public final class MountainFistFx implements SpellFx {
 	/** Ground plates prying up round the base, and dripstone fangs bursting out in a ring. */
 	static final int PLATES = 16;
 	static final int FANGS = 8;
+	/** Ticks after the first layer was due that the client looks for the spire under the fist. */
+	static final int CLAIM_CHECK = 3;
 	/** Lumps of ground thrown out of the eruption. */
 	static final int EJECTA = 10;
 
@@ -103,11 +105,12 @@ public final class MountainFistFx implements SpellFx {
 		int finger = 0;
 		for (float x : new float[] {-1.5F, -0.5F, 0.5F, 1.5F}) {
 			int kind = (finger & 1) == 0 ? 1 : 0;
-			float bump = (finger & 1) == 0 ? 0.08F : -0.04F;
+			float bump = (finger & 1) == 0 ? 0.14F : -0.04F;
 			v.add(new Voxel(x, 3.5F, 1F, kind, 0.92F));
 			v.add(new Voxel(x, 4.5F, 1F, kind, 0.92F));
-			v.add(new Voxel(x, 5.45F + bump, -0.5F, 4, 0.94F));
-			v.add(new Voxel(x, 5.3F + bump, 0.6F, kind, 0.9F));
+			// The knuckles: a row of separate bumps along the top, the front ones jutting forward over the curled fingers.
+			v.add(new Voxel(x, 5.45F + bump, -0.5F, (finger & 1) == 0 ? 4 : 0, 0.9F));
+			v.add(new Voxel(x, 5.5F + bump, 0.8F, kind == 1 ? 2 : 1, 0.88F));
 			finger++;
 		}
 		// Fingertips tucked under, and the thumb wrapped across the front, standing out, its base on the side.
@@ -193,16 +196,31 @@ public final class MountainFistFx implements SpellFx {
 				erupt(kit, level, erupt, foot, surface, baseRadius);
 			}
 			if (t >= 1 && t <= 10) shockwave(kit, erupt, foot, surface, baseRadius + 1 + t * 0.9);
-			if (t >= 1 && t <= MountainFistGeometry.RISE) rising(kit, level, rise, fist, foot, spireSurface, t);
-			if (t == MountainFistGeometry.RISE) top(kit, level, rise, fist, foot, peak);
-			if (t == SHATTER_AT) burst(kit, level, shatter, fist, foot, surface);
-			if (t > SHATTER_AT && t <= SHATTER_AT + 14) {
-				Vec3 c = new Vec3(foot.x, fist.base(SHATTER_AT) + 3 * s, foot.z);
+			// No spire under it a few ticks after its first layer was due (claimed or protected land: the server placed nothing):
+			// the fist bursts at once, a puff instead of a phantom fist riding nothing.
+			if (t == MountainFistGeometry.layerTick(0, height) + CLAIM_CHECK && fist.shatterAt == SHATTER_AT && !spireUnder(level, target, baseRadius)) {
+				fist.shatterAt = t;
+			}
+			if (t >= 1 && t <= MountainFistGeometry.RISE && t < fist.shatterAt) rising(kit, level, rise, fist, foot, spireSurface, t);
+			if (t == MountainFistGeometry.RISE && t < fist.shatterAt) top(kit, level, rise, fist, foot, peak);
+			if (t == fist.shatterAt) burst(kit, level, shatter, fist, foot, surface);
+			if (t > fist.shatterAt && t <= fist.shatterAt + 14) {
+				Vec3 c = new Vec3(foot.x, fist.base(fist.shatterAt) + 3 * s, foot.z);
 				EarthFx.spray(level, new BlockParticleOption(ParticleTypes.FALLING_DUST, Blocks.STONE.defaultBlockState()), c,
 						shatter.spend(kit, 4), 2.5, 0.02, false);
 			}
-			if (t >= SHATTER_AT + 4 && t % 2 == 0) settle(kit, level, settle, foot, baseRadius, height);
+			if (t >= fist.shatterAt + 4 && t % 2 == 0 && fist.shatterAt == SHATTER_AT) settle(kit, level, settle, foot, baseRadius, height);
 		});
+	}
+
+	/** Whether any cell of the spire's ground layer (radius {@code r} round the target) holds a block (not air or replaceable). */
+	static boolean spireUnder(ClientLevel level, BlockPos target, int r) {
+		for (int dx = -r; dx <= r; dx++) {
+			for (int dz = -r; dz <= r; dz++) {
+				if (dx * dx + dz * dz <= r * r && !level.getBlockState(target.offset(dx, 0, dz)).canBeReplaced()) return true;
+			}
+		}
+		return false;
 	}
 
 	/** The ground blocks the server throws as debris (the plates skip them). */
@@ -221,6 +239,8 @@ public final class MountainFistFx implements SpellFx {
 		final int height;
 		final float s;
 		final float yaw0;
+		/** The tick it bursts apart: {@link #SHATTER_AT}, or earlier when no spire rose under it. */
+		int shatterAt = SHATTER_AT;
 
 		Fist(double ground, int height, float s, float yaw0) {
 			this.ground = ground;
@@ -255,7 +275,7 @@ public final class MountainFistFx implements SpellFx {
 		/** Leaning as it tears out of the ground, straightening as it rises; a shudder at the top. */
 		float roll(double t) {
 			double lean = 12 * Math.max(0, 1 - t / (ERUPT + 4));
-			double shudder = t > MountainFistGeometry.RISE && t < SHATTER_AT ? 1.5 * Math.sin(t * 3.1) : 0;
+			double shudder = t > MountainFistGeometry.RISE && t < shatterAt ? 1.5 * Math.sin(t * 3.1) : 0;
 			return (float) (lean * Math.sin(t * 0.9 + 0.4) + shudder);
 		}
 	}
@@ -266,7 +286,10 @@ public final class MountainFistFx implements SpellFx {
 		Vec3 axis = Vec3.atBottomCenterOf(target);
 		BlockPos light = BlockPos.containing(axis.x, target.getY() + height + 1.5, axis.z);
 		float s = fist.s;
-		for (Voxel v : fist()) {
+		List<Voxel> voxels = fist();
+		// All or nothing: a fist with rocks missing (caps reached) would read as a broken statue.
+		if (EarthStones.room(caster) < voxels.size() || kit.budget().ghostBlocksLeft() < voxels.size()) return;
+		for (Voxel v : voxels) {
 			if (!kit.budget().ghostBlock()) return;
 			BlockState state = look(v.kind(), surface);
 			Vector3f local = new Vector3f(v.x() * s, v.y() * s, v.z() * s);
@@ -279,25 +302,26 @@ public final class MountainFistFx implements SpellFx {
 			float spinB = (r.nextFloat() - 0.5F) * 40F;
 			float size = v.size() * s;
 			EarthStones.add(caster, leash, state, SHATTER_AT + SHATTER_LIFE, (t, out) -> {
-				double tt = Math.min(t, SHATTER_AT);
+				int at = fist.shatterAt;
+				double tt = Math.min(t, at);
 				float yaw = fist.yaw(tt);
 				float roll = fist.roll(tt);
 				Quaternionf q = new Quaternionf().rotationY(yaw * Mth.DEG_TO_RAD).rotateX(LEAN * Mth.DEG_TO_RAD).rotateZ(roll * Mth.DEG_TO_RAD);
 				Vector3f o = q.transform(new Vector3f(local));
-				Vec3 at = new Vec3(axis.x + o.x, fist.base(tt) + o.y, axis.z + o.z);
+				Vec3 pos = new Vec3(axis.x + o.x, fist.base(tt) + o.y, axis.z + o.z);
 				out.light = light;
 				out.glow = GLOW;
 				out.yaw = yaw;
 				out.pitch = LEAN;
 				out.roll = roll;
 				out.scale = size;
-				if (t <= SHATTER_AT) {
-					out.at(at);
+				if (t <= at) {
+					out.at(pos);
 					return true;
 				}
-				double f = t - SHATTER_AT;
+				double f = t - at;
 				Vector3f dir = q.transform(new Vector3f(fromCore));
-				Vec3 p = at.add(dir.x * speed * f, (dir.y * speed + lift) * f - 0.045 * f * f, dir.z * speed * f);
+				Vec3 p = pos.add(dir.x * speed * f, (dir.y * speed + lift) * f - 0.045 * f * f, dir.z * speed * f);
 				if (p.y < fist.ground - 0.4) return false;
 				out.at(p);
 				out.yaw = yaw + spinA * (float) f;
@@ -439,7 +463,7 @@ public final class MountainFistFx implements SpellFx {
 
 	/** The fist bursts apart (its rocks fly from {@link #fistRocks}): crumbs, dust and smoke, a crack and a rumble. */
 	private static void burst(FxKit kit, ClientLevel level, EarthFx.Share share, Fist fist, Vec3 foot, BlockState surface) {
-		Vec3 c = new Vec3(foot.x, fist.base(SHATTER_AT) + 3 * fist.s, foot.z);
+		Vec3 c = new Vec3(foot.x, fist.base(fist.shatterAt) + 3 * fist.s, foot.z);
 		double spread = 1.8 * fist.s;
 		EarthFx.spray(level, EarthFx.crumbs(Blocks.STONE.defaultBlockState()), c, share.spend(kit, 150), spread, 0.38, false);
 		EarthFx.spray(level, EarthFx.crumbs(Blocks.ANDESITE.defaultBlockState()), c, share.spend(kit, 60), spread, 0.34, false);

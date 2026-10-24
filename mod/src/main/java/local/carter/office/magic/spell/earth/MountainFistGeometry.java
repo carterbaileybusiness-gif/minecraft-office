@@ -25,6 +25,18 @@ public final class MountainFistGeometry {
 	public static final double RANGE = 32;
 	/** The target is at least the base radius plus this from the caster (horizontally), so the spire never closes round them. */
 	public static final double CLEAR = 2;
+	/** A target more than this below its aim point (a cliff, the sky) is refused. */
+	public static final double MAX_DROP = 8;
+	/** A target farther than this from the eye is refused (the ray's range plus a little for the drop to the ground). */
+	public static final double MAX_REACH = RANGE + 2;
+
+	/**
+	 * Whether a target is refused rather than snapped somewhere: no solid ground under it (the void, an End column), more than
+	 * {@link #MAX_DROP} below the aim point (or above it: the aim was inside a block), or more than {@link #MAX_REACH} from the eye.
+	 */
+	public static boolean refused(boolean solidGround, double drop, double eyeDistance) {
+		return !solidGround || drop > MAX_DROP || drop < -1 || eyeDistance > MAX_REACH;
+	}
 	/** Ticks the spire takes to rise, bottom to top. */
 	public static final int RISE = 20;
 	/** The tick the fist breaks the ground and strikes. */

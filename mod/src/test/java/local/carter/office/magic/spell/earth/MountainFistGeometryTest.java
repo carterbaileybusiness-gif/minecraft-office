@@ -52,6 +52,17 @@ class MountainFistGeometryTest {
 	}
 
 	@Test
+	void targetsAreRefusedNotSnapped() {
+		assertTrue(!MountainFistGeometry.refused(true, 0.5, 12), "ground right under the aim, in reach");
+		assertTrue(MountainFistGeometry.refused(false, 0.5, 12), "no solid ground: the void, an End column");
+		assertTrue(MountainFistGeometry.refused(true, 8.5, 12), "a cliff: more than 8 below the aim");
+		assertTrue(!MountainFistGeometry.refused(true, 8, 12), "8 is still fine");
+		assertTrue(MountainFistGeometry.refused(true, -1.5, 12), "ground above the aim: the aim was inside a block");
+		assertTrue(MountainFistGeometry.refused(true, 1, MountainFistGeometry.RANGE + 2.5), "out of reach");
+		assertTrue(!MountainFistGeometry.refused(true, 1, MountainFistGeometry.RANGE + 2), "just in reach");
+	}
+
+	@Test
 	void layersArePlacedBottomUpOverTwentyTicks() {
 		for (int h : new int[] {8, 10, 12}) {
 			int last = 0;
