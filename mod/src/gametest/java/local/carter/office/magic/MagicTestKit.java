@@ -139,7 +139,10 @@ public final class MagicTestKit {
 	/** Disconnects {@code p} the way a lost connection does (Fabric {@code DISCONNECT} fires, the player leaves the list and level). */
 	public static void disconnect(ServerPlayer p) {
 		if (p.level().getServer().getPlayerList().getPlayer(p.getUUID()) != p) return;
-		p.connection.onDisconnect(new DisconnectionDetails(Component.literal("MagicTestKit disconnect")));
+		DisconnectionDetails details = new DisconnectionDetails(Component.literal("MagicTestKit disconnect"));
+		// Through Connection.handleDisconnection, as a real lost connection goes: Fabric fires DISCONNECT only there.
+		p.connection.disconnect(details);
+		if (p.level().getServer().getPlayerList().getPlayer(p.getUUID()) == p) p.connection.onDisconnect(details);
 	}
 
 	/** Teleports {@code p} to the bottom centre of {@code rel} in its test (keeps the rotation). */
