@@ -92,7 +92,7 @@ With 16 GB or more you can turn them on in the instance's **Mods** tab (Prism sh
 
 1. Double-click your instance to start Minecraft. The first start is slow. That is normal.
 2. Click **Multiplayer**, then **Add Server**.
-3. Server address: **Carter will message it to you.** <!-- TODO(controller): never put the address in this file -->
+3. Server address: **Carter will send you the server address privately.** <!-- never put the address in this file -->
 4. Join. If it says you are **not whitelisted**, send Carter your exact Minecraft username.
 
 If you see a red "mod mismatch" or "missing registry" screen, take a photo and send it to Carter.
