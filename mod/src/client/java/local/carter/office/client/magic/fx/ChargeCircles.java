@@ -148,7 +148,8 @@ public final class ChargeCircles {
 				MagicCircleRenderer.orientation(MagicCircleRenderer.basis(0, 1, 0), f.plane);
 			} else {
 				Vec3 look = player.getViewVector(partial);
-				at = player.getEyePosition(partial).add(look.scale(AHEAD)).add(0, -BELOW, 0);
+				// Its own caster in first person sees it centred on the crosshair; everyone else sees it held at chest height.
+				at = player.getEyePosition(partial).add(look.scale(AHEAD)).add(0, ownFirstPerson() ? 0 : -BELOW, 0);
 				// Facing the caster, so they read it the right way round.
 				MagicCircleRenderer.orientation(MagicCircleRenderer.basis(-look.x, -look.y, -look.z), f.plane);
 			}
