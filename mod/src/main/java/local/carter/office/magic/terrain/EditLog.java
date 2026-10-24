@@ -47,8 +47,8 @@ public final class EditLog {
 
 	/**
 	 * One block change: what was there when the change was applied, and what the change left. {@code launched}: the block flew
-	 * off as a falling block; undo leaves it alone (the debris may have landed as a block somewhere, so putting it back would
-	 * duplicate it).
+	 * off as a falling block. Undo puts it back like any edit: debris lands only through {@code LaunchedDebris}, which logs the
+	 * landing in the same cast (undone first, newest first) or discards the debris, so nothing is duplicated.
 	 */
 	public record LoggedEdit(BlockPos pos, BlockState before, BlockState after, boolean launched) {
 		public static final Codec<LoggedEdit> CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -76,7 +76,7 @@ public final class EditLog {
 		}
 	}
 
-	/** Blocks put back, casts undone, and blocks left alone (changed since the cast, or launched as debris). */
+	/** Blocks put back, casts undone, and blocks left alone (changed since the cast, or a dimension that is gone). */
 	public record UndoReport(int restored, int casts, int skipped) {
 		public UndoReport plus(UndoReport o) {
 			return new UndoReport(restored + o.restored, casts + o.casts, skipped + o.skipped);
@@ -133,7 +133,9 @@ public final class EditLog {
 
 	/**
 	 * Undoes the player's newest {@code n} casts, newest first: each edit (last applied first) goes back to {@code before} only
-	 * if the block is still the edit's {@code after}; the others, and launched blocks, are skipped. Undone casts leave the log.
+	 * if the block is still the edit's {@code after} (for a launched block: the air or fluid it left); the others are skipped, so
+	 * a block a player put there since stays. A landing on its own launch cell is undone before the launch. Undone casts leave
+	 * the log.
 	 */
 	public UndoReport undo(MinecraftServer server, UUID player, int n) {
 		int restored = 0;
@@ -154,7 +156,7 @@ public final class EditLog {
 			List<LoggedEdit> edits = cast.edits();
 			for (int j = edits.size() - 1; j >= 0; j--) {
 				LoggedEdit e = edits.get(j);
-				if (!e.launched() && level.getBlockState(e.pos()).equals(e.after())) {
+				if (level.getBlockState(e.pos()).equals(e.after())) {
 					level.setBlock(e.pos(), e.before(), Block.UPDATE_ALL);
 					restored++;
 				} else {

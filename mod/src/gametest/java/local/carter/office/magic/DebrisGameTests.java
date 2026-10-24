@@ -150,16 +150,23 @@ public class DebrisGameTests {
 	}
 
 	@GameTest(structure = MagicTestKit.ARENA, environment = MagicTestKit.TERRAIN_ENV, maxTicks = 140)
-	public void landedDebrisIsRemovedByUndo(GameTestHelper h) {
+	public void undoRestoresLaunchOriginsAndLandings(GameTestHelper h) {
 		ServerPlayer p = MagicTestKit.caster(h, Element.EARTH, 2);
-		BlockPos landing = ground(16, 16);
-		h.setBlock(landing.below(), Blocks.DIRT);
-		h.setBlock(landing, Blocks.SHORT_GRASS); // replaceable: the debris takes its cell, undo brings it back
-		h.setBlock(hover(16, 16), Blocks.STONE);
-		BlockPos from = h.absolutePos(hover(16, 16));
+		// Column 16: lands on short grass (replaceable), both cells come back. Column 20: same, but a player builds at the launch
+		// cell meanwhile, and that block stays. Column 12: a floor block launched with no velocity lands on its own cell.
+		for (int x : new int[] {16, 20}) {
+			h.setBlock(ground(x, 16).below(), Blocks.DIRT);
+			h.setBlock(ground(x, 16), Blocks.SHORT_GRASS);
+			h.setBlock(hover(x, 16), Blocks.STONE);
+		}
+		h.setBlock(ground(12, 16), Blocks.STONE);
+		List<BlockPos> launches = List.of(h.absolutePos(hover(16, 16)), h.absolutePos(hover(20, 16)), h.absolutePos(ground(12, 16)));
 		MagicTestKit.override(h, MagicTestKit.probe("debris_undo", Element.EARTH, 1).withCost(new SpellCost(0, 0, 0, 0)).withBody(ctx -> {
-			try (EditBatch b = ctx.kit().terrain().begin(ctx, from, EditTier.MEDIUM)) {
-				h.assertTrue(b.launch(from, Vec3.ZERO), "launch");
+			try (EditBatch b = ctx.kit().terrain().begin(ctx, launches.get(0), EditTier.ULTIMATE)) {
+				for (BlockPos from : launches) {
+					h.assertTrue(b.launch(from, Vec3.ZERO), "launch at " + h.relativePos(from) + " (" + h.getLevel().getBlockState(from)
+							+ ", refused " + b.refused() + ")");
+				}
 			}
 			return CastOutcome.cast(ctx.fx());
 		}));
@@ -168,18 +175,27 @@ public class DebrisGameTests {
 		h.assertValueEqual(MagicTestKit.cast(p, Identifier.fromNamespaceAndPath("office-test", "debris_undo"), 0f),
 				Result.CAST, "cast");
 		h.startSequence()
-				.thenWaitUntil(() -> h.assertBlockPresent(Blocks.STONE, landing))
 				.thenWaitUntil(() -> {
 					List<EditLog.LoggedCast> casts = world.log().casts(p.getUUID());
-					h.assertTrue(!casts.isEmpty() && landedAt(casts.get(0).edits(), h.absolutePos(landing)), "landing logged");
+					h.assertTrue(!casts.isEmpty(), "cast logged");
+					List<LoggedEdit> edits = casts.get(0).edits();
+					for (int x : new int[] {12, 16, 20}) h.assertTrue(landedAt(edits, h.absolutePos(ground(x, 16))), "landing logged at x " + x);
 				})
 				.thenExecute(() -> {
-					h.assertTrue(itemsAt(h, 16, 16).isEmpty(), "items");
-					UndoReport r = MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
-					// The landing is restored; the launch cell stays empty (launched blocks are never put back).
-					h.assertValueEqual(r, new UndoReport(1, 1, 1), "undo report");
-					h.assertBlockPresent(Blocks.SHORT_GRASS, landing);
+					for (int x : new int[] {12, 16, 20}) {
+						h.assertBlockPresent(Blocks.STONE, ground(x, 16));
+						h.assertTrue(itemsAt(h, x, 16).isEmpty(), "items at x " + x);
+					}
 					h.assertBlockPresent(Blocks.AIR, hover(16, 16));
+					h.setBlock(hover(20, 16), Blocks.OAK_PLANKS); // a player builds at the launch cell
+					UndoReport r = MagicCommand.undo(h.getLevel().getServer(), p.getUUID(), 1);
+					// 3 landings + 2 launch cells restored; the built-over launch cell is left alone.
+					h.assertValueEqual(r, new UndoReport(5, 1, 1), "undo report");
+					h.assertBlockPresent(Blocks.SHORT_GRASS, ground(16, 16));
+					h.assertBlockPresent(Blocks.STONE, hover(16, 16));
+					h.assertBlockPresent(Blocks.SHORT_GRASS, ground(20, 16));
+					h.assertBlockPresent(Blocks.OAK_PLANKS, hover(20, 16));
+					h.assertBlockPresent(Blocks.STONE, ground(12, 16));
 				})
 				.thenSucceed();
 	}

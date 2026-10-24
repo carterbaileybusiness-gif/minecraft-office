@@ -164,6 +164,7 @@ public final class WorldTerrainEdits implements TerrainEdits {
 	/** Applies up to {@link #PER_TICK} queued changes, then writes the logs of casts that are done (and, periodically, of running ones). */
 	public void tick() {
 		ticks++;
+		LaunchedDebris.prune(server.getTickCount());
 		for (int i = 0; i < PER_TICK && !queue.isEmpty(); i++) apply(queue.poll());
 		boolean periodic = ticks % FLUSH_TICKS == 0;
 		for (Iterator<Cast> it = casts.values().iterator(); it.hasNext();) {

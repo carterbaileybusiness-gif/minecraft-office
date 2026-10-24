@@ -53,9 +53,18 @@ public final class LaunchedDebris {
 	/** Tags {@code debris} and records the cast it lands for. */
 	static void track(FallingBlockEntity debris, ServerLevel level, Landing landing) {
 		int now = level.getServer().getTickCount();
-		FLIGHTS.values().removeIf(f -> now - f.launchedAt() > MAX_FLIGHT_TICKS || now < f.launchedAt());
+		prune(now);
 		debris.addTag(TAG);
 		FLIGHTS.put(debris.getUUID(), new Flight(landing, now));
+	}
+
+	/**
+	 * Forgets flights older than {@link #MAX_FLIGHT_TICKS} (debris vanilla discarded, broke on a torch, or that was killed) at
+	 * server tick {@code now}. Runs on every launch and landing, and once per server tick.
+	 */
+	public static void prune(int now) {
+		if (FLIGHTS.isEmpty()) return;
+		FLIGHTS.values().removeIf(f -> now - f.launchedAt() > MAX_FLIGHT_TICKS || now < f.launchedAt());
 	}
 
 	/** Server stopping: forget every flight (debris saved with the world never lands after a restart). */
@@ -79,6 +88,7 @@ public final class LaunchedDebris {
 	public static boolean land(FallingBlockEntity debris, Level level, BlockPos pos, BlockState state, BooleanSupplier place) {
 		if (!(level instanceof ServerLevel server)) return place.getAsBoolean();
 		Flight f = FLIGHTS.remove(debris.getUUID());
+		prune(server.getServer().getTickCount());
 		boolean placed = f != null && f.landing().land(debris, server, pos.immutable(), state, place);
 		if (!placed) {
 			debris.discard();
