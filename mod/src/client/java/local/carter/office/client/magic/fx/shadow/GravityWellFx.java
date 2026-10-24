@@ -27,9 +27,13 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -116,11 +120,18 @@ public final class GravityWellFx implements SpellFx {
 	/** One wisp off each of up to {@code n} things in reach (mobs, items, orbs), drifting toward the core. */
 	private static void wisps(ClientLevel level, FxKit kit, Vec3 centre, double reach, int n) {
 		int made = 0;
+		int looked = 0;
+		// What the server drags (items, orbs, hostile mobs), and only what the core can see: no wisps through walls.
 		for (Entity en : level.getEntities((Entity) null, new AABB(centre, centre).inflate(reach),
-				x -> (x instanceof LivingEntity || x instanceof ItemEntity || x instanceof ExperienceOrb) && !TargetFilter.isProtected(x)
-						&& x.getBoundingBox().getCenter().distanceToSqr(centre) <= reach * reach)) {
-			if (made++ >= n) break;
+				x -> (x instanceof Enemy && x instanceof LivingEntity || x instanceof ItemEntity || x instanceof ExperienceOrb)
+						&& !TargetFilter.isProtected(x) && x.getBoundingBox().getCenter().distanceToSqr(centre) <= reach * reach)) {
+			if (made >= n || looked++ >= 2 * n) break;
 			Vec3 at = en.getBoundingBox().getCenter();
+			if (level.clip(new ClipContext(centre, at, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()))
+					.getType() != HitResult.Type.MISS) {
+				continue;
+			}
+			made++;
 			kit.motes(at, ShadowFx.VIOLET, 1, 0.2, WellGeometry.pull(centre, at).scale(0.5), 0.01, GlowMote.Drift.COAST, 0.11F, 10);
 		}
 	}
@@ -205,13 +216,16 @@ public final class GravityWellFx implements SpellFx {
 			if (k <= 0.01F) return;
 			umbra.begin(state, camera);
 			float r = radius * k * (1 + 0.07F * Mth.sin(now * 0.45F));
+			Vec3 cam = umbra.camera();
 			// The disc: a ring of black smoke turning fast close in, and arcs of violet light streaming round further out
-			// (inner parts turn faster), each arc bright at its head and fading behind it.
+			// (inner parts turn faster), each arc bright at its head and fading behind it. Light is added over the darkness (it is
+			// drawn later, with no depth), so far-side pieces behind the core are dimmed to a tenth: the core stays black.
 			for (int i = 0; i < DISC_DARK; i++) {
 				double rho = r * (1.35 + 0.55 * frac(i * 0.618));
 				double a = Mth.TWO_PI * i / DISC_DARK + now * 0.2 * (1.35 * r / rho);
 				umbra.dark(disc(rho, a), r * 0.55F, 0.7F * k);
 			}
+			double hide = WellGeometry.HIDDEN_SHARE * r;
 			for (int i = 0; i < ARCS; i++) {
 				double rho = r * (1.7 + 1.0 * frac(i * 0.618 + 0.3));
 				double head = Mth.TWO_PI * i / ARCS + now * 0.12 * (1.9 * r / rho);
@@ -220,7 +234,9 @@ public final class GravityWellFx implements SpellFx {
 				float w = r * (0.22F + 0.12F * (float) frac(i * 0.37));
 				for (int j = 0; j < ARC_PIECES; j++) {
 					float f = 1 - (float) j / ARC_PIECES;
-					umbra.light(disc(rho, head - j * 0.09), w * (0.6F + 0.4F * f), 0.5F * k * flick * f, rgb);
+					Vec3 p = disc(rho, head - j * 0.09);
+					float behind = WellGeometry.behindCore(cam, centre, p, hide) ? WellGeometry.HIDDEN_LIGHT : 1F;
+					umbra.light(p, w * (0.6F + 0.4F * f), 0.5F * k * flick * f * behind, rgb);
 				}
 			}
 			umbra.orb(centre, r, k, now * 0.12, RIM, (0.06F + 0.34F * day) * k);
@@ -332,7 +348,7 @@ public final class GravityWellFx implements SpellFx {
 			// Brighter as it nears the core.
 			float heat = 0.55F + 0.45F * (float) (1 - rNow / Math.max(0.01, r0));
 			for (int k = 0; k < PIECES; k++) {
-				Vec3 p = WellGeometry.spiral(centre, r0, angle0, lift0, Math.max(0, t - k * 0.3));
+				Vec3 p = WellGeometry.spiral(centre, r0, angle0, lift0, Math.max(0, t - k * 0.12));
 				float f = 1 - (float) k / PIECES;
 				if (dark) {
 					umbra.dark(p, size * (0.5F + 0.5F * f), 0.9F * a * f);

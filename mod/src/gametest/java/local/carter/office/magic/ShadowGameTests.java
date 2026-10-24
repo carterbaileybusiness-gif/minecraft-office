@@ -14,7 +14,12 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.animal.chicken.Chicken;
+import net.minecraft.world.entity.animal.sheep.Sheep;
 import net.minecraft.world.entity.animal.wolf.Wolf;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.zombie.Zombie;
@@ -184,6 +189,8 @@ public class ShadowGameTests {
 		Wolf pet = MagicTestKit.tamedWolf(h, floor(c, 0, 4), other);
 		Zombie control = MagicTestKit.movableDummy(h, floor(c, -3, 3));
 		Vec3 at = other.position();
+		Vec3 villagerAt = villager.position();
+		Vec3 petAt = pet.position();
 		double controlStart = MagicTestKit.dist(control, c);
 		h.runAfterDelay(5, () -> {
 			h.assertTrue(other.getDeltaMovement().horizontalDistance() < 1.0E-6, "player velocity " + other.getDeltaMovement());
@@ -195,6 +202,43 @@ public class ShadowGameTests {
 			h.assertTrue(other.position().distanceTo(at) < 1.0E-6, "player moved to " + other.position());
 			h.assertTrue(MagicTestKit.dist(control, c) < controlStart - 1, "zombie dragged in: " + MagicTestKit.dist(control, c));
 			h.assertValueEqual(other.getHealth(), other.getMaxHealth(), "player health");
+			h.assertTrue(villager.position().distanceTo(villagerAt) < 1.0E-6, "villager moved to " + villager.position());
+			h.assertValueEqual(villager.getHealth(), villager.getMaxHealth(), "villager health");
+			h.assertTrue(pet.position().distanceTo(petAt) < 1.0E-6, "pet moved to " + pet.position());
+			h.assertValueEqual(pet.getHealth(), pet.getMaxHealth(), "pet health");
+			h.succeed();
+		});
+	}
+
+	/** {@code type} at {@code rel} with every goal removed: it stands still unless something moves it. */
+	private static <T extends Mob> T still(GameTestHelper h, EntityType<T> type, BlockPos rel) {
+		T m = h.spawn(type, rel);
+		m.removeAllGoals(g -> true);
+		m.setPersistenceRequired();
+		return m;
+	}
+
+	@GameTest(structure = MagicTestKit.ARENA, maxTicks = 60)
+	public void gravityWellSparesLivestock(GameTestHelper h) {
+		ServerPlayer p = MagicTestKit.caster(h, Element.SHADOW, 2);
+		Vec3 c = wellOnTheFloor(h, p, 0f);
+		// Friends' animals: a chicken 3 out (in the pull) and a sheep 2 out (in the 2-block hurt zone, but clear of where the
+		// dragged zombie lands, so it is never shoved by it). AI on, goals removed, so a pull would really move them.
+		Chicken chicken = still(h, EntityTypes.CHICKEN, floor(c, 3, 0));
+		Sheep sheep = still(h, EntityTypes.SHEEP, floor(c, -2, 0));
+		// Positive controls: a zombie 3 out (from the caster's side) is dragged, a NoAI zombie by the core is hurt.
+		Zombie pulled = MagicTestKit.movableDummy(h, floor(c, 0, -3));
+		Zombie core = MagicTestKit.dummy(h, floor(c, 0, 1));
+		Vec3 chickenAt = chicken.position();
+		Vec3 sheepAt = sheep.position();
+		double pulledStart = MagicTestKit.dist(pulled, c);
+		h.runAfterDelay(45, () -> {
+			h.assertTrue(MagicTestKit.dist(pulled, c) < pulledStart - 1, "zombie dragged in: " + MagicTestKit.dist(pulled, c));
+			h.assertTrue(core.getHealth() <= 18f, "zombie in the core hurt twice: " + core.getHealth());
+			h.assertTrue(chicken.position().subtract(chickenAt).horizontalDistance() < 0.1, "chicken moved to " + chicken.position());
+			h.assertTrue(sheep.position().subtract(sheepAt).horizontalDistance() < 0.1, "sheep moved to " + sheep.position());
+			h.assertValueEqual(chicken.getHealth(), chicken.getMaxHealth(), "chicken health");
+			h.assertValueEqual(sheep.getHealth(), sheep.getMaxHealth(), "sheep health");
 			h.succeed();
 		});
 	}

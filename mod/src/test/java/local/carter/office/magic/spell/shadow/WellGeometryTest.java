@@ -87,6 +87,20 @@ class WellGeometryTest {
 	}
 
 	@Test
+	void behindCoreIsTheFarSideNearTheViewLine() {
+		Vec3 eye = CENTRE.add(0, 0.5, -8);
+		Vec3 ahead = CENTRE.subtract(eye).normalize();
+		double within = 1.1 * 0.8;
+		// Straight behind the centre, and a little off the line: hidden.
+		assertTrue(WellGeometry.behindCore(eye, CENTRE, CENTRE.add(ahead.scale(1.5)), within));
+		assertTrue(WellGeometry.behindCore(eye, CENTRE, CENTRE.add(ahead.scale(1.5)).add(0.6, 0, 0), within));
+		// In front of the centre (the near side of the disc), or too far off the line: drawn in full.
+		assertFalse(WellGeometry.behindCore(eye, CENTRE, CENTRE.subtract(ahead.scale(1.5)), within), "near side");
+		assertFalse(WellGeometry.behindCore(eye, CENTRE, CENTRE.add(ahead.scale(1.5)).add(1.2, 0, 0), within), "beside the core");
+		assertFalse(WellGeometry.behindCore(CENTRE, CENTRE, CENTRE.add(1, 0, 0), within), "eye in the core");
+	}
+
+	@Test
 	void lifeAndReach() {
 		assertEquals(80, WellGeometry.life(0));
 		assertEquals(100, WellGeometry.life(0.5F));

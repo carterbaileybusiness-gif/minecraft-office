@@ -89,6 +89,26 @@ public final class WellGeometry {
 		return new Vec3(centre.x + Math.cos(a) * r, centre.y + lift, centre.z + Math.sin(a) * r);
 	}
 
+	/** Far-side pieces this close to the view line (as a share of the core's radius) are behind the core ({@link #behindCore}). */
+	public static final double HIDDEN_SHARE = 1.1;
+	/** How much light a piece behind the core keeps. */
+	public static final float HIDDEN_LIGHT = 0.1F;
+
+	/**
+	 * Whether {@code p} is hidden behind the core at {@code centre} as seen from {@code eye}: farther along the view line than the
+	 * centre, and within {@code within} of that line (the client dims such light, which would otherwise be added over the black).
+	 */
+	public static boolean behindCore(Vec3 eye, Vec3 centre, Vec3 p, double within) {
+		Vec3 view = centre.subtract(eye);
+		double d = view.length();
+		if (d < 1.0E-6) return false;
+		Vec3 axis = view.scale(1 / d);
+		Vec3 rel = p.subtract(eye);
+		double along = rel.dot(axis);
+		if (along <= d) return false;
+		return rel.subtract(axis.scale(along)).lengthSqr() <= within * within;
+	}
+
 	/** A mote's angle at {@code t} on its {@link #spiral}: a steady turn plus a wind-up as it nears the centre. */
 	public static double angle(double r0, double angle0, double t) {
 		double r = radiusAt(r0, t);

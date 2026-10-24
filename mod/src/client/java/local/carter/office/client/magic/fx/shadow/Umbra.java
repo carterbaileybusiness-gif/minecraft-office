@@ -77,10 +77,16 @@ final class Umbra {
 		add(LightPipeline.dark(), at, radius, glow, ink(intensity));
 	}
 
-	/** A wide, soft piece of darkness (a smooth falloff over its whole size). */
+	/** Most a {@link #haze} reaches, in blocks: wider ones cut into the ground and show the atlas's pixel steps up close. */
+	static final float MAX_HAZE = 1.6F;
+
+	/**
+	 * A wide, faint piece of darkness round something (at most {@link #MAX_HAZE} to its edge). Drawn with the small {@code glow}
+	 * sprite, whose falloff is concentrated in its middle, so its edge never shows the pixel steps a big soft sprite does.
+	 */
 	void haze(Vec3 at, float radius, float intensity) {
 		if (intensity <= 0.004F || radius <= 0) return;
-		add(LightPipeline.dark(), at, radius, soft, ink(intensity));
+		add(LightPipeline.dark(), at, Math.min(radius, MAX_HAZE), glow, ink(intensity));
 	}
 
 	/** A round piece of light in {@code rgb}. */
@@ -117,9 +123,11 @@ final class Umbra {
 	void orb(Vec3 centre, float radius, float a, double spin, int n, float haze) {
 		if (a <= 0.004F || radius <= 0.01F) return;
 		if (haze > 0) haze(centre, radius * 2.6F, haze * a);
-		dark(centre, radius * 2.0F, a);
-		dark(centre, radius * 2.0F, a);
+		// Stacked so the black is solid inside the rim and falls off just outside it (a wide piece at full strength would
+		// saturate a lit wall to black far out, showing the sprite's texel steps).
+		dark(centre, radius * 1.7F, 0.7F * a);
 		dark(centre, radius * 1.3F, a);
+		dark(centre, radius * 1.05F, a);
 		for (int i = 0; i < n; i++) {
 			double ang = spin + Mth.TWO_PI * i / n;
 			// One side of the rim burns brighter: it seems to turn.
