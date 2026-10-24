@@ -9,5 +9,8 @@ public final class WaterSpells {
 	public static void register() {
 		SpellRegistry.register(new WaterBullet());
 		SpellRegistry.register(new TidalPush());
+		SpellRegistry.register(new BubbleShield());
+		SpellRegistry.register(new WaterPrison());
+		SpellRegistry.register(new WaterDragon());
 	}
 }
