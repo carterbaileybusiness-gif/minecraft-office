@@ -1,9 +1,7 @@
 package local.carter.office.magic.tree;
 
-import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+
 
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.core.Slots;
@@ -42,7 +40,6 @@ public final class TreeService {
 
 	/** How long a spent Seal lets forks be re-picked (game ticks): 60 s. */
 	public static final long REPICK_TICKS = 1200;
-	private static final Map<UUID, Long> REPICK = new ConcurrentHashMap<>();
 
 	private TreeService() {}
 
@@ -61,26 +58,12 @@ public final class TreeService {
 		return o;
 	}
 
-	/** True while a spent Seal's re-pick window is open for {@code p} (expired ones are dropped). */
+	/**
+	 * True while a spent Seal's re-pick window is open for {@code p}: its end time lives in the player's synced {@code MagicData}
+	 * ({@code repickUntil}), so the client shows the same window after the book is closed and opened again.
+	 */
 	public static boolean repickOpen(ServerPlayer p) {
-		Long at = REPICK.get(p.getUUID());
-		if (at == null) return false;
-		long age = p.level().getGameTime() - at;
-		if (age < 0 || age > REPICK_TICKS) {
-			REPICK.remove(p.getUUID());
-			return false;
-		}
-		return true;
-	}
-
-	/** A player left: forget their re-pick window. */
-	public static void forget(ServerPlayer p) {
-		REPICK.remove(p.getUUID());
-	}
-
-	/** Server stopping. */
-	public static void clear() {
-		REPICK.clear();
+		return MagicAttachments.get(p).repickOpen(p.level().getGameTime());
 	}
 
 	/** {@code option} 0 = a bump ({@code RankUp}); else a fork choice at {@code rank}. */
@@ -116,9 +99,10 @@ public final class TreeService {
 		if (current.fork(rank) == option) return Outcome.SAME;
 		if (!repickOpen(p) && !p.hasInfiniteMaterials()) {
 			if (!spendSeal(p.getInventory())) return Outcome.NO_SEAL;
-			REPICK.put(p.getUUID(), p.level().getGameTime());
+			d = d.withRepickUntil(p.level().getGameTime() + REPICK_TICKS);
 		}
 		MagicAttachments.set(p, d.withRank(current.repick(rank, option)));
+
 		return Outcome.OK;
 	}
 

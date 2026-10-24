@@ -7,6 +7,9 @@ import java.util.Set;
 
 import org.jspecify.annotations.Nullable;
 
+import local.carter.office.magic.cast.CastService;
+
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
@@ -15,6 +18,8 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
+
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -34,7 +39,8 @@ public final class RankKit {
 	/**
 	 * A blast at {@code at}: every creature within {@code radius} that it reaches (nothing solid between {@code at} and the body's
 	 * centre, feet or top), except {@code skip}, takes {@code damage}; then, if alive and {@code ignite > 0}, burns that long, and
-	 * if a control effect may take it and {@code knock > 0}, is thrown {@code knock} away from {@code at} (+ {@code up}).
+	 * if a control effect may take it and {@code knock > 0}, is thrown {@code knock} away from {@code at} (+ {@code up}). Only
+	 * creatures within the cast's budget ({@link Hurt#admit}) are touched at all.
 	 *
 	 * @return the creatures it hurt
 	 */
@@ -43,6 +49,8 @@ public final class RankKit {
 		List<LivingEntity> hurt = new ArrayList<>();
 		for (LivingEntity e : Targets.radius(ctx, at, radius)) {
 			if (e == skip || !reaches(ctx.level(), at, e.getBoundingBox())) continue;
+			// The cast's budget first: past it a creature is neither hurt nor burnt nor thrown.
+			if (!Hurt.admit(ctx, e)) continue;
 			if (Hurt.damage(ctx, e, damage)) hurt.add(e);
 			if (!e.isAlive()) continue;
 			if (ignite > 0) e.igniteForTicks(Math.max(e.getRemainingFireTicks(), ignite));
@@ -54,10 +62,20 @@ public final class RankKit {
 	/** Gives every creature a control effect may take within {@code radius} of {@code at} (in its sight) {@code effect}. */
 	public static void afflict(CastContext ctx, Vec3 at, double radius, Holder<MobEffect> effect, int ticks, int amplifier) {
 		for (LivingEntity e : Targets.radius(ctx, at, radius)) {
-			if (TargetFilter.controllable(ctx.caster(), e) && reaches(ctx.level(), at, e.getBoundingBox())) {
+			if (TargetFilter.controllable(ctx.caster(), e) && reaches(ctx.level(), at, e.getBoundingBox()) && Hurt.admit(ctx, e)) {
 				e.addEffect(new MobEffectInstance(effect, ticks, amplifier), ctx.caster());
 			}
 		}
+	}
+
+	/**
+	 * How long a self-buff of {@code want} ticks may last for {@code ctx}'s cast: at most half the spell's cooldown at the
+	 * caster's rank ({@code CastService.cost}), so no buff can be kept up for good by casting again (Carter's ruling: no
+	 * permanent self-buffs). At least 1.
+	 */
+	public static int buffTicks(CastContext ctx, int want) {
+		int cooldown = CastService.cost(ctx.spell().cost(), ctx.rank()).cooldownTicks();
+		return Math.max(1, Math.min(want, cooldown / 2));
 	}
 
 	/** Throws {@code e} {@code strength} away from {@code from} (level) plus {@code up} ({@link Hurt#knock}). */
@@ -66,8 +84,11 @@ public final class RankKit {
 		Hurt.knock(e, away.horizontalDistanceSqr() < 1.0E-4 ? new Vec3(1, 0, 0) : away, strength, up);
 	}
 
-	/** True when nothing solid stands between {@code from} and {@code box}'s centre, feet or top. */
-	public static boolean reaches(ServerLevel level, Vec3 from, AABB box) {
+	/**
+	 * True when nothing solid stands between {@code from} and {@code box}'s centre, feet or top (any level: the client fx asks the
+	 * same of its own world, so a drawn arc never goes through a wall the server's would not).
+	 */
+	public static boolean reaches(Level level, Vec3 from, AABB box) {
 		Vec3 c = box.getCenter();
 		for (Vec3 to : new Vec3[] {c, new Vec3(c.x, box.minY + 0.1, c.z), new Vec3(c.x, box.maxY - 0.1, c.z)}) {
 			if (clear(level, from, to)) return true;
@@ -75,7 +96,7 @@ public final class RankKit {
 		return false;
 	}
 
-	static boolean clear(ServerLevel level, Vec3 a, Vec3 b) {
+	static boolean clear(Level level, Vec3 a, Vec3 b) {
 		if (a.distanceToSqr(b) < 1.0E-8) return true;
 		return level.clip(new ClipContext(a, b, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()))
 				.getType() == HitResult.Type.MISS;
@@ -167,6 +188,7 @@ public final class RankKit {
 				double dx = m.x - centre.x, dz = m.z - centre.z;
 				if (dx * dx + dz * dz > r * r || passed.contains(e.getId()) || !reaches(level, centre, e.getBoundingBox())) continue;
 				passed.add(e.getId());
+				if (!Hurt.admit(ctx, e)) continue;
 				if (damage > 0) Hurt.damage(ctx, e, damage);
 				if (e.isAlive() && knock > 0 && TargetFilter.controllable(ctx.caster(), e)) throwFrom(e, centre, knock, up);
 			}
@@ -206,6 +228,7 @@ public final class RankKit {
 				Vec3 m = e.getBoundingBox().getCenter();
 				Vec3 near = z.nearest(m);
 				if (e.getBoundingBox().distanceToSqr(near) > r2 || !reaches(level, near.add(0, 0.5, 0), e.getBoundingBox())) continue;
+				if (!Hurt.admit(ctx, e)) continue;
 				if (z.damage() > 0) Hurt.damage(ctx, e, z.damage());
 				if (!e.isAlive()) continue;
 				if (z.ignite() > 0) e.igniteForTicks(Math.max(e.getRemainingFireTicks(), z.ignite()));

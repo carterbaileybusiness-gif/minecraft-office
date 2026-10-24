@@ -11,6 +11,7 @@ import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
 import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.Motion;
+import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
@@ -49,8 +50,9 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * costs nothing and starts no cooldown. Then the caster is invisible for {@code INVISIBLE_TICKS × (1 + charge)} ticks. No block changes, no damage.
  *
  * <p>Ranks lengthen the step (the size knob, on both reaches). Forks: III {@link #BACKSTAB} (the target takes
- * {@link #BACKSTAB_DAMAGE}{@code × P}) or {@link #LONG_SHADOW} (invisible three times as long); V {@link #SWAP} (the target, if a
- * control effect may take it, is put where the caster stood) or {@link #PHANTOM} (Speed II and Strength I for {@link #PHANTOM_TICKS}).
+ * {@link #BACKSTAB_DAMAGE}{@code × P}) or {@link #LONG_SHADOW} (the step reaches {@link #LONG_SHADOW_RANGE}× as far); V
+ * {@link #SWAP} (the target, if a control effect may take it, is put where the caster stood) or {@link #PHANTOM} (Speed II and
+ * Strength I for {@link #PHANTOM_TICKS}, at most half the cooldown: strike as you arrive).
  *
  * <p>Fx: {@code origin} = the caster's eye before the step, {@code dir} = the look, {@code target} = where their feet landed,
  * {@code entities} = {the target} if there was one, {@code duration} = the invisibility's ticks, {@code data} = {where the feet were
@@ -67,7 +69,8 @@ public final class ShadowStep implements Spell {
 	public static final String SWAP = "swap";
 	public static final String PHANTOM = "phantom";
 	public static final float BACKSTAB_DAMAGE = 6;
-	public static final int PHANTOM_TICKS = 100;
+	public static final int PHANTOM_TICKS = 20;
+	public static final float LONG_SHADOW_RANGE = 1.6F;
 
 	/** How far the target ray reaches at {@code charge}: 16, 32 at full charge. */
 	public static double range(float charge) {
@@ -118,7 +121,7 @@ public final class ShadowStep implements Spell {
 			face(p, at, target.get());
 			p.teleportTo(level, at.x, at.y, at.z, Set.of(), p.getYRot(), p.getXRot(), true);
 		}
-		int hidden = Math.round(INVISIBLE_TICKS * ChargeMath.size(ctx.charge()) * (ctx.rank().is(LONG_SHADOW) ? 3 : 1));
+		int hidden = Math.round(INVISIBLE_TICKS * ChargeMath.size(ctx.charge()));
 		p.addEffect(new MobEffectInstance(MobEffects.INVISIBILITY, hidden, 0, false, false, true));
 		SpellRank rank = ctx.rank();
 		if (target.isPresent()) {
@@ -128,8 +131,10 @@ public final class ShadowStep implements Spell {
 			if (rank.is(SWAP) && t.isAlive() && TargetFilter.controllable(p, t)) t.teleportTo(from.x, from.y, from.z);
 		}
 		if (rank.is(PHANTOM)) {
-			p.addEffect(new MobEffectInstance(MobEffects.SPEED, PHANTOM_TICKS, 1), p);
-			p.addEffect(new MobEffectInstance(MobEffects.STRENGTH, PHANTOM_TICKS, 0), p);
+			int buff = RankKit.buffTicks(ctx, PHANTOM_TICKS);
+			p.addEffect(new MobEffectInstance(MobEffects.SPEED, buff, 1), p);
+			p.addEffect(new MobEffectInstance(MobEffects.STRENGTH, buff, 0), p);
+
 		}
 		// Where it left, relative to where it landed (floats cannot hold world coordinates far from the origin).
 		Vec3 back = from.subtract(at);

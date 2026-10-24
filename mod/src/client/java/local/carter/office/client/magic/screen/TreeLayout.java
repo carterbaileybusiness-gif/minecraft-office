@@ -11,14 +11,19 @@ import local.carter.office.client.magic.screen.SignLayout.Rect;
  * Where the Skill tree tab draws (pure, GUI units), inside the book {@link GrimoireLayout} lays out. The left page holds the tree:
  * {@link #COLS} columns (one per spell, wheel order), each a spell icon with its rank under it and {@link #RANKS} nodes below on a
  * line; ranks III and V are split into two small option nodes side by side. The right page is the detail panel (laid out as it
- * draws, see {@code TreePage}), its primary button pinned to the bottom. A one-line Re-pick switch sits under the tree. Text is
- * drawn at {@link Layout#unit()} (never below 1); nothing scrolls at any size.
+ * draws, see {@code TreePage} and {@link TreePanel}), its primary button pinned to the bottom. Under the tree: the legend of the
+ * node marks ({@link Layout#legend()}: four rows when the page is tall enough, else two rows of two) and a one-line Re-pick switch;
+ * the one-time coach hint covers those two (never a node or an icon). Text is drawn at {@link Layout#unit()} (never below 1);
+ * nothing scrolls at any size.
  */
 public final class TreeLayout {
 	public static final int COLS = 5;
 	public static final int RANKS = 5;
 	/** Font line height. */
 	public static final int LINE = 9;
+	/** Legend entries (owned, can rank up, missing materials, locked), and the least row pitch that gets them one row each. */
+	public static final int LEGEND = 4;
+	static final float TALL_PITCH = 18;
 
 	/**
 	 * One node: column {@code col} (wheel slot), {@code rank} 1–5, {@code option} 0 for a bump, 1 (A, left) or 2 (B, right) for
@@ -44,9 +49,17 @@ public final class TreeLayout {
 	 * @param repick   the Re-pick switch line at the bottom of the left page
 	 * @param panel    the right page (the detail panel's area)
 	 * @param button   the primary button, at the bottom of the panel
+	 * @param legend   the legend's cells (one per entry, in {@link #LEGEND} order), between the tree and the Re-pick switch
+	 * @param coach    where the coach hint goes: over the legend and the switch
 	 */
 	public record Layout(float unit, Rect left, Rect right, List<Rect> columns, List<Rect> icons, List<Integer> rankY, List<Node> nodes,
-			Rect repick, Rect panel, Rect button) {
+			Rect repick, Rect panel, Rect button, List<Rect> legend, Rect coach) {
+		/** The legend cell under the point, or -1. */
+		public int legendAt(double x, double y) {
+			for (int i = 0; i < legend.size(); i++) if (GrimoireLayout.contains(legend.get(i), x, y)) return i;
+			return -1;
+		}
+
 		/** The node under the point, or null. */
 		public @Nullable Node nodeAt(double x, double y) {
 			float slack = Math.max(2f, unit * 2f);
@@ -94,7 +107,20 @@ public final class TreeLayout {
 		int repickH = line + Math.round(3 * u);
 		Rect repick = new Rect(left.x(), left.bottom() - repickH, left.w(), repickH);
 		float nodesTop = rankTop + line + 4 * u;
-		float nodesBottom = repick.y() - 3 * u;
+		// The legend: one row per entry if the nodes keep a TALL_PITCH row pitch, else two rows of two.
+		int legendLine = Math.round((LINE + 1) * u);
+		int gap = Math.round(3 * u);
+		boolean tall = repick.y() - gap - LEGEND * legendLine - gap - nodesTop >= RANKS * TALL_PITCH * u;
+		int legendRows = tall ? LEGEND : LEGEND / 2;
+		int legendTop = repick.y() - gap - legendRows * legendLine;
+		List<Rect> legend = new ArrayList<>(LEGEND);
+		for (int i = 0; i < LEGEND; i++) {
+			int row = tall ? i : i / 2, col = tall ? 0 : i % 2;
+			int cw = tall ? left.w() : left.w() / 2;
+			legend.add(new Rect(left.x() + col * cw, legendTop + row * legendLine, cw, legendLine));
+		}
+		Rect coach = new Rect(left.x(), legendTop, left.w(), repick.bottom() - legendTop);
+		float nodesBottom = legendTop - gap;
 		// Five rows: the radius from the row pitch and the column width, the split nodes' from the column width.
 		float pitch0 = (nodesBottom - nodesTop) / RANKS;
 		float r = Math.clamp(Math.min(pitch0 * 0.3f, colW * 0.24f), 3f, 9f * u);
@@ -125,6 +151,7 @@ public final class TreeLayout {
 		int buttonH = Math.round(16 * u);
 		Rect button = new Rect(right.x(), right.bottom() - buttonH, right.w(), buttonH);
 		return new Layout(u, left, right, List.copyOf(columns), List.copyOf(icons), List.copyOf(rankY), List.copyOf(nodes), repick, right,
-				button);
+				button, List.copyOf(legend), coach);
+
 	}
 }

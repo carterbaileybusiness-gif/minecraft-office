@@ -66,8 +66,11 @@ class TreeLangTest {
 		JsonObject lang = lang();
 		for (TreeService.Outcome o : TreeService.Outcome.values()) text(lang, "tree.office.outcome." + o.name().toLowerCase(java.util.Locale.ROOT));
 		for (String k : List.of("rank_up", "choose", "rank_n", "unranked", "sub_bump", "sub_fork", "sub_owned", "sub_picked", "sub_other",
-				"sub_repick", "grows", "unlock_at", "first", "owned", "picked", "picked_mark", "need_level", "need_levels", "need_items", "cost",
-				"levels", "free", "minus_levels", "minus_items", "repick", "repick_on", "repick_first", "repick_need", "repick_button",
+				"sub_repick", "grows", "unlock_at", "first", "owned", "picked", "picked_mark", "need_level", "need_levels", "need_items", "free",
+				"improve", "have", "level_word", "levels_word", "milestone", "milestone_picked", "legend_owned", "legend_owned_short",
+				"legend_owned_tip", "legend_ready", "legend_ready_short", "legend_ready_tip", "legend_short", "legend_short_short",
+				"legend_short_tip", "legend_locked", "legend_locked_short", "legend_locked_tip",
+ "minus_levels", "minus_items", "repick", "repick_on", "repick_first", "repick_need", "repick_button",
 				"repick_warn", "repick_free", "coach", "tip_ready", "lv", "unit_s", "unit_pct", "unit_deg")) {
 			text(lang, "tree.office." + k);
 		}

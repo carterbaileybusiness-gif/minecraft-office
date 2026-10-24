@@ -12,7 +12,10 @@ import org.slf4j.LoggerFactory;
 
 import local.carter.office.magic.tree.Fork;
 
+import net.minecraft.core.Holder;
+import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -36,7 +39,8 @@ public final class Hurt {
 	 * <p><b>Per-cast entity budget.</b> One cast (caster + {@code castId}) hurts at most {@link Targets#MAX_ENTITIES} different
 	 * creatures, whatever its forks add (extra bolts, splashes, zones): a creature it has not hurt yet is refused once the budget
 	 * is spent. <b>Riders.</b> When the damage lands, the rank's riders ({@code SpellRank.riders()}: burn, a status effect,
-	 * life steal) apply to the target.
+	 * life steal) apply to the target; a control effect ({@link #controls}) only to what {@link TargetFilter#controllable} takes
+	 * (never a boss), and life steal heals a share of the health the hit really took.
 	 *
 	 * @return false if the target is filtered out, over the cast's budget or the damage did not land (dead, immune to magic, ...)
 	 */
@@ -45,6 +49,7 @@ public final class Hurt {
 		if (!admit(ctx, target)) return false;
 		int frames = target.getInvulnerableTime();
 		float lastHurt = lastHurt(target);
+		float before = target.getHealth() + target.getAbsorptionAmount();
 		target.setInvulnerableTime(0);
 		boolean landed;
 		try {
@@ -53,7 +58,7 @@ public final class Hurt {
 			target.setInvulnerableTime(frames);
 			setLastHurt(target, lastHurt);
 		}
-		if (landed) ride(ctx, target, amount);
+		if (landed) ride(ctx, target, Math.max(0, before - Math.max(0, target.getHealth()) - target.getAbsorptionAmount()));
 		return landed;
 	}
 
@@ -67,8 +72,12 @@ public final class Hurt {
 
 	private record CastKey(UUID caster, long castId) {}
 
-	/** True when {@code ctx} may hurt {@code e}: it already did, or it has hurt fewer than the budget so far (then {@code e} counts). */
-	private static boolean admit(CastContext ctx, LivingEntity e) {
+	/**
+	 * True when {@code ctx} may touch {@code e} under the per-cast budget: it already did, or it has touched fewer than
+	 * {@link Targets#MAX_ENTITIES} so far (then {@code e} counts). {@link #damage} calls it; so do the fork effects that burn or
+	 * throw without damage ({@code RankKit}), so they never reach past the cap either.
+	 */
+	public static boolean admit(CastContext ctx, LivingEntity e) {
 		Set<Integer> hit = HURT_BY_CAST.computeIfAbsent(new CastKey(ctx.caster().getUUID(), ctx.castId()), k -> new HashSet<>());
 		if (hit.contains(e.getId())) return true;
 		if (hit.size() >= Targets.MAX_ENTITIES) return false;
@@ -76,18 +85,31 @@ public final class Hurt {
 		return true;
 	}
 
-	/** The rank's riders on a hit that landed. */
-	private static void ride(CastContext ctx, LivingEntity target, float amount) {
+	/**
+	 * Status effects that control (slow, root, blind, weaken, float): a rider gives them only to what a control effect may take
+	 * ({@link TargetFilter#controllable}), so a boss takes the damage but never these.
+	 */
+	public static boolean controls(Holder<MobEffect> effect) {
+		return effect.equals(MobEffects.SLOWNESS) || effect.equals(MobEffects.BLINDNESS) || effect.equals(MobEffects.WEAKNESS)
+				|| effect.equals(MobEffects.LEVITATION) || effect.equals(MobEffects.DARKNESS) || effect.equals(MobEffects.MINING_FATIGUE)
+				|| effect.equals(MobEffects.NAUSEA);
+	}
+
+	/**
+	 * The rank's riders on a hit that landed: {@code dealt} is the health (and absorption) the target really lost, so life steal
+	 * heals what the hit took (after armour, never more than the target had), not what was asked.
+	 */
+	private static void ride(CastContext ctx, LivingEntity target, float dealt) {
 		for (Fork.Rider r : ctx.rank().riders()) {
 			switch (r.kind()) {
 				case IGNITE -> {
 					if (target.isAlive()) target.igniteForTicks(Math.max(target.getRemainingFireTicks(), r.ticks()));
 				}
 				case EFFECT -> {
-					if (target.isAlive() && r.effect() != null) target.addEffect(new MobEffectInstance(r.effect(), r.ticks(), r.amplifier()), ctx.caster());
+					if (target.isAlive() && r.effect() != null && (!controls(r.effect()) || TargetFilter.controllable(ctx.caster(), target))) target.addEffect(new MobEffectInstance(r.effect(), r.ticks(), r.amplifier()), ctx.caster());
 				}
 				case LIFESTEAL -> {
-					if (ctx.caster().isAlive()) ctx.caster().heal(amount * r.share());
+					if (ctx.caster().isAlive() && dealt > 0) ctx.caster().heal(dealt * r.share());
 				}
 			}
 		}

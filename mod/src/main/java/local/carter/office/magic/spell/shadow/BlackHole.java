@@ -65,7 +65,8 @@ import net.minecraft.world.phys.Vec3;
  * </ul>
  * It never loads a chunk: it closes if its own goes away.
  *
- * <p>Ranks widen the pull (the size knob). Forks: III {@link #RAVENOUS} (hurts every {@link #RAVENOUS_EVERY} ticks) or
+ * <p>Ranks widen the pull (the size knob). Forks: III {@link #HUNGERING} (every creature it kills widens its pull by
+ * {@link #HUNGER_GROWTH}, up to {@link #HUNGER_MAX} more) or
  * {@link #HORIZON} (pulls {@link #HORIZON_PULL}× as hard); V {@link #SUPERNOVA} (the collapse's blast twice as wide and twice as
  * hard) or {@link #DARK_RAIN} (the collapse fires {@link #RAIN_BOLTS} shadow bolts outward, {@link #RAIN_DAMAGE}{@code × P} each).
  *
@@ -76,11 +77,12 @@ public final class BlackHole implements Spell {
 	static final int MAX_CLIPS = 128;
 	static final int SYNC_EVERY = 2;
 	static final double MIN_SYNC = 0.02;
-	public static final String RAVENOUS = "ravenous";
+	public static final String HUNGERING = "hungering";
 	public static final String HORIZON = "horizon";
 	public static final String SUPERNOVA = "supernova";
 	public static final String DARK_RAIN = "dark_rain";
-	public static final int RAVENOUS_EVERY = 5;
+	public static final double HUNGER_GROWTH = 1;
+	public static final double HUNGER_MAX = 4;
 	public static final double HORIZON_PULL = 1.4;
 	public static final int RAIN_BOLTS = 8;
 	public static final float RAIN_DAMAGE = 6;
@@ -88,6 +90,11 @@ public final class BlackHole implements Spell {
 	/** The pull's reach at {@code rank}: {@link BlackHoleGeometry#PULL_RADIUS} times the size knob. */
 	public static double pullRadius(SpellRank rank) {
 		return BlackHoleGeometry.PULL_RADIUS * rank.mul(Knob.SIZE);
+	}
+
+	/** The pull's reach after {@code kills} (Hungering grows {@link #HUNGER_GROWTH} a kill, at most {@link #HUNGER_MAX}). */
+	public static double pullRadius(SpellRank rank, int kills) {
+		return pullRadius(rank) + (rank.is(HUNGERING) ? Math.min(HUNGER_MAX, HUNGER_GROWTH * kills) : 0);
 	}
 
 	/** The collapse's blast reach at {@code rank} (Supernova's ×2). */
@@ -155,6 +162,9 @@ public final class BlackHole implements Spell {
 		private @Nullable EditBatch batch;
 		/** At most {@code Targets.MAX_ENTITIES} different creatures hurt over its life and the blast (the per-cast budget). */
 		private final HitBudget hurtBudget = new HitBudget();
+		/** Hungering: creatures its hurt has killed. */
+		int kills;
+
 
 		Hole(CastContext ctx, Vec3 centre, double cap) {
 			this.ctx = ctx;
@@ -168,7 +178,7 @@ public final class BlackHole implements Spell {
 		public boolean tick(ServerLevel level, int age) {
 			if (!level.isLoaded(origin)) return false;
 			int clips = pull(level, age);
-			if (age % (ctx.rank().is(RAVENOUS) ? RAVENOUS_EVERY : BlackHoleGeometry.HURT_EVERY) == 0) hurt(level, clips);
+			if (age % BlackHoleGeometry.HURT_EVERY == 0) hurt(level, clips);
 			devour(level, age);
 			if (age >= BlackHoleGeometry.LIFE) {
 				collapse(level);
@@ -179,7 +189,7 @@ public final class BlackHole implements Spell {
 
 		/** Sets the pull on everything in reach that the centre can see; returns the sight checks it used. */
 		private int pull(ServerLevel level, int age) {
-			double r = pullRadius(ctx.rank());
+			double r = pullRadius(ctx.rank(), kills);
 			double strength = ctx.rank().is(HORIZON) ? HORIZON_PULL : 1;
 			List<Entity> caught = new ArrayList<>(level.getEntities((Entity) null, new AABB(centre, centre).inflate(r),
 					e -> GravityWell.pulls(ctx, e) && e.getBoundingBox().getCenter().distanceToSqr(centre) <= r * r));
@@ -208,7 +218,10 @@ public final class BlackHole implements Spell {
 			for (LivingEntity l : Targets.radius(ctx, centre, BlackHoleGeometry.HURT_RADIUS)) {
 				if (clips >= MAX_CLIPS) break;
 				clips++;
-				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) Hurt.damage(ctx, l, BlackHoleGeometry.HURT);
+				if (GravityWell.clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)
+						&& Hurt.damage(ctx, l, BlackHoleGeometry.HURT) && !l.isAlive()) {
+					kills++;
+				}
 			}
 		}
 

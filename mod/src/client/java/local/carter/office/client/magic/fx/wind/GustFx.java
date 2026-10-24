@@ -74,12 +74,34 @@ public final class GustFx implements SpellFx {
 		}
 		kit.motes(hand, PALE, 18 + Math.round(10 * c), 0.3, dir.scale(range / 8), range / 14, GlowMote.Drift.SWIRL, 0.12F, 9);
 
+		// Vacuum: what it caught streams back toward the caster.
+		boolean vacuum = e.spellRank().is(Gust.VACUUM);
+		Vec3 flow = vacuum ? dir.scale(-0.3) : dir.scale(0.25);
+		if (vacuum) {
+			for (int i = 0; i < 12; i++) {
+				Vec3 at = hand.add(dir.scale(range * (0.3 + 0.7 * r.nextDouble())));
+				kit.motes(at, PALE, 1, 0.6, flow, 0.05, GlowMote.Drift.SWIRL, 0.12F, 10);
+			}
+		}
 		for (int id : e.entities()) {
 			Entity hit = level.getEntity(id);
 			if (hit == null) continue;
 			Vec3 at = hit.getBoundingBox().getCenter();
 			if (kit.budget().particles(1) > 0) level.addParticle(ParticleTypes.SMALL_GUST, at.x, at.y, at.z, 0, 0, 0);
-			kit.motes(at, 0xFFFFFF, 8, 0.3, dir.scale(0.25), 0.12, GlowMote.Drift.SWIRL, 0.12F, 9);
+			kit.motes(at, 0xFFFFFF, 8, 0.3, flow, 0.12, GlowMote.Drift.SWIRL, 0.12F, 9);
+		}
+		// Wind Wall: the gust keeps whirling where it stands, swatting what flies in.
+		if (e.spellRank().is(Gust.WIND_WALL)) {
+			Vec3 wall = Gust.wallCentre(e.origin(), e.dir());
+			kit.circle(wall, dir.reverse(), 0xFF000000 | WIND, (float) Gust.WALL_RADIUS, 3, Gust.WALL_TICKS);
+			kit.simulate(3, Gust.WALL_TICKS, t -> {
+				for (int i = 0; i < 3; i++) {
+					double a = r.nextDouble() * Mth.TWO_PI;
+					Vec3 on = wall.add(f.side().scale(Math.cos(a) * Gust.WALL_RADIUS)).add(f.up().scale(Math.sin(a) * Gust.WALL_RADIUS));
+					Vec3 round = f.side().scale(-Math.sin(a) * 0.15).add(f.up().scale(Math.cos(a) * 0.15));
+					kit.motes(on, PALE, 1, 0.05, round, 0.01, GlowMote.Drift.SWIRL, 0.11F, 8);
+				}
+			});
 		}
 	}
 

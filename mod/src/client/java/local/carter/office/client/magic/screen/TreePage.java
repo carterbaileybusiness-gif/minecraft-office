@@ -27,6 +27,8 @@ import local.carter.office.magic.tree.SpellTree;
 import local.carter.office.magic.tree.TreeService;
 import local.carter.office.magic.tree.Trees;
 
+import com.mojang.blaze3d.platform.InputConstants;
+
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -66,6 +68,9 @@ public final class TreePage {
 	private static final int LOCK_RED = 0xFF9A3B2E;
 	private static final int SHORT_RED = 0xFFC0392B;
 	private static final int GREY = 0xFF85765F;
+	/** "(have n)" when there is enough, and the levels row's XP orb. */
+	private static final int HAVE_GREEN = 0xFF2E6B1F;
+	private static final int XP_GREEN = 0xFF7FBF2A;
 	/** The book's page and the cards' paper (text colours are checked against them for 4.5:1). */
 	private static final int PAGE = 0xFFF8EED0;
 	private static final int CARD = 0xFFF3E8CC;
@@ -75,7 +80,6 @@ public final class TreePage {
 	/** How long a refusal shakes the button, and how long the server's reason stays up. */
 	private static final long SHAKE_MS = 450;
 	private static final long REFUSAL_MS = 2500;
-	private static final long REPICK_MS = TreeService.REPICK_TICKS * 50;
 
 	private final GrimoireScreen screen;
 	/** The selected node: column, rank, option (0 = bump). */
@@ -84,7 +88,8 @@ public final class TreePage {
 	private int selOption;
 	private @Nullable Node hover;
 	private boolean repick;
-	private long repickUntil;
+	/** The keyboard is on the Re-pick switch (Down past rank V), not on a node. */
+	private boolean switchFocus;
 	private @Nullable Pending pending;
 	private final List<Burst> bursts = new ArrayList<>();
 	private final List<Floater> floaters = new ArrayList<>();
@@ -145,7 +150,13 @@ public final class TreePage {
 		return null;
 	}
 
+	private void toggleRepick() {
+		repick = !repick;
+		play(SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 0.9f, 0.8f));
+	}
+
 	public void select(int col, int rank, int option) {
+		switchFocus = false;
 		selCol = col;
 		selRank = rank;
 		selOption = TreeLayout.isFork(rank) ? Math.max(1, option) : 0;
@@ -229,8 +240,7 @@ public final class TreePage {
 			return true;
 		}
 		if (repickShown() && GrimoireLayout.contains(l.repick(), x, y)) {
-			repick = !repick;
-			play(SimpleSoundInstance.forUI(SoundEvents.BOOK_PAGE_TURN, 0.9f, 0.8f));
+			toggleRepick();
 			return true;
 		}
 		return false;
@@ -242,11 +252,25 @@ public final class TreePage {
 		MagicData d = data();
 		if (d.element().isEmpty()) return false;
 		if (selCol < 0) select(0, 1, 0);
+		// R flips the Re-pick switch from anywhere; Down past rank V reaches it too, and Enter or Space then flips it.
+		if (event.key() == InputConstants.KEY_R && repickShown()) {
+			toggleRepick();
+			return true;
+		}
 		if (event.isConfirmation() || event.isSelection()) {
-			press(d);
+			if (switchFocus && repickShown()) toggleRepick();
+			else press(d);
+			return true;
+		}
+		if (switchFocus) {
+			if (event.isUp() || !repickShown()) switchFocus = false;
 			return true;
 		}
 		if (event.isUp() || event.isDown()) {
+			if (event.isDown() && selRank == TreeLayout.RANKS && repickShown()) {
+				switchFocus = true;
+				return true;
+			}
 			int rank = Math.clamp(selRank + (event.isUp() ? -1 : 1), 1, TreeLayout.RANKS);
 			select(selCol, rank, selOption == 0 ? 1 : selOption);
 			return true;
@@ -309,8 +333,6 @@ public final class TreePage {
 			int option = TreeLayout.isFork(rank) ? Math.max(1, now0.fork(rank)) : 0;
 			bursts.add(new Burst(col, rank, option, e.argb(), option != 0, now));
 			if (p != null) for (int i = 0; i < p.costs().size(); i++) floaters.add(new Floater(p.costs().get(i), now, i));
-			// A re-pick that spent a Seal opened the server's window: the client counts it down too.
-			if (p != null && p.repick() && repickUntil < now) repickUntil = now + REPICK_MS;
 			float pitch = pitch(e);
 			if (option != 0) {
 				play(SimpleSoundInstance.forUI(SoundEvents.ANVIL_USE, 1.25f * pitch, 0.35f));
@@ -347,7 +369,21 @@ public final class TreePage {
 
 	/** The Re-pick switch shows with a Seal in the inventory, while re-picking, or while a spent Seal's minute runs. */
 	private boolean repickShown() {
-		return repick || hasSeal() || repickUntil > Util.getMillis();
+		return repick || hasSeal() || repickLeftTicks(data()) > 0;
+	}
+
+	/**
+	 * Ticks left in the re-pick window a spent Seal opened: the server's end time from the synced data ({@code repickUntil}) less
+	 * this client's game time, so closing and opening the book never loses it.
+	 */
+	static long repickLeftTicks(MagicData d) {
+		var level = mc().level;
+		return level == null ? 0 : repickLeft(d, level.getGameTime());
+	}
+
+	/** Ticks left of {@code d}'s re-pick window at game time {@code gameTime} (0 when closed). */
+	static long repickLeft(MagicData d, long gameTime) {
+		return Math.max(0, d.repickUntil() - gameTime);
 	}
 
 	private static boolean hasSeal() {
@@ -386,7 +422,7 @@ public final class TreePage {
 				if (!repick) {
 					yield new Action(null, Component.translatable(hasSeal() ? "tree.office.repick_first" : "tree.office.repick_need"), false);
 				}
-				boolean free = repickUntil > Util.getMillis() || (mc().player != null && mc().player.hasInfiniteMaterials());
+				boolean free = repickLeftTicks(d) > 0 || (mc().player != null && mc().player.hasInfiniteMaterials());
 				if (!free && !hasSeal()) yield new Action(null, Component.translatable("tree.office.repick_need"), true);
 				yield new Action(Component.translatable("tree.office.repick_button", forkName), null, true);
 			}
@@ -482,7 +518,7 @@ public final class TreePage {
 				for (int o : options) {
 					Node n = l.node(c, rank, o);
 					State s = state(d, e, c, rank, o);
-					boolean sel = c == selCol && rank == selRank && o == selOption;
+					boolean sel = !switchFocus && c == selCol && rank == selRank && o == selOption;
 					boolean hov = hover != null && hover.col() == c && hover.rank() == rank && hover.option() == o;
 					node(g, n, s, e, u, pulse, sel, hov, repick, k);
 					if (hov) g.setTooltipForNextFrame(font, nodeTip(d, e, c, rank, o, s), Optional.empty(), mouseX, mouseY);
@@ -505,10 +541,12 @@ public final class TreePage {
 				g.fill(sx - sz, sy - sz, sx + sz, sy + sz, UiKit.alpha(UiKit.mix(b.argb(), UiKit.WHITE, 0.4f), (1f - t) * k));
 			}
 		}
-		// The Re-pick switch.
+		// The legend and the Re-pick switch (the coach hint covers both while it shows).
+		if (coach) return;
+		legend(g, font, l, e, mouseX, mouseY, k);
 		if (repickShown()) {
 			Rect rp = l.repick();
-			boolean over = GrimoireLayout.contains(rp, mouseX, mouseY);
+			boolean over = GrimoireLayout.contains(rp, mouseX, mouseY) || switchFocus;
 			Component t = Component.translatable(repick ? "tree.office.repick_on" : "tree.office.repick");
 			float ts = fitAtLeastOne(font.width(t), rp.w(), u);
 			int col = repick ? ink : over ? UiKit.INK : UiKit.INK_SOFT;
@@ -517,6 +555,10 @@ public final class TreePage {
 				float w = font.width(t) * ts;
 				g.fill(Math.round(rp.cx() - w / 2f), Math.round(rp.y() + (rp.h() + 9 * ts) / 2f), Math.round(rp.cx() + w / 2f),
 						Math.round(rp.y() + (rp.h() + 9 * ts) / 2f + Math.max(1, u * 0.6f)), UiKit.alpha(col, 0.6f * k));
+			}
+			if (switchFocus) {
+				float w = font.width(t) * ts + 6 * u;
+				UiKit.roundedOutline(g, Math.round(rp.cx() - w / 2f), rp.y(), Math.round(rp.cx() + w / 2f), rp.bottom(), UiKit.alpha(UiKit.INK, 0.9f * k));
 			}
 		}
 	}
@@ -567,9 +609,14 @@ public final class TreePage {
 				plus(g, cx, cy, r * 0.55f, th, UiKit.alpha(ink, k));
 			}
 			case SHORT -> {
+				// Missing materials or levels: a grey "+" and a red "!" beside the ring (the legend says so).
 				Disc.ring(g, cx, cy, r, th, UiKit.alpha(UiKit.INK_SOFT, k));
 				plus(g, cx, cy, r * 0.5f, th, UiKit.alpha(GREY, k));
-				Disc.fill(g, cx + r * 0.75f, cy + r * 0.75f, Math.max(1.2f, r * 0.32f), UiKit.alpha(SHORT_RED, k));
+				int bw = Math.max(1, Math.round(th));
+				int bx = Math.round(cx + r + th);
+				int top = Math.round(cy - r), stem = Math.round(cy + r * 0.3f);
+				g.fill(bx, top, bx + bw, stem, UiKit.alpha(SHORT_RED, k));
+				g.fill(bx, stem + bw, bx + bw, stem + 2 * bw, UiKit.alpha(SHORT_RED, k));
 			}
 			case LATER -> Disc.ring(g, cx, cy, r * 0.6f, th, UiKit.alpha(UiKit.INK_SOFT, 0.55f * k));
 			case LOCKED -> {
@@ -604,62 +651,60 @@ public final class TreePage {
 	private void panel(GuiGraphicsExtractor g, Font font, TreeLayout.Layout l, MagicData d, Element e, int mouseX, int mouseY, long now, float k) {
 		float u = l.unit();
 		Rect p = l.panel();
-		int col = selCol;
-		int rank = selRank;
-		int option = selOption;
-		if (col < 0) return;
-		Identifier id = SpellIds.at(e, col);
+		if (selCol < 0) return;
+		Identifier id = SpellIds.at(e, selCol);
 		SpellTree tree = Trees.get(id);
 		if (tree == null) return;
-		SpellRank cur = d.rank(id);
-		State s = state(d, e, col, rank, option);
+		State s = state(d, e, selCol, selRank, selOption);
 		int ink = UiKit.readable(UiKit.inkOf(e.argb()), PAGE);
-		int line = Math.round(10 * u);
-		float y = p.y();
-
-		// Title: the spell, then "Rank III · pick one" (or what the node is).
-		Component name = UiKit.spellName(id);
-		float ns = fitAtLeastOne(font.width(name), p.w(), u);
-		UiKit.text(g, font, name, p.x(), y, ns, UiKit.alpha(col == Slots.ULTIMATE ? ink : UiKit.INK, k), false);
-		y += 10 * ns;
-		Component sub = subtitle(s, rank, option, tree);
-		y = wrapped(g, font, sub, p.x(), y, p.w(), u, 2, s == State.LOCKED ? LOCK_RED : UiKit.INK_SOFT, k) + 2 * u;
-
-		// The bottom block: cost (or the re-pick warning), the reason, the button. Drawn from the bottom up.
 		Action a = action(d, e);
 		boolean shaking = now - refusedAt < SHAKE_MS;
 		Component reason = refusal != null && now - refusedAt < REFUSAL_MS ? refusal : a.reason();
-		boolean reasonOnButton = reason != null && font.width(reason) * u <= l.button().w() - 6 * u;
-		float bottom = l.button().y() - 2 * u;
-		if (reason != null && !reasonOnButton) {
-			int n = UiKit.wrapLines(font, reason, p.w(), u, 2, lines);
-			bottom -= n * line;
-			float ry = bottom;
-			for (FormattedCharSequence ln : lines) {
-				UiKit.text(g, font, ln, p.x(), ry, u, UiKit.alpha(LOCK_RED, k), false);
-				ry += line;
-			}
-			bottom -= 2 * u;
-		}
-		button(g, font, l, a, reasonOnButton ? reason : null, e, mouseX, mouseY, now, shaking, k);
-		bottom = costBlock(g, font, p, bottom, d, e, col, rank, s, u, mouseX, mouseY, k);
+		TreePanel.Content content = content(d, e, tree, s, a, reason);
+		TreePanel.Plan plan = TreePanel.plan(p, l.button(), u, content, font::width);
+		List<Component> tip = null;
 
-		// The body, between the title and the cost: before → after, or the fork's two cards.
-		float room = bottom - y - 2 * u;
-		if (TreeLayout.isFork(rank)) {
-			forkCards(g, font, p, y, room, tree, cur, rank, option, s, d.level(), e, u, k);
-		} else {
-			SpellRank from = before(cur, rank, 0), to = after(cur, rank, 0);
-			if (s == State.OWNED) {
-				from = truncate(cur, rank - 1);
-				to = truncate(cur, rank);
-			}
-			int max = Math.max(1, (int) (room / line));
-			List<String[]> changes = changes(tree, from, to, d.level(), true);
-			drawChanges(g, font, p.x(), y, p.w(), changes, max, u, k, ink);
+		// The top: the name, the rank line, what the rank improves, the spell's line.
+		UiKit.text(g, font, Component.literal(plan.title()), p.x(), plan.titleY(), u, UiKit.alpha(selCol == Slots.ULTIMATE ? ink : UiKit.INK, k), false);
+		UiKit.text(g, font, Component.literal(plan.subtitle()), p.x(), plan.subtitleY(), u,
+				UiKit.alpha(s == State.LOCKED ? LOCK_RED : UiKit.INK_SOFT, k), false);
+		tip = cutTip(tip, content.title(), plan.title(), p.x(), plan.titleY(), p.w(), plan.line(), mouseX, mouseY);
+		tip = cutTip(tip, content.subtitle(), plan.subtitle(), p.x(), plan.subtitleY(), p.w(), plan.line(), mouseX, mouseY);
+		if (TreePanel.Plan.shown(plan.improvesY())) {
+			UiKit.text(g, font, Component.literal(plan.improves()), p.x(), plan.improvesY(), u, UiKit.alpha(ink, k), false);
+			tip = cutTip(tip, content.improves(), plan.improves(), p.x(), plan.improvesY(), p.w(), plan.line(), mouseX, mouseY);
 		}
+		if (TreePanel.Plan.shown(plan.descY())) {
+			UiKit.text(g, font, Component.literal(plan.desc()), p.x(), plan.descY(), u, UiKit.alpha(UiKit.INK, k), false);
+			tip = cutTip(tip, content.desc(), plan.desc(), p.x(), plan.descY(), p.w(), plan.line(), mouseX, mouseY);
+		}
+
+		// The body: the fork's two cards, or the before → after table.
+		if (content.cards() != null) {
+			tip = forkCards(g, font, plan, content, tree, d.rank(id), selRank, selOption, e, u, mouseX, mouseY, k, tip);
+		} else {
+			drawChanges(g, font, p.x(), plan.bodyY(), p.w(), content.table(), plan.tableRows(), u, k, ink);
+		}
+		if (TreePanel.Plan.shown(plan.milestoneY())) {
+			UiKit.text(g, font, Component.literal(plan.milestone()), p.x(), plan.milestoneY(), u, UiKit.alpha(UiKit.INK_SOFT, k), false);
+			tip = cutTip(tip, content.milestone(), plan.milestone(), p.x(), plan.milestoneY(), p.w(), plan.line(), mouseX, mouseY);
+		}
+
+		// The bottom: one row per cost, or the note; then the button.
+		if (TreePanel.Plan.shown(plan.noteY())) {
+			float ny = plan.noteY();
+			for (String ln : plan.note()) {
+				UiKit.text(g, font, Component.literal(ln), p.x(), ny, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
+				ny += plan.line();
+			}
+		}
+		tip = costRows(g, font, p, plan, u, mouseX, mouseY, k, tip);
+		button(g, font, l, a, plan.button(), e, mouseX, mouseY, now, shaking, k);
+		if (plan.buttonCut() && GrimoireLayout.contains(l.button(), mouseX, mouseY)) tip = List.of(Component.literal(content.button()));
+		if (tip != null) g.setTooltipForNextFrame(font, tip, Optional.empty(), mouseX, mouseY);
 
 		// What the last purchase cost, floating up from the button.
+		int line = plan.line();
 		for (Floater f : floaters) {
 			float t = (now - f.at()) / (float) FLOAT_MS;
 			float fy = l.button().y() - 4 * u - (f.index() + 1) * line - 18 * u * UiKit.easeOut(t);
@@ -667,100 +712,148 @@ public final class TreePage {
 		}
 	}
 
-	private Component subtitle(State s, int rank, int option, SpellTree tree) {
+	/** A tooltip with {@code full} when the point is over a line that had to be cut to {@code shown}; else {@code tip} as it was. */
+	private static @Nullable List<Component> cutTip(@Nullable List<Component> tip, @Nullable String full, String shown, float x, float y, float w,
+			int line, int mx, int my) {
+		if (full == null || full.equals(shown) || mx < x || mx >= x + w || my < y || my >= y + line) return tip;
+		return List.of(Component.literal(full));
+	}
+
+	/** What the panel says for the selected node (see {@link TreePanel}). */
+	private TreePanel.Content content(MagicData d, Element e, SpellTree tree, State s, Action a, @Nullable Component reason) {
+		int rank = selRank, option = selOption;
+		SpellRank cur = d.rank(tree.spell());
+		boolean fork = TreeLayout.isFork(rank);
+		String title = UiKit.spellName(tree.spell()).getString();
+		String subtitle = subtitle(s, rank, option).getString();
+		String desc = Component.translatable("spell.office." + tree.spell().getPath() + ".desc").getString();
+		String improves = null;
+		List<TreePanel.Row> table = List.of();
+		List<TreePanel.Card> cards = null;
+		if (fork) {
+			cards = new ArrayList<>(2);
+			SpellRank base = rank <= cur.rank() ? truncate(cur, rank - 1) : before(cur, rank, option);
+			for (int o = 1; o <= 2; o++) {
+				SpellRank to = rank <= cur.rank() ? truncate(cur, rank).repick(rank, o) : after(cur, rank, o);
+				String name = forkName(tree, rank, o).getString();
+				if (rank <= cur.rank() && cur.fork(rank) == o) name += Component.translatable("tree.office.picked_mark").getString();
+				cards.add(new TreePanel.Card(name, forkDesc(tree, rank, o).getString(), changes(tree, base, to, d.level(), false)));
+			}
+		} else {
+			SpellRank from = before(cur, rank, 0), to = after(cur, rank, 0);
+			if (s == State.OWNED) {
+				from = truncate(cur, rank - 1);
+				to = truncate(cur, rank);
+			}
+			table = changes(tree, from, to, d.level(), true);
+			improves = improvements(tree, from, to, d.level());
+		}
+		// The bottom: the re-pick note, "free" in creative, or one row per cost.
+		String note = null;
+		List<TreePanel.Cost> costs = new ArrayList<>();
+		LocalPlayer pl = mc().player;
+		if (s == State.OTHER && repick) {
+			long left = repickLeftTicks(d);
+			note = (left > 0 ? Component.translatable("tree.office.repick_free", (left + 19) / 20) : Component.translatable("tree.office.repick_warn")).getString();
+		} else if (pl != null && s != State.OWNED && s != State.OTHER) {
+			if (pl.hasInfiniteMaterials()) {
+				note = Component.translatable("tree.office.free").getString();
+			} else {
+				RankCost.Cost cost = RankCost.of(e, selCol == Slots.ULTIMATE, rank);
+				for (RankCost.Line ln : cost.lines()) {
+					int have = RankCost.have(pl.getInventory(), ln);
+					costs.add(new TreePanel.Cost(true, Integer.toString(ln.count()), new ItemStack(ln.icon()).getHoverName().getString(),
+							Component.translatable("tree.office.have", Math.min(have, 999)).getString(), have >= ln.count()));
+				}
+				costs.add(new TreePanel.Cost(true, Integer.toString(cost.levels()),
+						Component.translatable(cost.levels() == 1 ? "tree.office.level_word" : "tree.office.levels_word").getString(),
+						Component.translatable("tree.office.have", pl.experienceLevel).getString(), pl.experienceLevel >= cost.levels()));
+			}
+		}
+		Component label = a.label() != null ? a.label() : reason != null ? reason : Component.translatable("tree.office.rank_up");
+		return new TreePanel.Content(title, subtitle, improves, desc, table, cards, milestone(tree, cur, rank), costs, note, label.getString());
+	}
+
+	/** "+15 % damage, +15 % reach, −10 % mana": each stat line the rank changes, as a share of what it was (null if none). */
+	private static @Nullable String improvements(SpellTree tree, SpellRank from, SpellRank to, int level) {
+		List<String> out = new ArrayList<>();
+		for (SpellTree.Stat s : tree.stats()) {
+			double a = s.value().at(from, level), b = s.value().at(to, level);
+			String label = Component.translatable("stat.office." + s.key()).getString().toLowerCase(Locale.ROOT);
+			pct(out, a, b, label);
+		}
+		SpellCost base = SpellCost.forSlot(tree.slot());
+		SpellCost ca = CastService.cost(base, from), cb = CastService.cost(base, to);
+		pct(out, ca.mana(), cb.mana(), Component.translatable("stat.office.mana").getString().toLowerCase(Locale.ROOT));
+		pct(out, ca.cooldownTicks(), cb.cooldownTicks(), Component.translatable("stat.office.cooldown").getString().toLowerCase(Locale.ROOT));
+		return out.isEmpty() ? null : String.join(", ", out);
+	}
+
+	private static void pct(List<String> out, double a, double b, String label) {
+		if (a <= 0 || Math.abs(b - a) < 1.0E-6) return;
+		long p = Math.round((b / a - 1) * 100);
+		if (p == 0) return;
+		out.add(Component.translatable("tree.office.improve", (p > 0 ? "+" : "−") + Math.abs(p), label).getString());
+	}
+
+	/** The next fork ahead of rank {@code rank}: "Rank V: choose Lance or Flare" (or what was picked there); null past V. */
+	private static @Nullable String milestone(SpellTree tree, SpellRank cur, int rank) {
+		int at = rank < 3 ? 3 : rank < 5 ? 5 : 0;
+		if (at == 0) return null;
+		String r = SpellRank.roman(at);
+		if (cur.fork(at) != 0) return Component.translatable("tree.office.milestone_picked", r, forkName(tree, at, cur.fork(at))).getString();
+		return Component.translatable("tree.office.milestone", r, forkName(tree, at, 1), forkName(tree, at, 2)).getString();
+	}
+
+	private Component subtitle(State s, int rank, int option) {
 		String r = SpellRank.roman(rank);
 		return switch (s) {
+			case LOCKED -> Component.translatable("tree.office.unlock_at", Slots.unlockLevel(selCol));
 			case OWNED -> option == 0 ? Component.translatable("tree.office.sub_owned", r) : Component.translatable("tree.office.sub_picked", r);
 			case OTHER -> Component.translatable(repick ? "tree.office.sub_repick" : "tree.office.sub_other", r);
 			default -> Component.translatable(option == 0 ? "tree.office.sub_bump" : "tree.office.sub_fork", r);
 		};
 	}
 
-	/** The cost line (have/need per item, red when short; levels), or the re-pick warning; returns the y above it. */
-	private float costBlock(GuiGraphicsExtractor g, Font font, Rect p, float bottom, MagicData d, Element e, int col, int rank, State s,
-			float u, int mx, int my, float k) {
-		int line = Math.round(10 * u);
+	/** The cost rows: icon (item, or an XP orb for levels), the amount in bold, the name, "(have n)" green or red at the right. */
+	private @Nullable List<Component> costRows(GuiGraphicsExtractor g, Font font, Rect p, TreePanel.Plan plan, float u, int mx, int my, float k,
+			@Nullable List<Component> tip) {
 		LocalPlayer pl = mc().player;
-		if (pl == null) return bottom;
-		if (s == State.OTHER && repick) {
-			boolean free = repickUntil > Util.getMillis();
-			Component warn = free ? Component.translatable("tree.office.repick_free", (repickUntil - Util.getMillis()) / 1000)
-					: Component.translatable("tree.office.repick_warn");
-			int n = UiKit.wrapLines(font, warn, p.w(), u, 3, lines);
-			float y = bottom - n * line;
-			float yy = y;
-			for (FormattedCharSequence ln : lines) {
-				UiKit.text(g, font, ln, p.x(), yy, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
-				yy += line;
+		RankCost.Cost cost = pl == null || plan.costs().isEmpty() ? null : RankCost.of(data().element().orElse(Element.FIRE), selCol == Slots.ULTIMATE, selRank);
+		float icon = TreePanel.ICON * u;
+		for (int i = 0; i < plan.costs().size(); i++) {
+			TreePanel.CostRow row = plan.costs().get(i);
+			float x = p.x(), y = row.y();
+			Item item = cost != null && i < cost.lines().size() ? cost.lines().get(i).icon() : null;
+			if (item != null) {
+				g.pose().pushMatrix();
+				g.pose().translate(x, y - 0.5f * u);
+				g.pose().scale(icon / 16f, icon / 16f);
+				g.fakeItem(new ItemStack(item), 0, 0);
+				g.pose().popMatrix();
+			} else {
+				// Levels: a little XP orb.
+				Disc.fill(g, x + icon / 2f, y + icon / 2f - 0.5f * u, icon * 0.38f, UiKit.alpha(XP_GREEN, k));
+				Disc.fill(g, x + icon / 2f - u * 0.6f, y + icon / 2f - 1.2f * u, Math.max(0.8f, icon * 0.12f), UiKit.alpha(0xFFE8FFB0, k));
 			}
-			return y - 2 * u;
-		}
-		if (s == State.OWNED || s == State.OTHER) return bottom;
-		if (pl.hasInfiniteMaterials()) {
-			Component free = Component.translatable("tree.office.free");
-			UiKit.text(g, font, free, p.x(), bottom - line, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
-			return bottom - line - 2 * u;
-		}
-		RankCost.Cost cost = RankCost.of(e, col == Slots.ULTIMATE, rank);
-		// Entries: [icon] have/need … then "lv have/need"; they wrap onto a second line if the page is narrow.
-		List<Entry> entries = new ArrayList<>();
-		for (RankCost.Line l : cost.lines()) {
-			int have = RankCost.have(pl.getInventory(), l);
-			entries.add(new Entry(l.icon(), Component.literal(Math.min(have, 999) + "/" + l.count()), have >= l.count(),
-					new ItemStack(l.icon()).getHoverName()));
-		}
-		entries.add(new Entry(null, Component.translatable("tree.office.levels", pl.experienceLevel, cost.levels()), pl.experienceLevel >= cost.levels(),
-				null));
-		float icon = 9 * u;
-		float gap = 4 * u;
-		List<List<Entry>> rows = new ArrayList<>();
-		List<Entry> row = new ArrayList<>();
-		float w = font.width(Component.translatable("tree.office.cost")) * u + gap;
-		for (Entry en : entries) {
-			float ew = (en.icon != null ? icon + u : 0) + font.width(en.text) * u + gap;
-			if (!row.isEmpty() && w + ew > p.w()) {
-				rows.add(row);
-				row = new ArrayList<>();
-				w = 0;
+			x += icon + u;
+			Component need = Component.literal(row.cost().need()).withStyle(ChatFormatting.BOLD);
+			UiKit.text(g, font, need, x, y, u, UiKit.alpha(UiKit.INK, k), false);
+			x += font.width(need) * u + font.width(" ") * u;
+			UiKit.text(g, font, Component.literal(row.name()), x, y, u, UiKit.alpha(UiKit.INK, k), false);
+			Component have = Component.literal(row.cost().have());
+			float hw = font.width(have) * u;
+			UiKit.text(g, font, have, p.right() - hw, y, u, UiKit.alpha(row.cost().ok() ? HAVE_GREEN : SHORT_RED, k), false);
+			if (!row.name().equals(row.cost().name()) && mx >= p.x() && mx < p.right() && my >= y && my < y + plan.line()) {
+				tip = List.of(Component.literal(row.cost().need() + " " + row.cost().name() + " " + row.cost().have()));
 			}
-			row.add(en);
-			w += ew;
 		}
-		rows.add(row);
-		float y0 = bottom - rows.size() * line;
-		float y = y0;
-		for (int i = 0; i < rows.size(); i++) {
-			float x = p.x();
-			if (i == 0) {
-				Component label = Component.translatable("tree.office.cost");
-				UiKit.text(g, font, label, x, y, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
-				x += font.width(label) * u + gap;
-			}
-			for (Entry en : rows.get(i)) {
-				float x0 = x;
-				if (en.icon != null) {
-					g.pose().pushMatrix();
-					g.pose().translate(x, y - 0.5f * u);
-					g.pose().scale(icon / 16f, icon / 16f);
-					g.fakeItem(new ItemStack(en.icon), 0, 0);
-					g.pose().popMatrix();
-					x += icon + u;
-				}
-				UiKit.text(g, font, en.text, x, y, u, UiKit.alpha(en.ok ? UiKit.INK : SHORT_RED, k), false);
-				x += font.width(en.text) * u;
-				if (en.name != null && mx >= x0 && mx < x && my >= y && my < y + line) g.setTooltipForNextFrame(font, en.name, mx, my);
-				x += gap;
-			}
-			y += line;
-		}
-		return y0 - 2 * u;
+		return tip;
 	}
 
-	private record Entry(@Nullable Item icon, Component text, boolean ok, @Nullable Component name) {}
-
 	/** The primary button: filled in the element's colour when it can act, a quiet outline with the reason when it can't. */
-	private void button(GuiGraphicsExtractor g, Font font, TreeLayout.Layout l, Action a, @Nullable Component reason, Element e, int mouseX,
-			int mouseY, long now, boolean shaking, float k) {
+	private void button(GuiGraphicsExtractor g, Font font, TreeLayout.Layout l, Action a, String text, Element e, int mouseX, int mouseY, long now,
+			boolean shaking, float k) {
 		float u = l.unit();
 		Rect b = l.button();
 		float dx = shaking ? (float) Math.sin((now - refusedAt) / 25.0) * 2.5f * u * Math.max(0f, 1f - (now - refusedAt) / (float) SHAKE_MS) : 0f;
@@ -780,139 +873,105 @@ public final class TreePage {
 			UiKit.rounded(g, x0, b.y(), x1, b.bottom(), UiKit.alpha(0xFFE3D5B4, 0.6f * k));
 			UiKit.roundedOutline(g, x0, b.y(), x1, b.bottom(), UiKit.alpha(UiKit.INK_SOFT, 0.7f * k));
 		}
-		Component text = enabled ? a.label() : reason != null ? reason : Component.translatable("tree.office.rank_up");
-		float ts = fitAtLeastOne(font.width(text), b.w() - 6 * u, u);
-		int col = enabled ? UiKit.WHITE : (reason != null ? LOCK_RED : UiKit.INK_SOFT);
-		UiKit.centred(g, font, text, (x0 + x1) / 2f, b.y() + (b.h() - 9 * ts) / 2f + 0.5f, ts, UiKit.alpha(col, k), enabled);
+		int col = enabled ? UiKit.WHITE : LOCK_RED;
+		UiKit.centred(g, font, Component.literal(text), (x0 + x1) / 2f, b.y() + (b.h() - 9 * u) / 2f + 0.5f, u, UiKit.alpha(col, k), enabled);
 	}
 
 	/**
-	 * The two cards of a fork (rank III or V): side by side when the page is wide enough, else stacked. Each: the name, its one
-	 * line and the numbers it changes (before → after). The card shown (hovered or selected) is outlined; the owned one is
-	 * filled; the one not picked is dimmed.
+	 * The two cards of a fork (rank III or V), where {@link TreePanel} put them: the name, its line and the numbers it changes
+	 * (before → after). The card shown (hovered or selected) is outlined; the owned one is filled; the one not picked is dimmed.
+	 * Hovering a card shows all of it (its whole line and every number) in a tooltip.
 	 */
-	private void forkCards(GuiGraphicsExtractor g, Font font, Rect p, float y, float room, SpellTree tree, SpellRank cur, int rank, int option,
-			State s, int level, Element e, float u, float k) {
-		int line = Math.round(10 * u);
-		float pad = 2 * u;
-		boolean side = p.w() >= 150 * u;
-		float cardW = side ? (p.w() - 3 * u) / 2f : p.w();
-		float textW = cardW - 2 * pad;
-		SpellRank base = rank <= cur.rank() ? truncate(cur, rank - 1) : before(cur, rank, option);
-		int[] descLines = new int[3];
-		List<List<String[]>> changes = new ArrayList<>(2);
+	private @Nullable List<Component> forkCards(GuiGraphicsExtractor g, Font font, TreePanel.Plan plan, TreePanel.Content content, SpellTree tree,
+			SpellRank cur, int rank, int option, Element e, float u, int mx, int my, float k, @Nullable List<Component> tip) {
+		int line = plan.line();
 		for (int o = 1; o <= 2; o++) {
-			SpellRank to = rank <= cur.rank() ? truncate(cur, rank).repick(rank, o) : after(cur, rank, o);
-			changes.add(changes(tree, base, to, level, false));
-		}
-		// Fit: as many lines of the description and changes as the room allows (stacked cards share it).
-		int maxDesc = 3, maxChanges = 2;
-		while (true) {
-			float h = 0;
-			for (int o = 1; o <= 2; o++) {
-				int dl = UiKit.wrapLines(font, forkDesc(tree, rank, o), textW, u, maxDesc, lines);
-				descLines[o] = dl;
-				float ch = line + dl * line + Math.min(maxChanges, changes.get(o - 1).size()) * line + 2 * pad;
-				h = side ? Math.max(h, ch) : h + ch + 2 * u;
-			}
-			if (h <= room || (maxDesc == 1 && maxChanges == 0)) break;
-			if (maxChanges > 0 && maxChanges >= maxDesc) maxChanges--;
-			else if (maxDesc > 1) maxDesc--;
-			else maxChanges = 0;
-		}
-		float cy = y;
-		// Side by side, both cards take the taller one's height.
-		float tallest = 0;
-		for (int o = 1; o <= 2; o++) {
-			tallest = Math.max(tallest, line + descLines[o] * line + Math.min(maxChanges, changes.get(o - 1).size()) * line + 2 * pad);
-		}
-		for (int o = 1; o <= 2; o++) {
-			float cx = side ? p.x() + (o - 1) * (cardW + 3 * u) : p.x();
-			int nChanges = Math.min(maxChanges, changes.get(o - 1).size());
-			float ch = side ? tallest : line + descLines[o] * line + nChanges * line + 2 * pad;
+			TreePanel.CardBox box = plan.cards().get(o - 1);
+			TreePanel.Card card = content.cards().get(o - 1);
 			boolean picked = rank <= cur.rank() && cur.fork(rank) == o;
 			boolean dim = rank <= cur.rank() && !picked && !repick;
 			boolean focus = o == option;
-			int x0 = Math.round(cx), y0 = Math.round(cy), x1 = Math.round(cx + cardW), y1 = Math.round(cy + ch);
+			int x0 = Math.round(box.x()), y0 = Math.round(box.y()), x1 = Math.round(box.x() + box.w()), y1 = Math.round(box.y() + box.h());
 			// The option not picked dims (its frame and paper most; its text stays readable).
 			float ck = (dim ? 0.75f : 1f) * k;
 			int paper = picked ? UiKit.mix(CARD, e.argb(), 0.14f) : CARD;
 			UiKit.rounded(g, x0, y0, x1, y1, UiKit.alpha(paper, (dim ? 0.5f : 1f) * k));
 			UiKit.roundedOutline(g, x0, y0, x1, y1, UiKit.alpha(focus ? UiKit.inkOf(e.argb()) : UiKit.INK_SOFT, (focus ? 1f : 0.5f) * ck));
 			if (focus) g.fill(x0 + 1, y0 + 1, x0 + 1 + Math.max(1, Math.round(u)), y1 - 1, UiKit.alpha(e.argb(), ck));
-			float tx = cx + pad + (focus ? u : 0), ty = cy + pad;
-			Component name = forkName(tree, rank, o);
-			if (picked) name = name.copy().append(Component.translatable("tree.office.picked_mark"));
-			float ns = fitAtLeastOne(font.width(name), textW, u);
-			UiKit.text(g, font, name, tx, ty, ns, UiKit.alpha(UiKit.readable(UiKit.inkOf(e.argb()), paper), ck), false);
+			float tx = box.x() + plan.cardInset(), ty = box.y() + plan.cardPad();
+			float tw = box.w() - plan.cardInset() - plan.cardPad();
+			int accent = UiKit.readable(UiKit.inkOf(e.argb()), paper);
+			UiKit.text(g, font, Component.literal(box.name()), tx, ty, u, UiKit.alpha(accent, ck), false);
 			ty += line;
-			UiKit.wrapLines(font, forkDesc(tree, rank, o), textW, u, descLines[o], lines);
-			for (FormattedCharSequence ln : lines) {
-				UiKit.text(g, font, ln, tx, ty, u, UiKit.alpha(UiKit.INK, ck), false);
+			for (String ln : box.desc()) {
+				UiKit.text(g, font, Component.literal(ln), tx, ty, u, UiKit.alpha(UiKit.INK, ck), false);
 				ty += line;
 			}
-			drawChanges(g, font, tx, ty, textW, changes.get(o - 1), nChanges, u, ck, UiKit.readable(UiKit.inkOf(e.argb()), paper));
-			if (!side) cy += ch + 2 * u;
+			drawChanges(g, font, tx, ty, tw, card.changes(), box.rows(), u, ck, accent);
+			if (mx >= x0 && mx < x1 && my >= y0 && my < y1) {
+				List<Component> t = new ArrayList<>();
+				t.add(Component.literal(card.name()).withStyle(s -> s.withColor(UiKit.inkOf(e.argb()) & 0xFFFFFF)));
+				t.add(Component.literal(card.desc()));
+				for (TreePanel.Row r : card.changes()) {
+					t.add(Component.literal(r.label() + "  " + r.before() + " → " + r.after()).withStyle(ChatFormatting.GRAY));
+				}
+				tip = t;
+			}
 		}
+		return tip;
 	}
 
 	/** Stat lines that differ between {@code from} and {@code to}: {label, before, after}; mana and cooldown with {@code costs}. */
-	private static List<String[]> changes(SpellTree tree, SpellRank from, SpellRank to, int level, boolean costs) {
-		List<String[]> out = new ArrayList<>();
+	private static List<TreePanel.Row> changes(SpellTree tree, SpellRank from, SpellRank to, int level, boolean costs) {
+		List<TreePanel.Row> out = new ArrayList<>();
 		for (SpellTree.Stat s : tree.stats()) {
 			double a = s.value().at(from, level), b = s.value().at(to, level);
 			String fa = format(a, s.unit()), fb = format(b, s.unit());
-			if (!fa.equals(fb)) out.add(new String[] {Component.translatable("stat.office." + s.key()).getString(), fa, fb});
+			if (!fa.equals(fb)) out.add(new TreePanel.Row(Component.translatable("stat.office." + s.key()).getString(), fa, fb));
 		}
 		SpellCost base = SpellCost.forSlot(tree.slot());
 		SpellCost ca = CastService.cost(base, from), cb = CastService.cost(base, to);
-		if (ca.mana() != cb.mana()) out.add(new String[] {Component.translatable("stat.office.mana").getString(), "" + ca.mana(), "" + cb.mana()});
+		if (ca.mana() != cb.mana()) out.add(new TreePanel.Row(Component.translatable("stat.office.mana").getString(), "" + ca.mana(), "" + cb.mana()));
 		if (ca.cooldownTicks() != cb.cooldownTicks()) {
-			out.add(new String[] {Component.translatable("stat.office.cooldown").getString(), seconds(ca.cooldownTicks()), seconds(cb.cooldownTicks())});
+			out.add(new TreePanel.Row(Component.translatable("stat.office.cooldown").getString(), seconds(ca.cooldownTicks()), seconds(cb.cooldownTicks())));
 		}
-		if (costs && out.isEmpty()) out.add(new String[] {Component.translatable("tree.office.grows").getString(), "", ""});
+		if (costs && out.isEmpty()) out.add(new TreePanel.Row(Component.translatable("tree.office.grows").getString(), "", ""));
 		return out;
 	}
 
-	/** "Label   before → after" lines, the values right-aligned. */
-	private static void drawChanges(GuiGraphicsExtractor g, Font font, float x, float y, float w, List<String[]> changes, int max, float u, float k,
+	/** "Label   before → after" lines, the values right-aligned; the label cut with "…" where it would meet them. */
+	private static void drawChanges(GuiGraphicsExtractor g, Font font, float x, float y, float w, List<TreePanel.Row> changes, int max, float u, float k,
 			int accent) {
 		int line = Math.round(10 * u);
 		for (int i = 0; i < Math.min(max, changes.size()); i++) {
-			String[] c = changes.get(i);
-			Component label = Component.literal(c[0]);
-			UiKit.text(g, font, label, x, y, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
-			if (!c[1].isEmpty() || !c[2].isEmpty()) {
-				Component after = Component.literal(c[2]);
+			TreePanel.Row c = changes.get(i);
+			float right = x + w;
+			float valuesW = 0;
+			if (!c.before().isEmpty() || !c.after().isEmpty()) {
+				Component after = Component.literal(c.after());
 				Component arrow = Component.literal(" → ");
-				Component before = Component.literal(c[1]);
-				float right = x + w;
+				Component before = Component.literal(c.before());
 				float aw = font.width(after) * u, rw = font.width(arrow) * u, bw = font.width(before) * u;
-				float lw = font.width(label) * u;
-				// No room for both: just the new value.
-				if (lw + aw + rw + bw + 2 * u > w) {
-					UiKit.text(g, font, after, right - aw, y, u, UiKit.alpha(accent, k), false);
-				} else {
-					UiKit.text(g, font, after, right - aw, y, u, UiKit.alpha(accent, k), false);
+				// No room for both and a short label: just the new value.
+				boolean both = font.width("Damage") * u + aw + rw + bw + 2 * u <= w;
+				UiKit.text(g, font, after, right - aw, y, u, UiKit.alpha(accent, k), false);
+				valuesW = aw;
+				if (both) {
 					UiKit.text(g, font, arrow, right - aw - rw, y, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
 					UiKit.text(g, font, before, right - aw - rw - bw, y, u, UiKit.alpha(UiKit.INK, k), false);
+					valuesW = aw + rw + bw;
 				}
 			}
+			String label = TreePanel.fit(c.label(), w - valuesW - (valuesW > 0 ? 2 * u : 0), u, font::width);
+			UiKit.text(g, font, Component.literal(label), x, y, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
 			y += line;
 		}
 	}
 
-	/** Wraps {@code text} into at most {@code max} lines at {@code u} (never smaller), draws them; returns the y under them. */
-	private float wrapped(GuiGraphicsExtractor g, Font font, Component text, float x, float y, float w, float u, int max, int argb, float k) {
-		UiKit.wrapLines(font, text, w, u, max, lines);
-		for (FormattedCharSequence ln : lines) {
-			UiKit.text(g, font, ln, x, y, u, UiKit.alpha(argb, k), false);
-			y += 10 * u;
-		}
-		return y;
-	}
-
-	/** The one-time coach hint: a bubble over the first node that can be bought, pointing at it. */
+	/**
+	 * The one-time coach hint, over the legend and the Re-pick line (it hides no node and no icon): a dark note with a small pointer
+	 * on its top edge under the first node that can be bought, which also gets a beckoning ring.
+	 */
 	private void coach(GuiGraphicsExtractor g, Font font, TreeLayout.Layout l, MagicData d, Element e, long now, float k) {
 		int[] next = firstReady(d, e);
 		if (next == null) {
@@ -921,22 +980,54 @@ public final class TreePage {
 		}
 		Node n = l.node(next[0], next[1], next[2]);
 		float u = l.unit();
-		Component text = Component.translatable("tree.office.coach");
-		float w = font.width(text) * u + 8 * u, h = 9 * u + 6 * u;
-		float bob = (float) Math.sin(now / 300.0) * u;
-		float bx = Math.max(2, Math.min(n.cx() - w / 2f, mc().getWindow().getGuiScaledWidth() - w - 2));
-		float by = n.cy() - n.r() - 5 * u - h + bob;
+		Rect box = l.coach();
 		float ck = UiKit.clamp01((now - shownAt - 600) / 300f) * k;
 		if (ck <= 0f) return;
-		int x0 = Math.round(bx), y0 = Math.round(by), x1 = Math.round(bx + w), y1 = Math.round(by + h);
+		Component text = Component.translatable("tree.office.coach");
+		int lines = UiKit.wrapLines(font, text, box.w() - 8 * u, u, Math.max(1, (int) ((box.h() - 4 * u) / (10 * u))), this.lines);
+		float h = lines * 10 * u + 5 * u;
+		int x0 = box.x(), x1 = box.right();
+		int y1 = box.bottom(), y0 = Math.round(y1 - h);
 		UiKit.rounded(g, x0, y0 + 1, x1, y1 + 1, UiKit.alpha(0xFF000000, 0.4f * ck));
 		UiKit.rounded(g, x0, y0, x1, y1, UiKit.alpha(0xFF2A1E14, 0.95f * ck));
 		UiKit.roundedOutline(g, x0, y0, x1, y1, UiKit.alpha(e.argb(), ck));
-		// The pointer: a small triangle down to the node.
+		// The pointer: a small triangle up from the note's top edge, under the node's column.
 		int tip = Math.max(2, Math.round(3 * u));
-		int px = Math.round(n.cx());
-		for (int i = 0; i < tip; i++) g.fill(px - (tip - i), y1 + i, px + (tip - i), y1 + i + 1, UiKit.alpha(0xFF2A1E14, 0.95f * ck));
-		UiKit.text(g, font, text, bx + 4 * u, by + 3 * u, u, UiKit.alpha(0xFFF0E2BE, ck), false);
+		int px = Math.clamp(Math.round(n.cx()), x0 + tip + 2, x1 - tip - 2);
+		for (int i = 0; i < tip; i++) g.fill(px - (tip - i), y0 - i - 1, px + (tip - i), y0 - i, UiKit.alpha(0xFF2A1E14, 0.95f * ck));
+		float ty = y0 + 3 * u;
+		for (FormattedCharSequence ln : this.lines) {
+			UiKit.text(g, font, ln, x0 + 4 * u, ty, u, UiKit.alpha(0xFFF0E2BE, ck), false);
+			ty += 10 * u;
+		}
+		// The node it means beckons.
+		float bob = 0.5f + 0.5f * (float) Math.sin(now / 200.0);
+		Disc.ring(g, n.cx(), n.cy(), n.r() + (2 + 2 * bob) * u, Math.max(1f, u), UiKit.alpha(e.argb(), (0.5f + 0.5f * bob) * ck));
+	}
+
+	/**
+	 * The legend under the tree: what each node mark means (owned, can rank up now, missing materials, locked), drawn with the
+	 * marks themselves. The long words where they fit, else the short ones; hovering an entry shows its long words.
+	 */
+	private void legend(GuiGraphicsExtractor g, Font font, TreeLayout.Layout l, Element e, int mouseX, int mouseY, float k) {
+		float u = l.unit();
+		State[] states = {State.OWNED, State.READY, State.SHORT, State.LOCKED};
+		String[] keys = {"owned", "ready", "short", "locked"};
+		int hover = l.legendAt(mouseX, mouseY);
+		for (int i = 0; i < TreeLayout.LEGEND; i++) {
+			Rect cell = l.legend().get(i);
+			float r = Math.min(3.5f * u, cell.h() * 0.32f);
+			float mx = cell.x() + r + u, my = cell.y() + cell.h() / 2f;
+			// The locked mark is the padlock of a first rank.
+			node(g, new Node(0, states[i] == State.LOCKED ? 1 : 2, 0, mx, my, r), states[i], e, u, 0.6f, false, false, false, k);
+			Component word = Component.translatable("tree.office.legend_" + keys[i]);
+			float room = cell.w() - (2 * r + 3 * u);
+
+			if (font.width(word) * u > room) word = Component.translatable("tree.office.legend_" + keys[i] + "_short");
+			String shown = TreePanel.fit(word.getString(), room, u, font::width);
+			UiKit.text(g, font, Component.literal(shown), mx + r + 2 * u, cell.y() + (cell.h() - 9 * u) / 2f, u, UiKit.alpha(UiKit.INK_SOFT, k), false);
+			if (i == hover) g.setTooltipForNextFrame(font, Component.translatable("tree.office.legend_" + keys[i] + "_tip"), mouseX, mouseY);
+		}
 	}
 
 	/** The crisp scale at most {@code max} at which {@code width} fits {@code room}, but never below 1 (the vanilla font size). */

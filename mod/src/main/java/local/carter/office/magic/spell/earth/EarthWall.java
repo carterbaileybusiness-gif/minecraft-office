@@ -70,7 +70,8 @@ import net.minecraft.world.phys.Vec3;
  * <p>Ranks make it stand longer (the size knob on {@link EarthWallGeometry#DURATION}; never wider or taller: its shape keeps to the
  * medium radius). Forks: III {@link #THORNS} (creatures touching it take {@link #THORN_DAMAGE}{@code × P} a second and are pushed
  * off) or {@link #UPHEAVAL} (rising, it throws what is near {@link #UPHEAVAL_KNOCK} away and {@link #UPHEAVAL_UP} up); V
- * {@link #BASTION} (Resistance II and Regeneration I while the caster stands within {@link #BASTION_RANGE} of it) or {@link #CRUMBLE}
+ * {@link #BASTION} (Resistance II and Regeneration I while the caster stands within {@link #BASTION_RANGE} of it, for at most
+ * half the cooldown in all per wall: no self-buff outlasts its cooldown) or {@link #CRUMBLE}
  * (when it falls it crashes forward: {@link #CRUMBLE_DAMAGE}{@code × P} within {@link #CRUMBLE_RADIUS} in front).
  *
  * <p>Fx: {@code target} = bottom centre of the wall's centre cell, {@code duration} = its life ({@link #life}),
@@ -88,6 +89,9 @@ public final class EarthWall implements Spell {
 	public static final double UPHEAVAL_KNOCK = 1.2;
 	public static final double UPHEAVAL_UP = 0.6;
 	public static final double BASTION_RANGE = 4;
+	/** Bastion's buff per check (once a second), and the most it gives per wall, before the half-cooldown cap ({@code RankKit.buffTicks}). */
+	public static final int BASTION_TICKS = 30;
+
 	public static final float CRUMBLE_DAMAGE = 8;
 	public static final double CRUMBLE_RADIUS = 3;
 
@@ -117,9 +121,12 @@ public final class EarthWall implements Spell {
 		double ahead = clearAhead(ctx, forward);
 		EarthWallGeometry g = EarthWallGeometry.of(ctx.caster().position(), forward, ahead, ctx.charge());
 		Rise rise = new Rise(ctx, g);
-		if (!ActiveEffects.add(ctx, rise)) return CastOutcome.fizzle("magic.office.busy");
 		SpellRank rank = ctx.rank();
-		if (rank.is(THORNS) || rank.is(BASTION) || rank.is(CRUMBLE)) ActiveEffects.add(ctx, new Standing(ctx, g, forward));
+		boolean standing = rank.is(THORNS) || rank.is(BASTION) || rank.is(CRUMBLE);
+		// A fork that stands with the wall needs its own slot too: with no room for both, the cast fizzles for free.
+		if (standing && ActiveEffects.count(ctx.caster().getUUID()) + 2 > ActiveEffects.MAX_PER_CASTER) return CastOutcome.fizzle("magic.office.busy");
+		if (!ActiveEffects.add(ctx, rise)) return CastOutcome.fizzle("magic.office.busy");
+		if (standing) ActiveEffects.add(ctx, new Standing(ctx, g, forward));
 		if (rank.is(UPHEAVAL)) {
 			RankKit.blast(ctx, Vec3.atBottomCenterOf(g.origin()).add(0, 1, 0), g.width() / 2.0 + 1.5, 0, null, 0, UPHEAVAL_KNOCK, UPHEAVAL_UP);
 		}
@@ -261,11 +268,15 @@ public final class EarthWall implements Spell {
 		private final Vec3 forward;
 		private final AABB box;
 		private final int life;
+		/** Bastion: buff ticks given so far, and the most this wall gives (half the cooldown). */
+		private int guarded;
+		private final int guardCap;
 
 		Standing(CastContext ctx, EarthWallGeometry g, Vec3 forward) {
 			this.ctx = ctx;
 			this.g = g;
 			this.forward = forward;
+			this.guardCap = RankKit.buffTicks(ctx, BASTION_TICKS);
 			this.life = life(ctx.rank());
 			BlockPos o = g.origin();
 			int half = g.width() / 2;
@@ -284,10 +295,12 @@ public final class EarthWall implements Spell {
 						if (e.isAlive() && TargetFilter.controllable(p, e)) RankKit.throwFrom(e, box.getCenter(), 0.6, 0.2);
 					}
 				}
-				if (ctx.rank().is(BASTION) && p.isAlive() && p.level() == level
+				if (ctx.rank().is(BASTION) && guarded < guardCap && p.isAlive() && p.level() == level
 						&& box.getCenter().distanceTo(p.position()) <= BASTION_RANGE + g.width() / 2.0) {
-					p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, 30, 1), p);
-					p.addEffect(new MobEffectInstance(MobEffects.REGENERATION, 30, 0), p);
+					int ticks = Math.min(BASTION_TICKS, guardCap - guarded);
+					guarded += ticks;
+					p.addEffect(new MobEffectInstance(MobEffects.RESISTANCE, ticks, 1), p);
+					p.addEffect(new MobEffectInstance(MobEffects.REGENERATION, ticks, 0), p);
 				}
 			}
 			if (age >= life) {

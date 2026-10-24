@@ -16,7 +16,9 @@ import local.carter.office.magic.core.Element;
 import local.carter.office.magic.data.MagicData;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.fire.FireBolt;
+import local.carter.office.magic.spell.fire.BarrageGeometry;
 import local.carter.office.magic.spell.fire.FireballBarrage;
+import local.carter.office.magic.spell.wind.BladeWindGeometry;
 
 import net.minecraft.SharedConstants;
 import net.minecraft.network.FriendlyByteBuf;
@@ -77,6 +79,26 @@ class SpellRankTest {
 		assertTrue(carpet.is(FireballBarrage.CARPET));
 		assertEquals(2F, carpet.add(Knob.COUNT), 1.0E-5);
 		assertEquals(1F, new SpellRank(SpellIds.FIREBALL_BARRAGE, 5, SpellRank.A, SpellRank.B).add(Knob.COUNT), 1.0E-5);
+	}
+
+	/** The size knob's count is capped before a fork's extra is added, so each fork's trade holds at full charge, rank V. */
+	@Test
+	void forkCountsHoldAtFullChargeRankFive() {
+		// Blade Wind: 7 × 1.45 rounds to 11, capped at 9; Cleave's −2 then gives 7, fewer than Tempest's 9.
+		int cleave = BladeWindGeometry.blades(1f, new SpellRank(SpellIds.BLADE_WIND, 5, SpellRank.A, SpellRank.A));
+		int tempest = BladeWindGeometry.blades(1f, new SpellRank(SpellIds.BLADE_WIND, 5, SpellRank.A, SpellRank.B));
+		assertEquals(BladeWindGeometry.MAX_BLADES, tempest);
+		assertEquals(BladeWindGeometry.MAX_BLADES - 2, cleave, "Cleave throws two fewer blades at full charge too");
+		// Fireball Barrage: 6 × 1.45 rounds to 9 (the cap); Carpet's +2 then lands, Heavy Shells' −1 too.
+		int carpetGuided = BarrageGeometry.count(1f, new SpellRank(SpellIds.FIREBALL_BARRAGE, 5, SpellRank.A, SpellRank.A));
+		int napalmGuided = BarrageGeometry.count(1f, new SpellRank(SpellIds.FIREBALL_BARRAGE, 5, SpellRank.B, SpellRank.A));
+		int carpetHeavy = BarrageGeometry.count(1f, new SpellRank(SpellIds.FIREBALL_BARRAGE, 5, SpellRank.A, SpellRank.B));
+		int napalmHeavy = BarrageGeometry.count(1f, new SpellRank(SpellIds.FIREBALL_BARRAGE, 5, SpellRank.B, SpellRank.B));
+		assertEquals(BarrageGeometry.MAX_COUNT, napalmGuided);
+		assertEquals(BarrageGeometry.MAX_COUNT + 2, carpetGuided, "Carpet's two extra fireballs at full charge");
+		assertEquals(BarrageGeometry.MAX_COUNT + 1, carpetHeavy);
+		assertEquals(BarrageGeometry.MAX_COUNT - 1, napalmHeavy, "Heavy Shells' one fewer at full charge");
+		assertTrue(carpetGuided <= BarrageGeometry.MAX_FORKED);
 	}
 
 	@Test

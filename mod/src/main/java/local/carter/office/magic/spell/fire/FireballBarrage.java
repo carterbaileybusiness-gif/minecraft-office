@@ -67,12 +67,14 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * </ul>
  *
  * <p>Ranks add fireballs (the size knob, up to {@link BarrageGeometry#MAX_COUNT}). Forks: III {@link #CARPET} (+2, spread
- * {@link BarrageGeometry#CARPET_SPREAD}×) or {@link #NAPALM} (burns three times as long and slows); V {@link #RAPID} (one every
- * {@link BarrageGeometry#RAPID_INTERVAL} ticks, +2) or {@link #HEAVY} (blast {@link BarrageGeometry#HEAVY_BLAST}, crater
- * {@link BarrageGeometry#HEAVY_CRATER}, one fewer).
+ * {@link BarrageGeometry#CARPET_SPREAD}×) or {@link #NAPALM} (burns three times as long and slows); V {@link #GUIDED} (each
+ * fireball falls on a different creature within {@link BarrageGeometry#guidedReach} of the aim, nearest first; the rest where the
+ * seed puts them) or {@link #HEAVY} (blast {@link BarrageGeometry#HEAVY_BLAST}, crater {@link BarrageGeometry#HEAVY_CRATER}, one
+ * fewer).
  *
  * <p>Fx: {@code target} = the aim point, {@code dir} = the caster's flat facing, {@code duration} = the whole volley's life,
- * {@code data} = {@code {count, lift_0, …, lift_(count−1)}} (each fireball's clear share of its sky drop).
+ * {@code data} = {@code {count, lift_0, …, lift_(count−1)}} (each fireball's clear share of its sky drop), {@code entities} = Guided
+ * Shells' creatures in fireball order (the client aims those fireballs at them).
  */
 public final class FireballBarrage implements Spell {
 	public static final float DAMAGE = 5;
@@ -87,7 +89,8 @@ public final class FireballBarrage implements Spell {
 	public static final double CRATER_DEPTH = 0.6;
 	public static final String CARPET = "carpet";
 	public static final String NAPALM = "napalm";
-	public static final String RAPID = "rapid";
+	public static final String GUIDED = "guided";
+
 	public static final String HEAVY = "heavy";
 	public static final int NAPALM_SLOW_TICKS = 60;
 	/** A creature struck at most this high above the ground still leaves a crater under it. */
@@ -129,11 +132,23 @@ public final class FireballBarrage implements Spell {
 				? ctx.look() : FireWallGeometry.forward(ctx.caster().getYRot()));
 		float[] lifts = new float[count];
 		double spread = BarrageGeometry.spreadMul(ctx.rank());
-		int interval = BarrageGeometry.interval(ctx.rank());
+		int interval = BarrageGeometry.INTERVAL;
 		List<Vec3> aims = BarrageGeometry.aims(point, ctx.seed(), count, spread);
+		// Guided Shells: one fireball onto each creature near the aim (nearest first), the rest where the seed puts them.
+		int[] guided = new int[0];
+		if (ctx.rank().is(GUIDED)) {
+			List<LivingEntity> near = Targets.radius(ctx, point, BarrageGeometry.guidedReach(count, ctx.rank()));
+			List<Vec3> onto = new ArrayList<>();
+			guided = new int[Math.min(count, near.size())];
+			for (int i = 0; i < guided.length; i++) {
+				onto.add(near.get(i).position());
+				guided[i] = near.get(i).getId();
+			}
+			aims = BarrageGeometry.guide(aims, onto);
+		}
 		Vec3 drop = BarrageGeometry.drop(dir);
 		for (int i = 0; i < count; i++) lifts[i] = (float) lift(level, aims.get(i), drop);
-		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(point, dir, ctx.seed(), count, lifts, spread, interval);
+		List<BarrageGeometry.Ball> volley = BarrageGeometry.volley(aims, dir, lifts, interval);
 		// The volley flies its own fireballs, so once it is running every one of them flies (nothing else can take their slots).
 		if (!ActiveEffects.add(ctx, new Volley(ctx, volley))) return CastOutcome.fizzle(CastService.BUSY_KEY);
 
@@ -142,7 +157,7 @@ public final class FireballBarrage implements Spell {
 		System.arraycopy(lifts, 0, data, 1, count);
 		int life = (count - 1) * interval + BarrageGeometry.MAX_TICKS;
 		FxEvent fx = ctx.fx();
-		return CastOutcome.cast(fx.withDir(dir).withTarget(point).withDuration(life).withData(data));
+		return CastOutcome.cast(fx.withDir(dir).withTarget(point).withDuration(life).withData(data).withEntities(guided));
 	}
 
 	/**

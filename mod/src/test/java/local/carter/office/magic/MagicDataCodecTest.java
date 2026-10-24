@@ -96,6 +96,36 @@ class MagicDataCodecTest {
 		assertEquals(5, d.withElement(Optional.empty()).level());
 	}
 
+	@Test void aBadRankEntryDropsOnlyItself() {
+		JsonObject json = MagicData.CODEC.encodeStart(JsonOps.INSTANCE, full()).getOrThrow().getAsJsonObject();
+		JsonObject ranks = new JsonObject();
+		ranks.addProperty("office:fire_bolt", 1);
+		ranks.addProperty("office:fire_wall", "nonsense");
+		ranks.addProperty("office:spark", 999);
+		ranks.addProperty("BAD ID", 2);
+		json.add("ranks", ranks);
+		MagicData d = MagicData.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow();
+		assertEquals(Map.of(SpellIds.FIRE_BOLT, 1), d.ranks(), "the good entry survives its bad neighbours");
+		assertEquals(7, d.level(), "other fields survive");
+	}
+
+	@Test void repickWindowPersistsAndSyncs() {
+		MagicData open = full().withRepickUntil(5_000L);
+		assertEquals(5_000L, open.repickUntil());
+		assertTrue(open.repickOpen(4_999L));
+		assertFalse(open.repickOpen(5_000L));
+		assertEquals(5_000L, open.withLevel(2).withRank(new local.carter.office.magic.tree.SpellRank(SpellIds.SPARK, 1, 0, 0)).repickUntil(),
+				"copies keep it");
+		JsonElement json = MagicData.CODEC.encodeStart(JsonOps.INSTANCE, open).getOrThrow();
+		assertEquals(open, MagicData.CODEC.parse(JsonOps.INSTANCE, json).getOrThrow());
+		FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+		MagicData.STREAM_CODEC.encode(buf, open);
+		assertEquals(open, MagicData.STREAM_CODEC.decode(buf), "the owner's client gets the window's end");
+		JsonObject old = json.getAsJsonObject().deepCopy();
+		old.remove("repick_until");
+		assertEquals(0L, MagicData.CODEC.parse(JsonOps.INSTANCE, old).getOrThrow().repickUntil(), "an older save has no window");
+	}
+
 	@Test void travelFlagDefaultsOnPersistsAndSyncs() {
 		assertTrue(MagicData.EMPTY.travel(), "requests accepted by default");
 		MagicData off = full().withTravel(false);

@@ -45,10 +45,9 @@ public final class BladeWindGeometry {
 	public static final int MAX_CUTS = 64;
 	/** Half the fan's spread at a tap, in degrees (twice that at full charge). */
 	public static final double SPREAD = 15;
-	/** Most blades a ranked fan throws; Wide Arc's half-spread; Long Reach's flight. */
+	/** Most blades a ranked fan throws; Wide Arc's half-spread. */
 	public static final int MAX_BLADES = 9;
 	public static final double WIDE_SPREAD = 40;
-	public static final int LONG_TICKS = 21;
 
 	private BladeWindGeometry() {}
 
@@ -66,12 +65,13 @@ public final class BladeWindGeometry {
 	}
 
 	/**
-	 * Blades at {@code rank}: {@link #blades(float)} times the size knob, kept odd (one along the look), plus the forks' extra,
-	 * 1 to {@link #MAX_BLADES}.
+	 * Blades at {@code rank}: {@link #blades(float)} times the size knob, kept odd (one along the look) and capped at
+	 * {@link #MAX_BLADES} first, then the forks' extra (Cleave's −2), 1 to {@link #MAX_BLADES}. The cap comes before the fork, so
+	 * a fork's trade holds at full charge too (Cleave throws 7 where Tempest throws 9).
 	 */
 	public static int blades(float charge, SpellRank rank) {
 		double scaled = blades(charge) * rank.mul(Knob.SIZE);
-		int odd = 2 * (int) Math.round((scaled - 1) / 2) + 1;
+		int odd = Math.min(MAX_BLADES, 2 * (int) Math.round((scaled - 1) / 2) + 1);
 		return Math.clamp(odd + Math.round(rank.add(Knob.COUNT)), 1, MAX_BLADES);
 	}
 
@@ -80,10 +80,30 @@ public final class BladeWindGeometry {
 		return rank.is(BladeWind.WIDE) ? WIDE_SPREAD : spread(charge);
 	}
 
-	/** A blade's flight at {@code rank}: {@link #LONG_TICKS} for Long Reach, else {@link #MAX_TICKS}. */
+	/** A blade's flight out at {@code rank} ({@link #MAX_TICKS}; Boomerang flies back the same way after it, {@link #life}). */
 	public static int maxTicks(SpellRank rank) {
-		return rank.is(BladeWind.LONG) ? LONG_TICKS : MAX_TICKS;
+		return MAX_TICKS;
 	}
+
+	/** True when the blades come back (Boomerang). */
+	public static boolean returns(SpellRank rank) {
+		return rank.is(BladeWind.BOOMERANG);
+	}
+
+	/** How long a blade that stops (or turns) after {@code stop} ticks flies in all: twice that when it comes back. */
+	public static double life(double stop, boolean back) {
+		return back ? 2 * stop : stop;
+	}
+
+	/**
+	 * Where a blade is after {@code t} ticks of its whole flight: out along {@link #at} until {@code stop}, then (Boomerang,
+	 * {@code back}) back along the same path to where it left, else resting at {@code stop}.
+	 */
+	public static Vec3 path(ProjectileSpec s, double t, double stop, boolean back) {
+		if (t <= stop) return at(s, Math.max(0, t));
+		return at(s, back ? Math.max(0, 2 * stop - t) : stop);
+	}
+
 
 	/** Each blade's turn from the look, in degrees, left to right, evenly over ±{@link #spread}. */
 	public static double[] angles(float charge) {

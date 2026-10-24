@@ -107,7 +107,13 @@ public final class GravityWellFx implements SpellFx {
 				}
 				// Whatever is being dragged sheds wisps toward the core.
 				if (allow > 0 && t % 5 == 0) wisps(level, kit, centre, reach, Math.min(allow, 4));
+				// Drain: each hurt pulse sends a wisp of mana to the caster.
+				if (t > 0 && t % WellGeometry.HURT_EVERY == 0 && e.spellRank().is(GravityWell.DRAIN)) {
+					Entity caster = level.getEntity(e.casterId());
+					if (caster != null) kit.trail(centre, caster.getBoundingBox().getCenter(), ParticleTypes.WITCH, 4);
+				}
 				if (t > 0 && t % 30 == 0) {
+
 					level.playLocalSound(centre.x, centre.y, centre.z, SoundEvents.BEACON_AMBIENT, SoundSource.PLAYERS, 0.6F, 0.55F, false);
 				}
 			} else if (t == life) {
@@ -115,6 +121,13 @@ public final class GravityWellFx implements SpellFx {
 				SpellRank rank = e.spellRank();
 				if (rank.is(GravityWell.SINGULARITY)) RankFx.blast(kit, level, centre, GravityWell.SINGULARITY_RADIUS, ShadowFx.MAGENTA, ParticleTypes.REVERSE_PORTAL);
 				if (rank.is(GravityWell.REPULSOR)) RankFx.shockRing(kit, level, centre.subtract(0, 0.8, 0), reach, 8, ShadowFx.VIOLET, ParticleTypes.PORTAL);
+				// Collector: what it held is sent to the caster: a stream of motes to them.
+				Entity caster = level.getEntity(e.casterId());
+				if (rank.is(GravityWell.COLLECTOR) && caster != null) {
+					Vec3 to = caster.getBoundingBox().getCenter();
+					kit.trail(centre, to, ParticleTypes.REVERSE_PORTAL, 12);
+					kit.motes(to, ShadowFx.VIOLET, 8, 0.4, Vec3.ZERO, 0.08, GlowMote.Drift.RISE, 0.12F, 10);
+				}
 			}
 		});
 	}

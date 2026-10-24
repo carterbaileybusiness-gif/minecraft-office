@@ -7,6 +7,7 @@ import local.carter.office.client.magic.fx.MagicCircleRenderer;
 import local.carter.office.client.magic.fx.SpellFx;
 import local.carter.office.magic.core.Element;
 import local.carter.office.magic.net.FxEvent;
+import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.wind.Tornado;
 import local.carter.office.magic.spell.wind.TornadoGeometry;
 import local.carter.office.magic.tree.SpellRank;
@@ -26,9 +27,15 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
+
 
 /**
  * Tornado: a seal flashes on the ground where it starts, then a funnel of wind twists up out of it and wanders forward along the
@@ -64,13 +71,19 @@ public final class TornadoFx implements SpellFx {
 		SpellRank rank = e.spellRank();
 		double widen = TornadoGeometry.radius(c, rank) / TornadoGeometry.RADIUS;
 		boolean twin = rank.is(Tornado.TWIN);
-		funnel(level, kit, geo, c, widen, e.seed(), life, twin ? 2 : 1);
+		double debris = rank.is(Tornado.DEBRIS) ? TornadoGeometry.radius(c, rank) : -1;
+		funnel(level, kit, geo, c, widen, e.seed(), life, twin ? 2 : 1, debris);
 		// Twin Tornadoes: the second one leaves turned, as the server sends it.
-		if (twin) funnel(level, kit, new TornadoGeometry(geo.origin(), Tornado.twinDir(geo.dir()), life), c, widen, e.seed() + 1, life, 2);
+		if (twin) funnel(level, kit, new TornadoGeometry(geo.origin(), Tornado.twinDir(geo.dir()), life), c, widen, e.seed() + 1, life, 2, -1);
 	}
 
-	/** One funnel along {@code geo}, with its dust and motes; it gets {@code 1 / of} of what the budget has left. */
-	private static void funnel(ClientLevel level, FxKit kit, TornadoGeometry geo, float c, double widen, long seed, int life, int of) {
+	/**
+	 * One funnel along {@code geo}, with its dust and motes; it gets {@code 1 / of} of what the budget has left. With Debris
+	 * ({@code debris} = the funnel's radius, else negative) a chunk streaks out every {@code Tornado.DEBRIS_EVERY} ticks to the
+	 * nearest creature outside it, as the server throws it.
+	 */
+	private static void funnel(ClientLevel level, FxKit kit, TornadoGeometry geo, float c, double widen, long seed, int life, int of,
+			double debris) {
 		Funnel funnel = new Funnel(level, geo, c, widen, seed);
 		Minecraft.getInstance().particleEngine.add(funnel);
 		int steps = (life + STEP - 1) / STEP;
@@ -86,6 +99,7 @@ public final class TornadoFx implements SpellFx {
 				left[0] = Math.max(0, share - paid);
 			}
 			Vec3 base = funnel.base();
+			if (debris >= 0 && t > 0 && t % Tornado.DEBRIS_EVERY == 0) hurl(level, kit, base, debris);
 			if (t % 20 == 5) {
 				level.playLocalSound(base.x, base.y + 2, base.z, SoundEvents.BREEZE_WHIRL, SoundSource.PLAYERS, 0.9F, 0.55F + r.nextFloat() * 0.1F, false);
 			}
@@ -111,7 +125,33 @@ public final class TornadoFx implements SpellFx {
 		});
 	}
 
+	/** A chunk of debris from the funnel to the nearest creature outside it within reach (the server's pick, seen from here). */
+	private static void hurl(ClientLevel level, FxKit kit, Vec3 base, double radius) {
+		Vec3 from = base.add(0, 1.5, 0);
+		double reach = radius + Tornado.DEBRIS_REACH;
+		LivingEntity best = null;
+		double bestD = Double.MAX_VALUE;
+		for (LivingEntity l : level.getEntitiesOfClass(LivingEntity.class, new AABB(from, from).inflate(reach),
+				l -> TargetFilter.affects(null, l))) {
+			Vec3 m = l.getBoundingBox().getCenter();
+			double dx = m.x - base.x, dz = m.z - base.z;
+			double d = m.distanceToSqr(from);
+			if (dx * dx + dz * dz <= radius * radius || d > reach * reach || d >= bestD) continue;
+			if (level.clip(new ClipContext(from, m, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty())).getType()
+					!= HitResult.Type.MISS) continue;
+			best = l;
+			bestD = d;
+		}
+		if (best == null) return;
+		Vec3 to = best.getBoundingBox().getCenter();
+		ParticleOptions grit = dust(level, base);
+		if (grit != null) kit.trail(from, to, grit, 8);
+		kit.motes(to, PALE, 6, 0.3, Vec3.ZERO, 0.1, GlowMote.Drift.FALL, 0.12F, 8);
+		level.playLocalSound(to.x, to.y, to.z, SoundEvents.STONE_HIT, SoundSource.PLAYERS, 0.8F, 0.8F, false);
+	}
+
 	/** What the ground under {@code base} throws up: grit of its block, spray off water, or nothing over air. */
+
 	private static ParticleOptions dust(ClientLevel level, Vec3 base) {
 		BlockPos under = BlockPos.containing(base.x, base.y - 0.5, base.z);
 		BlockState s = level.getBlockState(under);

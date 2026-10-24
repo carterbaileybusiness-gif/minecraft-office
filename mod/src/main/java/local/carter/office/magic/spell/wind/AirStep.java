@@ -20,8 +20,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
-import net.minecraft.world.effect.MobEffectInstance;
-import net.minecraft.world.effect.MobEffects;
+
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -31,7 +30,8 @@ import net.minecraft.world.phys.Vec3;
  * 10 ({@link #apex}). It replaces the caster's velocity, so a falling caster is caught and thrown up. No fall damage for {@link #NO_FALL_TICKS} ticks ({@link Motion#dash}). No block changes; touches no one else.
  *
  * <p>Ranks raise the jump (the size knob: the up speed grows by its square root, so the height grows by about the knob). Forks:
- * III {@link #FEATHER} (Slow Falling for {@link #FEATHER_TICKS}) or {@link #LONG_JUMP} ({@link #LONG_JUMP_FORWARD}× forward);
+ * III {@link #AIR_DASH} (cast off the ground, it dashes {@link #AIR_DASH_SPEED} along the look instead of jumping: no status
+ * effect, the same no-fall window) or {@link #LONG_JUMP} ({@link #LONG_JUMP_FORWARD}× forward);
  * V {@link #SECOND_WIND} (cooldown −60 %, a knob) or {@link #SHOCKWAVE} (landing within {@link #SHOCKWAVE_WAIT} ticks blasts
  * {@link #SHOCKWAVE_DAMAGE}{@code × P} and throws foes out within {@link #SHOCKWAVE_RADIUS}).
  *
@@ -44,11 +44,13 @@ public final class AirStep implements Spell {
 	public static final double FORWARD = 0.4;
 	/** Long enough for a full charge's rise and fall (about 40 ticks). */
 	public static final int NO_FALL_TICKS = 80;
-	public static final String FEATHER = "feather";
+	public static final String AIR_DASH = "air_dash";
 	public static final String LONG_JUMP = "long_jump";
 	public static final String SECOND_WIND = "second_wind";
 	public static final String SHOCKWAVE = "shockwave";
-	public static final int FEATHER_TICKS = 100;
+	/** Air Dash: speed along the look, and the little lift that keeps it from dipping at once. */
+	public static final double AIR_DASH_SPEED = 1.3;
+	public static final double AIR_DASH_LIFT = 0.15;
 	public static final double LONG_JUMP_FORWARD = 2.2;
 	public static final double SHOCKWAVE_RADIUS = 3;
 	public static final float SHOCKWAVE_DAMAGE = 3;
@@ -87,7 +89,14 @@ public final class AirStep implements Spell {
 		return new Vec3(v.x * forward, v.y * Math.sqrt(rank.mul(Knob.SIZE)), v.z * forward);
 	}
 
+	/** Air Dash's velocity along {@code look}: {@link #AIR_DASH_SPEED}, plus {@link #AIR_DASH_LIFT} up. */
+	public static Vec3 dash(Vec3 look) {
+		Vec3 d = look.lengthSqr() < 1.0E-8 ? new Vec3(0, 0, 1) : look.normalize();
+		return d.scale(AIR_DASH_SPEED).add(0, AIR_DASH_LIFT, 0);
+	}
+
 	/** How high a jump of {@code up} blocks a tick climbs in open air (vanilla's step: move, then less gravity, times drag). */
+
 	public static double apex(double up) {
 		double y = 0;
 		for (double v = up; v > 0; v = (v - GRAVITY) * DRAG) y += v;
@@ -133,8 +142,9 @@ public final class AirStep implements Spell {
 	public CastOutcome cast(CastContext ctx) {
 		ServerPlayer p = ctx.caster();
 		Vec3 v = velocity(ctx.look(), p.getYRot(), ctx.charge(), ctx.rank());
+		// Air Dash: in the air, a dash along the look instead of a second jump.
+		if (ctx.rank().is(AIR_DASH) && !p.onGround()) v = dash(ctx.look());
 		Motion.dash(p, v, NO_FALL_TICKS);
-		if (ctx.rank().is(FEATHER)) p.addEffect(new MobEffectInstance(MobEffects.SLOW_FALLING, FEATHER_TICKS, 0), p);
 		if (ctx.rank().is(SHOCKWAVE)) ActiveEffects.add(ctx, new Landing(ctx));
 		Vec3 feet = p.position();
 		return CastOutcome.cast(ctx.fx().withTarget(feet).withData((float) v.y));

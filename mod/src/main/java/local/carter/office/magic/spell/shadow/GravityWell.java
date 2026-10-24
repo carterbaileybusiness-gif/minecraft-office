@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import local.carter.office.magic.cast.CastService;
 import local.carter.office.magic.core.ChargeMath;
 import local.carter.office.magic.core.Element;
+import local.carter.office.magic.core.ManaMath;
 import local.carter.office.magic.core.Slots;
+import local.carter.office.magic.data.MagicAttachments;
 import local.carter.office.magic.spell.ActiveEffects;
 import local.carter.office.magic.spell.CastContext;
 import local.carter.office.magic.spell.CastOutcome;
@@ -15,6 +18,7 @@ import local.carter.office.magic.spell.Hurt;
 import local.carter.office.magic.spell.LingeringEffect;
 import local.carter.office.magic.spell.RankKit;
 import local.carter.office.magic.spell.Spell;
+import local.carter.office.magic.spell.SpellCost;
 import local.carter.office.magic.spell.SpellIds;
 import local.carter.office.magic.spell.TargetFilter;
 import local.carter.office.magic.spell.Targets;
@@ -24,9 +28,13 @@ import local.carter.office.magic.tree.SpellRank;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.item.ItemEntity;
+
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
@@ -47,8 +55,10 @@ import net.minecraft.world.phys.shapes.CollisionContext;
  * creature within {@link WellGeometry#hurtRadius} that it can see takes {@code HURT × (1 + charge)} (a boss too). No block changes; players,
  * pets, villagers, golems, named mobs and the rest are never moved or hurt.
  *
- * <p>Ranks widen the pull (the size knob). Forks: III {@link #LONG_WELL} (lasts {@link #LONG_WELL_LIFE}× as long) or
- * {@link #CRUSHING} (hurts every {@link #CRUSHING_EVERY} ticks); V {@link #SINGULARITY} (at its end it implodes:
+ * <p>Ranks widen the pull (the size knob). Forks: III {@link #DRAIN} (each time it hurts, every creature it hurt gives the
+ * caster {@link #DRAIN_MANA} mana, up to half the well's mana cost per cast) or {@link #COLLECTOR} (at its end every item and XP
+ * orb within its pull radius that it can see is sent to the caster's feet, at most {@link #COLLECT_MAX}; only if the caster is in
+ * the same level within {@link #COLLECT_RANGE}); V {@link #SINGULARITY} (at its end it implodes:
  * {@link #SINGULARITY_DAMAGE}{@code × P} within {@link #SINGULARITY_RADIUS}) or {@link #REPULSOR} (at its end it flings what it
  * held out, {@link #REPULSOR_KNOCK} and {@link #REPULSOR_UP} up).
  *
@@ -61,20 +71,26 @@ public final class GravityWell implements Spell {
 	static final int SYNC_EVERY = 2;
 	/** A pull shorter than this (something resting in the core) is not synced. */
 	static final double MIN_SYNC = 0.02;
-	public static final String LONG_WELL = "long_well";
-	public static final String CRUSHING = "crushing";
+	public static final String DRAIN = "drain";
+	public static final String COLLECTOR = "collector";
 	public static final String SINGULARITY = "singularity";
 	public static final String REPULSOR = "repulsor";
-	public static final float LONG_WELL_LIFE = 1.5F;
-	public static final int CRUSHING_EVERY = 5;
+	public static final int DRAIN_MANA = 1;
+	public static final int COLLECT_MAX = 64;
+	public static final double COLLECT_RANGE = 48;
 	public static final double SINGULARITY_RADIUS = 4;
 	public static final float SINGULARITY_DAMAGE = 8;
 	public static final double REPULSOR_KNOCK = 1.6;
 	public static final double REPULSOR_UP = 0.6;
 
-	/** The well's life at {@code charge} and {@code rank} (Long Well). */
+	/** The well's life at {@code charge}. */
 	public static int life(float charge, SpellRank rank) {
-		return Math.round(WellGeometry.life(charge) * (rank.is(LONG_WELL) ? LONG_WELL_LIFE : 1));
+		return WellGeometry.life(charge);
+	}
+
+	/** The most mana Drain gives back in one cast: half the well's mana cost at {@code rank}. */
+	public static int drainCap(SpellRank rank) {
+		return CastService.cost(SpellCost.forSlot(Slots.MEDIUM_A), rank).mana() / 2;
 	}
 
 	@Override
@@ -151,6 +167,9 @@ public final class GravityWell implements Spell {
 		private final double radius;
 		/** At most {@code Targets.MAX_ENTITIES} different creatures hurt over its life (the per-cast budget). */
 		private final HitBudget hurtBudget = new HitBudget();
+		/** Drain: mana given back so far. */
+		private int drained;
+
 
 		Well(CastContext ctx, Vec3 centre, int life, double radius) {
 			this.ctx = ctx;
@@ -186,22 +205,54 @@ public final class GravityWell implements Spell {
 					e.needsSync = true;
 				}
 			}
-			if (age % (ctx.rank().is(CRUSHING) ? CRUSHING_EVERY : WellGeometry.HURT_EVERY) == 0) {
+			if (age % WellGeometry.HURT_EVERY == 0) {
 				for (LivingEntity l : Targets.radius(ctx, centre, WellGeometry.hurtRadius(ctx.charge()))) {
 					if (clips >= MAX_CLIPS) break;
 					clips++;
-					if (clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)) {
-						Hurt.damage(ctx, l, WellGeometry.HURT * ChargeMath.size(ctx.charge()) * ctx.rank().mul(Knob.DAMAGE));
+					if (clear(level, centre, l.getBoundingBox().getCenter()) && hurtBudget.admit(l)
+							&& Hurt.damage(ctx, l, WellGeometry.HURT * ChargeMath.size(ctx.charge()) * ctx.rank().mul(Knob.DAMAGE))) {
+						drain();
 					}
 				}
 			}
 			if (age >= life) {
+				if (ctx.rank().is(COLLECTOR)) collect(level);
 				if (ctx.rank().is(SINGULARITY)) {
 					RankKit.blast(ctx, centre, SINGULARITY_RADIUS, SINGULARITY_DAMAGE * ctx.power(), null, 0, 0, 0);
 				}
 				if (ctx.rank().is(REPULSOR)) RankKit.blast(ctx, centre, radius, 0, null, 0, REPULSOR_KNOCK, REPULSOR_UP);
 			}
 			return age < life;
+		}
+
+		/** Drain: one hurt creature's mana to the caster, up to {@link #drainCap} per cast. */
+		private void drain() {
+			if (!ctx.rank().is(DRAIN) || drained >= drainCap(ctx.rank())) return;
+			ServerPlayer p = ctx.caster();
+			if (p.isRemoved() || !p.isAlive()) return;
+			int max = ManaMath.max(MagicAttachments.get(p).level());
+			int now = MagicAttachments.mana(p);
+			int add = Math.min(DRAIN_MANA, Math.min(drainCap(ctx.rank()) - drained, max - now));
+			if (add <= 0) return;
+			MagicAttachments.setMana(p, now + add);
+			drained += add;
+		}
+
+		/** Collector: what it held (items, XP orbs) goes to the caster's feet. */
+		private void collect(ServerLevel level) {
+			ServerPlayer p = ctx.caster();
+			if (p.isRemoved() || p.level() != level || p.distanceToSqr(centre) > COLLECT_RANGE * COLLECT_RANGE) return;
+			int n = 0;
+			for (Entity e : level.getEntities((Entity) null, new AABB(centre, centre).inflate(radius),
+					e -> (e instanceof ItemEntity || e instanceof ExperienceOrb) && !e.isRemoved()
+							&& e.getBoundingBox().getCenter().distanceToSqr(centre) <= radius * radius)) {
+				if (n++ >= COLLECT_MAX) break;
+				if (!clear(level, centre, e.getBoundingBox().getCenter())) continue;
+				e.teleportTo(p.getX(), p.getY() + 0.2, p.getZ());
+				e.setDeltaMovement(Vec3.ZERO);
+				e.syncVelocity = true;
+				e.needsSync = true;
+			}
 		}
 
 		@Override
